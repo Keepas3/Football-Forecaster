@@ -176,5 +176,27 @@ def anthropic_api_key() -> str | None:
     return os.environ.get("ANTHROPIC_API_KEY") or None
 
 
+def turso_database_url() -> str | None:
+    """Just the host (e.g. "my-db-myorg.turso.io"), not a full URL -- the
+    scheme is hardcoded in storage/db.py's connection string. Unset (None)
+    means "use the local SQLite file," the default everywhere except a
+    deployment where local disk doesn't persist (e.g. Streamlit Community
+    Cloud) -- see storage/db.py::get_engine.
+    """
+    return os.environ.get("TURSO_DATABASE_URL") or None
+
+
+def turso_auth_token() -> str | None:
+    return os.environ.get("TURSO_AUTH_TOKEN") or None
+
+
+def admin_password() -> str | None:
+    """Unset (None) keeps dashboard/views/admin.py's hidden data-refresh
+    page fully disabled -- it's off unless explicitly configured, matching
+    every other optional capability in this app.
+    """
+    return os.environ.get("ADMIN_PASSWORD") or None
+
+
 def claude_model() -> str:
     return os.environ.get("SOCCER_PREDICTOR_CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL

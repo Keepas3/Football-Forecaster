@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from soccer_predictor.dashboard.views import home, players, predictor, team_detail
+from soccer_predictor.dashboard.views import admin, home, players, predictor, team_detail
 
 
 def home_page() -> st.Page:
@@ -17,6 +17,13 @@ def home_page() -> st.Page:
 
 def players_page() -> st.Page:
     return st.Page(players.render, title="Players", url_path="players")
+
+
+def admin_page() -> st.Page:
+    # Hidden from the sidebar -- the real access control is the password
+    # gate inside admin.render(), not obscurity, but there's no reason to
+    # advertise a data-refresh control in the normal nav either.
+    return st.Page(admin.render, title="Admin", url_path="admin", visibility="hidden")
 
 
 def team_detail_page() -> st.Page:

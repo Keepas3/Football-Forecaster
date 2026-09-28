@@ -28,6 +28,7 @@ pg = st.navigation(
         navigation.players_page(),
         navigation.team_detail_page(),
         navigation.predictor_page(),
+        navigation.admin_page(),
     ]
 )
 pg.run()
