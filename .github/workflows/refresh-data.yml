@@ -29,7 +29,15 @@ jobs:
       - name: Refresh data and retrain
         env:
           FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          # API_FOOTBALL_KEY deliberately omitted -- its free tier flagged
+          # this workflow's rotating GitHub-runner IPs as suspicious and
+          # suspended the account. refresh_live_data.py's injuries sync
+          # already degrades gracefully (falls back to config/injuries.yaml
+          # + chat notes) when this is unset, so this only drops the
+          # API-sourced injuries step from the scheduled job -- Streamlit
+          # Cloud's own secret and the local .env are untouched, so
+          # "Load player stats" and defender/MLS star badges keep working
+          # there once the suspension clears.
         run: |
           uv run python scripts/fetch_historical_data.py
           uv run python scripts/refresh_live_data.py
