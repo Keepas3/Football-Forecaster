@@ -14,7 +14,7 @@ import datetime as dt
 
 import streamlit as st
 
-from soccer_predictor.config import load_leagues
+from soccer_predictor.config import load_leagues, load_manual_captains, load_manual_star_players
 from soccer_predictor.dashboard.components import league_option_label
 from soccer_predictor.ingest import player_stats, understat_client
 from soccer_predictor.ingest.player_importance import find_player_stats, find_understat_player
@@ -106,7 +106,21 @@ def render() -> None:
     if crest_url:
         header_cols[0].image(crest_url, width=64)
     with header_cols[1]:
-        st.subheader(player.name)
+        # Only the manual captain/star lists are checked here (not the
+        # stats-based automatic signal) -- that would mean re-fetching a
+        # whole team's stats just for this one player; Team Detail's squad
+        # list already covers the automatic case for every player at once.
+        is_captain = any(
+            c.team == selection.team_name and c.player.lower() == player.name.lower()
+            for c in load_manual_captains()
+        )
+        is_star = any(
+            s.team == selection.team_name and s.player.lower() == player.name.lower()
+            for s in load_manual_star_players()
+        )
+        st.subheader(f"👑 {player.name}" if is_captain else player.name)
+        if is_star:
+            st.caption("⭐ World class")
         age = _age_from_date_of_birth(player.date_of_birth)
         detail_bits = [player.position]
         if player.nationality:

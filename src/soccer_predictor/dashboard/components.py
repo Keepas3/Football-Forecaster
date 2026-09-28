@@ -14,7 +14,7 @@ from scipy.stats import poisson as poisson_dist
 
 from sqlalchemy.orm import Session
 
-from soccer_predictor.config import League, TableZone
+from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
 from soccer_predictor.ingest.squad import fetch_squad_for_team
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.dixon_coles import tau as dixon_coles_tau
@@ -512,6 +512,40 @@ def render_star_players(players: list, top_n: int = 3) -> None:
             if p.rating:
                 detail += f" · Rating {p.rating:.2f}"
             st.caption(detail)
+
+
+def compute_automatic_stars(weights: dict[str, float], top_n: int = 2, min_weight: float = 0.5) -> set[str]:
+    """Player names from a resolve_team_importance_weights() result that
+    qualify as an automatic "star" badge -- the top `top_n` by weight,
+    provided they actually clear `min_weight` (roughly the midpoint of
+    model/player_importance.py's MIN/MAX_IMPORTANCE_WEIGHT 0.05-0.95 range),
+    so a genuinely middling squad with no real standout gets zero forced
+    stars rather than two arbitrary ones.
+    """
+    ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
+    return {name for name, weight in ranked[:top_n] if weight >= min_weight}
+
+
+def render_player_badges(name: str, team_name: str, automatic_stars: set[str] | None = None) -> str:
+    """Prefixes `name` with a captain crown and/or star badge for display --
+    NOT related to render_star_players() above (that's an ephemeral "top-3
+    scorers in the currently-loaded stats table" highlight; this is a
+    persistent captain/world-class badge looked up from config/captains.yaml
+    and config/star_players.yaml, unioned with an optional stats-based
+    `automatic_stars` set from compute_automatic_stars()).
+
+    Matches team name exactly and player name case-insensitively, mirroring
+    prediction/service.py::get_injuries_for_team's manual-entry matching.
+    """
+    is_captain = any(
+        c.team == team_name and c.player.lower() == name.lower() for c in load_manual_captains()
+    )
+    is_star = any(
+        s.team == team_name and s.player.lower() == name.lower() for s in load_manual_star_players()
+    ) or (automatic_stars is not None and name in automatic_stars)
+
+    prefix = ("👑 " if is_captain else "") + ("⭐ " if is_star else "")
+    return f"{prefix}{name}"
 
 
 def render_head_to_head(h2h: HeadToHeadRecord, team_name: str, opponent_name: str) -> None:

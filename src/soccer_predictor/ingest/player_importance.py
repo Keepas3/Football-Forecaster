@@ -96,6 +96,37 @@ def find_understat_player(
     return understat_players[index]
 
 
+def _resolve_real_importance_weight(
+    player_name: str,
+    position: str,
+    team_stats: list[HistoricalPlayerStats],
+    team_totals: TeamOutputTotals,
+    understat_players: list[UnderstatPlayerStats] | None = None,
+    understat_totals: UnderstatTeamTotals | None = None,
+) -> float | None:
+    """Returns None (rather than a default) when there's no real stats match
+    -- used by resolve_api_importance_weight (which then falls back to
+    DEFAULT_API_IMPORTANCE_WEIGHT) and by resolve_team_importance_weights
+    (which excludes the player entirely instead, see its own docstring).
+    """
+    if position != "defense" and understat_players:
+        understat_player = find_understat_player(player_name, understat_players)
+        if understat_player is not None and understat_totals is not None:
+            weight = compute_attack_importance(
+                understat_player.xg, understat_player.xa, understat_totals.xg_contribution_total
+            )
+            if weight is not None:
+                return weight
+
+    player = find_player_stats(player_name, team_stats)
+    if player is None:
+        return None
+
+    if position == "defense":
+        return compute_defense_importance(player.minutes, team_totals.max_minutes, player.rating)
+    return compute_attack_importance(player.goals, player.assists, team_totals.goal_contribution_total)
+
+
 def resolve_api_importance_weight(
     player_name: str,
     position: str,
@@ -109,22 +140,34 @@ def resolve_api_importance_weight(
     number (new signing, unresolved team, empty roster fetch), same
     degrade-gracefully contract as the rest of this app's API integrations.
     """
-    if position != "defense" and understat_players:
-        understat_player = find_understat_player(player_name, understat_players)
-        if understat_player is not None and understat_totals is not None:
-            weight = compute_attack_importance(
-                understat_player.xg, understat_player.xa, understat_totals.xg_contribution_total
-            )
-            if weight is not None:
-                return weight
-
-    player = find_player_stats(player_name, team_stats)
-    if player is None:
-        return DEFAULT_API_IMPORTANCE_WEIGHT
-
-    if position == "defense":
-        weight = compute_defense_importance(player.minutes, team_totals.max_minutes, player.rating)
-    else:
-        weight = compute_attack_importance(player.goals, player.assists, team_totals.goal_contribution_total)
-
+    weight = _resolve_real_importance_weight(
+        player_name, position, team_stats, team_totals, understat_players, understat_totals
+    )
     return weight if weight is not None else DEFAULT_API_IMPORTANCE_WEIGHT
+
+
+def resolve_team_importance_weights(
+    squad: list,
+    team_stats: list[HistoricalPlayerStats],
+    team_totals: TeamOutputTotals,
+    understat_players: list[UnderstatPlayerStats] | None = None,
+    understat_totals: UnderstatTeamTotals | None = None,
+) -> dict[str, float]:
+    """A real importance_weight per squad member with actual stats coverage
+    -- unlike resolve_api_importance_weight, players with no stats match are
+    left out entirely rather than defaulted to DEFAULT_API_IMPORTANCE_WEIGHT,
+    since a flat 0.5 for every unmatched player would be meaningless noise
+    for star-player detection (dashboard/components.py::compute_automatic_stars).
+
+    `squad` is a list of ingest.squad.SquadPlayer (not imported here to
+    avoid a circular import -- squad.py doesn't depend on this module).
+    """
+    weights: dict[str, float] = {}
+    for player in squad:
+        position = "defense" if player.position in ("Goalkeeper", "Defence") else "attack"
+        weight = _resolve_real_importance_weight(
+            player.name, position, team_stats, team_totals, understat_players, understat_totals
+        )
+        if weight is not None:
+            weights[player.name] = weight
+    return weights

@@ -107,6 +107,19 @@ class ManualInjury:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class ManualCaptain:
+    team: str
+    player: str
+
+
+@dataclass(frozen=True)
+class ManualStarPlayer:
+    team: str
+    player: str
+    note: str = ""
+
+
 @lru_cache
 def load_leagues() -> dict[str, League]:
     raw = yaml.safe_load((CONFIG_DIR / "leagues.yaml").read_text(encoding="utf-8"))
@@ -158,6 +171,23 @@ def load_manual_injuries() -> list[ManualInjury]:
             note=entry.get("note", ""),
         )
         for entry in (raw.get("injuries") or [])
+    ]
+
+
+def load_manual_captains() -> list[ManualCaptain]:
+    # Not cached: this file is meant to be hand-edited between dashboard runs.
+    raw = yaml.safe_load((CONFIG_DIR / "captains.yaml").read_text(encoding="utf-8"))
+    return [
+        ManualCaptain(team=entry["team"], player=entry["player"]) for entry in (raw.get("captains") or [])
+    ]
+
+
+def load_manual_star_players() -> list[ManualStarPlayer]:
+    # Not cached: this file is meant to be hand-edited between dashboard runs.
+    raw = yaml.safe_load((CONFIG_DIR / "star_players.yaml").read_text(encoding="utf-8"))
+    return [
+        ManualStarPlayer(team=entry["team"], player=entry["player"], note=entry.get("note", ""))
+        for entry in (raw.get("star_players") or [])
     ]
 
 

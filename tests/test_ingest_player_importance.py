@@ -6,8 +6,10 @@ from soccer_predictor.ingest.player_importance import (
     aggregate_team_output,
     aggregate_understat_team_output,
     resolve_api_importance_weight,
+    resolve_team_importance_weights,
 )
 from soccer_predictor.ingest.player_stats import HistoricalPlayerStats
+from soccer_predictor.ingest.squad import SquadPlayer
 from soccer_predictor.ingest.understat_client import UnderstatPlayerStats
 
 
@@ -39,6 +41,10 @@ def _understat_player(name, team="Arsenal", goals=0, assists=0, xg=0.0, xa=0.0, 
         xg=xg,
         xa=xa,
     )
+
+
+def _squad_player(name, position="Offence"):
+    return SquadPlayer(name=name, position=position, nationality="", date_of_birth=None)
 
 
 def test_aggregate_team_output_sums_goal_contributions_and_tracks_max_minutes():
@@ -164,3 +170,37 @@ def test_resolve_weight_ignores_understat_for_defense_positions():
     )
     expected = resolve_api_importance_weight("Undisputed Keeper", "defense", roster, totals)
     assert weight == expected
+
+
+def test_resolve_team_importance_weights_excludes_players_with_no_stats_match():
+    squad = [
+        _squad_player("Erling Haaland", position="Offence"),
+        _squad_player("Some New Signing", position="Offence"),
+    ]
+    roster = [_player("Erling Haaland", goals=25, assists=3, minutes=2900)]
+    totals = aggregate_team_output(roster)
+
+    weights = resolve_team_importance_weights(squad, roster, totals)
+
+    assert "Erling Haaland" in weights
+    assert "Some New Signing" not in weights
+    assert weights["Erling Haaland"] != DEFAULT_API_IMPORTANCE_WEIGHT
+
+
+def test_resolve_team_importance_weights_empty_squad():
+    assert resolve_team_importance_weights([], [], TeamOutputTotals(0, 0)) == {}
+
+
+def test_resolve_team_importance_weights_uses_understat_and_position_bucketing():
+    squad = [
+        _squad_player("Bukayo Saka", position="Offence"),
+        _squad_player("Undisputed Keeper", position="Goalkeeper"),
+    ]
+    roster = [_player("Undisputed Keeper", minutes=3000, rating=7.2, position="Goalkeeper")]
+    totals = aggregate_team_output(roster)
+    understat_roster = [_understat_player("Bukayo Saka", goals=12, assists=8, xg=10.5, xa=6.2, minutes=2200)]
+    understat_totals = aggregate_understat_team_output(understat_roster)
+
+    weights = resolve_team_importance_weights(squad, roster, totals, understat_roster, understat_totals)
+
+    assert set(weights) == {"Bukayo Saka", "Undisputed Keeper"}

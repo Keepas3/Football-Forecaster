@@ -1,0 +1,19 @@
+# Manually-curated "world class" players -- no integrated data source
+# carries contract/market value at any tier, so this is the closest
+# available proxy to reputation/opinion. Shown as a star badge wherever a
+# squad or player renders, alongside (unioned with, never overridden by)
+# an automatic stats-based signal computed from real goals/assists/xG/xA
+# (see ingest/player_importance.py::resolve_team_importance_weights and
+# dashboard/components.py::compute_automatic_stars) -- use this file to add
+# anyone the stats miss (new signings with few minutes, etc.).
+#
+# Example:
+# star_players:
+#   - team: Real Madrid
+#     player: Jude Bellingham
+#     note: "Manual entry 2026-09-28"
+
+star_players:
+  - team: Arsenal
+    player: Bukayo Saka
+    note: ""

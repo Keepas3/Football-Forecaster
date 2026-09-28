@@ -1,0 +1,13 @@
+# Manual captain list -- no integrated data source (football-data.org,
+# ESPN) exposes captaincy at any tier, so this is the only way this app
+# knows who wears the armband. Shown as a crown badge wherever a squad or
+# player renders (Team Detail, Players page).
+#
+# Example:
+# captains:
+#   - team: Arsenal
+#     player: Martin Ødegaard
+
+captains:
+  - team: Arsenal
+    player: Martin Ødegaard

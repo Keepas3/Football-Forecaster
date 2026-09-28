@@ -11,11 +11,13 @@ import streamlit as st
 from soccer_predictor.config import load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
+    compute_automatic_stars,
     fixture_columns_with_kickoff_first,
     fixture_prediction_row,
     format_kickoff,
     live_sync_requirement_note,
     render_head_to_head,
+    render_player_badges,
     render_prediction_breakdown,
     render_star_players,
     render_team_facts,
@@ -25,6 +27,7 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
     youtube_search_url,
 )
+from soccer_predictor.ingest.player_importance import aggregate_team_output, resolve_team_importance_weights
 from soccer_predictor.ingest.player_stats import AVAILABLE_SEASONS, fetch_team_player_stats
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
 from soccer_predictor.model.injury_adjustment import adjust_strength
@@ -303,6 +306,21 @@ def render() -> None:
                 f"{live_sync_requirement_note(league)} to pull it."
             )
         else:
+            # Automatic star detection reuses the same API-Football historical
+            # stats the "Player Stats (Historical)" section below fetches --
+            # only computed once that section has already been opened (same
+            # session_state flag), so this never fires an extra request on
+            # its own; a second fetch here just reads the on-disk cache.
+            stats_shown = st.session_state.get(f"show_historical_stats_{team_id}", False)
+            automatic_stars: set[str] = set()
+            if stats_shown and league is not None:
+                latest_stats = fetch_team_player_stats(team_canonical_name, team_league_code, AVAILABLE_SEASONS[-1])
+                if latest_stats:
+                    weights = resolve_team_importance_weights(
+                        squad_players, latest_stats, aggregate_team_output(latest_stats)
+                    )
+                    automatic_stars = compute_automatic_stars(weights)
+
             today = dt.date.today()
             squad_rows = []
             for player in sorted(squad_players, key=lambda p: (_POSITION_ORDER.get(p.position, 99), p.name)):
@@ -315,7 +333,7 @@ def render() -> None:
                         age = None
                 squad_rows.append(
                     {
-                        "Name": player.name,
+                        "Name": render_player_badges(player.name, team_canonical_name, automatic_stars),
                         "Position": player.position,
                         "Nationality": player.nationality,
                         "Age": age,

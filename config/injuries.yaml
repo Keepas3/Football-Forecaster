@@ -7,6 +7,12 @@
 # position is "attack" or "defense" (defenders + goalkeeper); it decides
 # which team rating (attack or defense) the injury pulls down.
 #
+# Don't have to guess importance_weight by hand: it's the same number
+# ingest/player_importance.py::resolve_team_importance_weights computes
+# from real goals/assists/xG/xA for that player (visible on Team Detail's
+# squad list as the ⭐ star badge threshold, see dashboard/components.py)
+# -- look it up there and paste it in.
+#
 # Example:
 # injuries:
 #   - team: Arsenal
