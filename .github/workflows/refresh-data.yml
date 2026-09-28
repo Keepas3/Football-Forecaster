@@ -1,0 +1,48 @@
+name: Refresh data
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 6am UTC daily
+  workflow_dispatch: {} # manual "Run workflow" button, for on-demand testing
+
+permissions:
+  contents: write # needed to push the updated data/soccer.db back
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false # let an in-flight run finish rather than clobbering it
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          # uv manages its own Python builds -- installs the version pinned
+          # in .python-version even if the runner image doesn't have it yet.
+
+      - run: uv sync --frozen
+
+      - name: Refresh data and retrain
+        env:
+          FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          uv run python scripts/fetch_historical_data.py
+          uv run python scripts/refresh_live_data.py
+          uv run python scripts/run_training.py
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- data/soccer.db; then
+            git add data/soccer.db
+            git commit -m "Automated data refresh"
+            git push
+          else
+            echo "No changes to data/soccer.db -- nothing to commit"
+          fi
