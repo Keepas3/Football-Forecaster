@@ -13,6 +13,7 @@ wheels/
 data/raw/*
 !data/raw/.gitkeep
 data/*.db
+!data/soccer.db
 data/*.db.bak-*
 data/cache/
 data/unmatched_teams.log
