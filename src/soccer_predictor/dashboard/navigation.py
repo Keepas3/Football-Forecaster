@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import streamlit as st
 
-from soccer_predictor.dashboard.views import home, predictor, team_detail
+from soccer_predictor.dashboard.views import home, players, predictor, team_detail
 
 
 def home_page() -> st.Page:
     return st.Page(home.render, title="Leagues", icon="⚽", url_path="", default=True)
+
+
+def players_page() -> st.Page:
+    return st.Page(players.render, title="Players", url_path="players")
 
 
 def team_detail_page() -> st.Page:
@@ -27,4 +31,4 @@ def team_detail_page() -> st.Page:
 
 
 def predictor_page() -> st.Page:
-    return st.Page(predictor.render, title="Predictor", icon="🔮", url_path="predictor")
+    return st.Page(predictor.render, title="Predictor", url_path="predictor")

@@ -34,7 +34,8 @@ def main() -> None:
         if not league.supports_predictions:
             print(
                 f"\nSkipping {league.name} ({league.code}): no historical match data source "
-                "configured (see League.csv_code) -- this competition never gets a trained model."
+                "configured (see League.supports_predictions) -- this competition never gets a "
+                "trained model."
             )
             continue
         print(f"\nTraining {league.name} ({league.code})...")

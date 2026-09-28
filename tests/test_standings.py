@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
-import pytest
 
 from soccer_predictor.model.standings import compute_standings
 

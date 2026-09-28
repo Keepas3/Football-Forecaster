@@ -30,8 +30,15 @@ from rapidfuzz import fuzz, process
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
-from soccer_predictor.ingest import api_football_client, player_importance, player_stats, squad, understat_client
-from soccer_predictor.ingest.api_football_client import MissingApiKey
+from soccer_predictor.ingest import (
+    api_football_client,
+    espn_client,
+    player_importance,
+    player_stats,
+    squad,
+    understat_client,
+)
+from soccer_predictor.ingest.api_football_client import MissingApiKey  # noqa: F401 -- re-exported for scripts/refresh_live_data.py's `except injuries_module.MissingApiKey`
 from soccer_predictor.ingest.squad import SquadPlayer
 from soccer_predictor.storage.models import Team
 from soccer_predictor.storage.repository import replace_injuries, update_api_football_team_id
@@ -93,6 +100,9 @@ def sync_injuries_to_db(session: Session, league: League, season_year: int) -> t
     (see storage.repository.update_api_football_team_id) and reused forever
     after, so a repeat sync only ever costs the one `/injuries` call/team.
     """
+    if league.data_source == "espn":
+        return _sync_injuries_to_db_espn(session, league)
+
     from soccer_predictor.storage.repository import teams_for_league
 
     synced = 0
@@ -169,6 +179,59 @@ def sync_injuries_to_db(session: Session, league: League, season_year: int) -> t
                     "position": position,
                     "importance_weight": importance_weight,
                     "note": row.get("player", {}).get("reason", ""),
+                }
+            )
+        replace_injuries(session, team_id, source="api", injuries=entries)
+        synced += 1
+    return synced, skipped
+
+
+def _sync_injuries_to_db_espn(session: Session, league: League) -> tuple[int, int]:
+    """ESPN-backed equivalent of sync_injuries_to_db, for leagues with
+    data_source == "espn" (e.g. MLS). No position-resolution step is needed
+    here at all (unlike the API-Football path above) -- ESPN's own roster
+    entries already carry a real position bucket per player, which is the
+    entire reason _resolve_position exists for the API-Football case.
+    """
+    from soccer_predictor.storage.repository import teams_for_league
+
+    synced = 0
+    skipped = 0
+    for team_id, team_name in teams_for_league(session, league.code).items():
+        team = session.get(Team, team_id)
+        if team is None or team.espn_team_id is None:
+            skipped += 1
+            continue
+
+        roster, espn_injuries = espn_client.fetch_team_roster(league.espn_league_slug, str(team.espn_team_id))
+        if not espn_injuries:
+            replace_injuries(session, team_id, source="api", injuries=[])
+            synced += 1
+            continue
+
+        team_stats = player_stats.fetch_team_player_stats(
+            team_name, league.code, season=max(player_stats.AVAILABLE_SEASONS)
+        )
+        team_totals = player_importance.aggregate_team_output(team_stats)
+        understat_players = understat_client.fetch_team_season(team_name, league.code, max(player_stats.AVAILABLE_SEASONS))
+        understat_totals = player_importance.aggregate_understat_team_output(understat_players)
+
+        entries = []
+        for injury in espn_injuries:
+            importance_weight = player_importance.resolve_api_importance_weight(
+                injury.player_name,
+                injury.position_bucket,
+                team_stats,
+                team_totals,
+                understat_players,
+                understat_totals,
+            )
+            entries.append(
+                {
+                    "player_name": injury.player_name,
+                    "position": injury.position_bucket,
+                    "importance_weight": importance_weight,
+                    "note": injury.note,
                 }
             )
         replace_injuries(session, team_id, source="api", injuries=entries)

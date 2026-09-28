@@ -14,13 +14,16 @@ from soccer_predictor.dashboard.components import (
     fixture_columns_with_kickoff_first,
     fixture_prediction_row,
     format_kickoff,
+    live_sync_requirement_note,
     render_head_to_head,
     render_prediction_breakdown,
     render_star_players,
     render_team_facts,
     render_team_rating_breakdown,
     style_fixture_predictions,
+    style_match_results,
     timezone_selector,
+    youtube_search_url,
 )
 from soccer_predictor.ingest.player_stats import AVAILABLE_SEASONS, fetch_team_player_stats
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
@@ -118,11 +121,17 @@ def render() -> None:
             team_info = fetch_team_info(session, league, team_id)
 
         if team_info is None:
-            st.info(
-                "No team info loaded for this team yet. Requires "
-                "FOOTBALL_DATA_ORG_API_KEY in .env and this team to have appeared "
-                f"in a live sync (`uv run python scripts/refresh_live_data.py {team_league_code}`)."
-            )
+            if league.data_source == "espn":
+                st.caption(
+                    "Club background (founded year, venue, head coach, etc.) isn't available "
+                    "from this league's data source."
+                )
+            else:
+                st.info(
+                    "No team info loaded for this team yet. Requires "
+                    "FOOTBALL_DATA_ORG_API_KEY in .env and this team to have appeared "
+                    f"in a live sync (`uv run python scripts/refresh_live_data.py {team_league_code}`)."
+                )
         else:
             info_lines = []
             if team_info.founded:
@@ -162,7 +171,7 @@ def render() -> None:
         if league is not None and not league.supports_predictions:
             st.caption(
                 "This competition has no historical match data to train a prediction model "
-                "from -- no rating or predicted scores, just the schedule and squad below."
+                "from - no rating or predicted scores, just the schedule and squad below."
             )
         else:
             st.warning(
@@ -184,14 +193,14 @@ def render() -> None:
     if fixtures_df.empty:
         if league is not None and league.season_display == "single_year":
             st.info(
-                f"No scheduled fixtures in the next 60 days -- {league.name} runs as a "
+                f"No scheduled fixtures in the next 60 days - {league.name} runs as a "
                 "periodic tournament, not a continuous season, so this is expected between editions."
             )
         else:
             st.info(
                 "No upcoming fixtures loaded. Run "
-                f"`uv run python scripts/refresh_live_data.py {team_league_code}` "
-                "(needs FOOTBALL_DATA_ORG_API_KEY in .env) to pull them."
+                f"`uv run python scripts/refresh_live_data.py {team_league_code}`"
+                f"{live_sync_requirement_note(league)} to pull them."
             )
     else:
         tz = timezone_selector()
@@ -262,15 +271,23 @@ def render() -> None:
             goals_for = row.home_goals if is_home else row.away_goals
             goals_against = row.away_goals if is_home else row.home_goals
             outcome = "W" if goals_for > goals_against else ("D" if goals_for == goals_against else "L")
+            home_name, away_name = (
+                (team_canonical_name, opponent_name) if is_home else (opponent_name, team_canonical_name)
+            )
             result_rows.append(
                 {
                     "Date": row.date,
                     "Opponent": f"{'vs' if is_home else '@'} {opponent_name}",
                     "Score": f"{goals_for}-{goals_against}",
                     "Result": outcome,
+                    "Watch": youtube_search_url(home_name, away_name, row.date),
                 }
             )
-        st.dataframe(result_rows, use_container_width=True)
+        st.dataframe(
+            style_match_results(result_rows),
+            use_container_width=True,
+            column_config={"Watch": st.column_config.LinkColumn("Watch", display_text="▶ Highlights")},
+        )
 
     st.subheader("Squad")
     if league is None:
@@ -281,9 +298,9 @@ def render() -> None:
 
         if not squad_players:
             st.info(
-                "No squad data loaded for this team yet. Requires "
-                "FOOTBALL_DATA_ORG_API_KEY in .env and this team to have appeared "
-                f"in a live sync (`uv run python scripts/refresh_live_data.py {team_league_code}`)."
+                "No squad data loaded for this team yet. Run "
+                f"`uv run python scripts/refresh_live_data.py {team_league_code}`"
+                f"{live_sync_requirement_note(league)} to pull it."
             )
         else:
             today = dt.date.today()
@@ -341,7 +358,7 @@ def render() -> None:
 
         if not stats_shown:
             st.caption(
-                "A separate lookup from API-Football (not the current squad above) -- kept "
+                "A separate lookup from API-Football (not the current squad above) - kept "
                 "manual since its free plan only allows 100 requests/day."
             )
             if st.button("Load player stats", key=f"load_stats_btn_{team_id}"):
@@ -369,7 +386,7 @@ def render() -> None:
 
             if not historical_players:
                 st.info(
-                    "No stats found for this team/season -- requires API_FOOTBALL_KEY in .env, "
+                    "No stats found for this team/season - requires API_FOOTBALL_KEY in .env, "
                     "and this team must be resolvable against API-Football's own team list for "
                     f"{_season_label(season)}."
                 )
@@ -410,7 +427,7 @@ def render() -> None:
             return_note = f", est. return {return_date}" if return_date else ""
             st.write(
                 f"- {entry.player_name} ({entry.position}, weight={entry.importance_weight:.2f}) "
-                f"— source: {source}{return_note}"
+                f"- source: {source}{return_note}"
             )
         if params is not None:
             adj_attack, adj_defense = adjust_strength(

@@ -109,3 +109,35 @@ leagues:
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"
+
+  # football-data.org has zero MLS coverage at all (confirmed live: its
+  # /v4/competitions list has 13 entries, none of them MLS) -- fixtures,
+  # results, team seeding, squads, and injuries all come from ESPN's public,
+  # keyless site.api.espn.com endpoints instead (see ingest/espn_client.py).
+  # No api_competition_id (nothing to point it at) and no csv_code, but
+  # unlike WC/UCL/EURO above this DOES get a trained Dixon-Coles model
+  # (trainable: true) -- ESPN's per-team schedule endpoint gives genuine
+  # multi-season history (verified live back to 2020), and the training
+  # pipeline itself only ever reads generic `matches` table rows, so it
+  # doesn't care that this history came from ESPN instead of a CSV.
+  - code: MLS
+    name: Major League Soccer
+    data_source: espn
+    espn_league_slug: usa.1
+    trainable: true
+    seasons: ["2020", "2021", "2022", "2023", "2024", "2025", "2026"]
+    season_display: single_year
+    flag_url: https://flagcdn.com/w40/us.png
+    flag_emoji: "🇺🇸"
+    # Real Concacaf Champions Cup qualification also includes the
+    # Supporters' Shield winner, MLS Cup winner, and Leagues Cup winner --
+    # trophy-based berths a static standings table can't represent. This
+    # zone models just the table-position-based part (each conference's own
+    # top regular-season finisher), which also always includes the
+    # Supporters' Shield winner (the league's overall best record is
+    # necessarily also the top of whichever conference it's in). Position 1
+    # applies independently within EACH conference's own table (see
+    # dashboard/views/home.py's per-conference standings split), not
+    # position 1 overall.
+    zones:
+      - {start: 1, end: 1, kind: qualify, label: "Concacaf Champions Cup"}

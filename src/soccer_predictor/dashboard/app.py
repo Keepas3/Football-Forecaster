@@ -25,6 +25,7 @@ init_db()
 pg = st.navigation(
     [
         navigation.home_page(),
+        navigation.players_page(),
         navigation.team_detail_page(),
         navigation.predictor_page(),
     ]

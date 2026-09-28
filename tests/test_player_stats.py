@@ -32,6 +32,11 @@ TEAMS_RESPONSE = {
 }
 
 
+def test_mls_wired_into_api_football_league_maps():
+    assert player_stats.API_FOOTBALL_LEAGUE_ID["MLS"] == 253
+    assert player_stats.PRIMARY_COMPETITION_NAME["MLS"] == "Major League Soccer"
+
+
 def test_select_primary_row_matches_competition_name():
     rows = [_stat_row("UEFA Champions League", 5), _stat_row("Premier League", 30)]
     selected = player_stats._select_primary_row(rows, "EPL")

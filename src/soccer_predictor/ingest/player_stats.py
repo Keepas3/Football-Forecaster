@@ -53,6 +53,11 @@ API_FOOTBALL_LEAGUE_ID = {
     "UCL": 2,
     "EURO": 4,
     "WC": 1,
+    # Confirmed live via a real /leagues?search=Major League Soccer call --
+    # same "old-season proxy only" role as every other league here, since
+    # the free plan blocks MLS's current season exactly like it does EPL's
+    # (see ingest/injuries.py's MLS docs for the confirmed error message).
+    "MLS": 253,
 }
 
 TEAM_LIST_CACHE_TTL_SECONDS = 30 * 24 * 3600  # a past season's team list never changes
@@ -80,6 +85,7 @@ PRIMARY_COMPETITION_NAME = {
     "UCL": "UEFA Champions League",
     "EURO": "UEFA Euro Championship",
     "WC": "World Cup",
+    "MLS": "Major League Soccer",
 }
 
 

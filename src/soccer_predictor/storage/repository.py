@@ -12,14 +12,11 @@ from soccer_predictor.storage.models import (
     Fixture,
     Injury,
     Match,
+    PredictionRecord,
     Team,
     TeamAlias,
     TeamFormNote,
 )
-
-
-def team_by_canonical_name(session: Session, canonical_name: str) -> Team | None:
-    return session.scalar(select(Team).where(Team.canonical_name == canonical_name))
 
 
 def team_by_id(session: Session, team_id: int) -> Team | None:
@@ -44,6 +41,47 @@ def update_api_football_team_id(session: Session, team_id: int, api_football_tea
     team = session.get(Team, team_id)
     if team is not None:
         team.api_football_team_id = api_football_team_id
+
+
+def update_espn_team_id(session: Session, team_id: int, espn_team_id: int | None) -> None:
+    """Sets Team.espn_team_id. Never clobbers a known id with a falsy one --
+    same "learn once, keep forever" pattern as update_api_football_team_id.
+    """
+    if not espn_team_id:
+        return
+    team = session.get(Team, team_id)
+    if team is not None:
+        team.espn_team_id = espn_team_id
+
+
+def team_by_espn_id(session: Session, league_code: str, espn_team_id: int) -> Team | None:
+    return session.scalar(
+        select(Team).where(Team.league_code == league_code, Team.espn_team_id == espn_team_id)
+    )
+
+
+def update_team_conference(session: Session, team_id: int, conference: str | None) -> None:
+    """Sets Team.conference. Never clobbers a known value with a falsy one --
+    same "learn once, keep forever" pattern as update_team_crest.
+    """
+    if not conference:
+        return
+    team = session.get(Team, team_id)
+    if team is not None:
+        team.conference = conference
+
+
+def team_conferences_for_league(session: Session, league_code: str) -> dict[int, str]:
+    """Only includes teams with a known conference -- callers should
+    .get(id) and treat a missing entry as "no conference split for this
+    league" rather than an error.
+    """
+    rows = session.execute(
+        select(Team.id, Team.conference).where(
+            Team.league_code == league_code, Team.conference.is_not(None)
+        )
+    ).all()
+    return {team_id: conference for team_id, conference in rows}
 
 
 def get_or_create_team(session: Session, canonical_name: str, league_code: str) -> Team:
@@ -140,6 +178,55 @@ def upsert_match(
             source=source,
         )
     )
+
+
+def has_prediction_record(
+    session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
+) -> bool:
+    return (
+        session.scalar(
+            select(PredictionRecord.id).where(
+                PredictionRecord.league_code == league_code,
+                PredictionRecord.date == date,
+                PredictionRecord.home_team_id == home_team_id,
+                PredictionRecord.away_team_id == away_team_id,
+            )
+        )
+        is not None
+    )
+
+
+def insert_prediction_record(
+    session: Session,
+    league_code: str,
+    date: dt.date,
+    home_team_id: int,
+    away_team_id: int,
+    predicted_home_goals: int,
+    predicted_away_goals: int,
+) -> None:
+    """Locks in a prediction -- unlike upsert_match/upsert_fixture, an
+    existing row means skip, never update. That's the whole point of a
+    snapshot: it has to stay whatever was forecast at the time, even if the
+    model is retrained before the match is actually played.
+    """
+    if has_prediction_record(session, league_code, date, home_team_id, away_team_id):
+        return
+    session.add(
+        PredictionRecord(
+            league_code=league_code,
+            date=date,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            predicted_home_goals=predicted_home_goals,
+            predicted_away_goals=predicted_away_goals,
+            snapshotted_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+        )
+    )
+
+
+def all_prediction_records(session: Session) -> list[PredictionRecord]:
+    return list(session.scalars(select(PredictionRecord)).all())
 
 
 def matches_for_league(session: Session, league_code: str) -> pd.DataFrame:

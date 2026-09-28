@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 
+import pandas as pd
 import streamlit as st
 
 from soccer_predictor.config import load_leagues
@@ -22,6 +23,7 @@ from soccer_predictor.dashboard.components import (
     fixture_prediction_row,
     format_kickoff,
     league_option_label,
+    live_sync_requirement_note,
     render_head_to_head,
     render_prediction_breakdown,
     season_not_yet_scheduled,
@@ -42,11 +44,18 @@ from soccer_predictor.storage.repository import (
     matches_for_team,
     next_fixture_per_team,
     team_by_id,
+    team_conferences_for_league,
     team_crests_for_league,
     teams_for_league,
 )
 
 RANKINGS_TABLE_KEY = "league_rankings_table"
+# Only ever used for a league with a real conference split (currently just
+# MLS's Eastern/Western) -- see team_conferences_for_league.
+_CONFERENCE_TABLE_KEYS = {
+    "Eastern Conference": "league_rankings_table_east",
+    "Western Conference": "league_rankings_table_west",
+}
 _CLEAR_SELECTION_FLAG = "_clear_rankings_selection"
 UPCOMING_FIXTURES_WINDOW_DAYS = 14
 
@@ -59,15 +68,65 @@ def _season_label(season: str, league) -> str:
     return f"20{season[:2]}/{season[2:]}"
 
 
+def _render_standings_table(table_df: pd.DataFrame, table_key: str, search_key: str, league_code: str) -> None:
+    """One searchable, clickable standings table -- shared by the flat
+    single-table case and each per-conference table (see render()). Clicking
+    a row navigates to Team Detail, same as before this was split out.
+    """
+    # Streamlit's dataframe grid (glide-data-grid) is a canvas, not real DOM
+    # text -- the browser's own Ctrl+F can't see into it at all, so this is
+    # a real search, not decoration: filtering table_df server-side before
+    # it's ever rendered.
+    search_query = st.text_input("Search team", placeholder="e.g. Man City", key=search_key)
+    if search_query:
+        filtered_df = table_df[table_df["Team"].str.contains(search_query, case=False, na=False, regex=False)]
+    else:
+        filtered_df = table_df
+
+    if search_query and filtered_df.empty:
+        st.info(f'No team matches "{search_query}".')
+        return
+
+    # Streamlit's dataframe otherwise caps itself at a fixed default height
+    # with its own internal scrollbar -- size it to fit every (post-search)
+    # row instead, so the whole table renders in one page (35px/row + 35px
+    # header, per Streamlit's own default row height).
+    table_height = 35 * (len(filtered_df) + 1) + 3
+
+    event = st.dataframe(
+        style_standings(filtered_df),
+        use_container_width=True,
+        hide_index=True,
+        height=table_height,
+        column_order=STANDINGS_DISPLAY_COLUMNS,
+        column_config={"Crest": st.column_config.ImageColumn(" ", width="small")},
+        on_select="rerun",
+        selection_mode="single-row",
+        key=table_key,
+    )
+
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        team_id = int(filtered_df.iloc[selected_rows[0]]["team_id"])
+        # Defer clearing the selection to the top of the *next* run of this
+        # page (see render()) -- can't touch it in this run, the widget
+        # above is already instantiated.
+        st.session_state[_CLEAR_SELECTION_FLAG] = True
+        st.switch_page(navigation.team_detail_page(), query_params={"league": league_code, "team": str(team_id)})
+
+
 def render() -> None:
     st.title("⚽ Leagues")
 
     # Streamlit forbids writing to a widget's session_state key in the same
     # run after that widget has already been instantiated -- so a stale
     # selection (from the click that sent us to Team Detail) can only be
-    # cleared here, before st.dataframe(key=RANKINGS_TABLE_KEY) below runs.
+    # cleared here, before any st.dataframe(key=...) below runs. Clears
+    # every possible table key up front (harmless for ones not actually
+    # rendered this run) rather than tracking which one was active.
     if st.session_state.pop(_CLEAR_SELECTION_FLAG, False):
-        st.session_state[RANKINGS_TABLE_KEY] = {"selection": {"rows": []}}
+        for key in (RANKINGS_TABLE_KEY, *_CONFERENCE_TABLE_KEYS.values()):
+            st.session_state[key] = {"selection": {"rows": []}}
 
     leagues = load_leagues()
     if not leagues:
@@ -145,6 +204,7 @@ def render() -> None:
         team_names = teams_for_league(session, league.code)
         matches = matches_for_league(session, league.code)
         crest_urls = team_crests_for_league(session, league.code)
+        conference_by_team = team_conferences_for_league(session, league.code)
         next_opponent_ids = next_fixture_per_team(session, league.code, today)
         params = load_latest_params(session, league.code)
         upcoming_fixtures_df = fixtures_for_league(
@@ -163,87 +223,87 @@ def render() -> None:
         for team_id, opponent_id in next_opponent_ids.items()
     }
 
-    st.subheader("Upcoming Fixtures")
-    if upcoming_fixtures_df.empty:
-        if season_not_yet_scheduled(league, season):
-            st.info(f"{league.name} {season} hasn't been scheduled yet -- check back closer to the tournament.")
-        else:
-            st.info(
-                f"No upcoming fixtures loaded for {league.name}. Run "
-                f"`uv run python scripts/refresh_live_data.py {league.code}` "
-                "(needs FOOTBALL_DATA_ORG_API_KEY in .env) to pull them. "
-                "(This shows the schedule, not live in-play scores -- that would need a separate real-time feed.)"
-            )
-    else:
-        tz = timezone_selector()
-        fixture_rows = []
-        fixture_meta = []  # parallel to fixture_rows: (home_id, away_id, home_name, away_name, date)
-        with session_scope() as session:
-            for row in upcoming_fixtures_df.sort_values("date").itertuples(index=False):
-                home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
-                away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
-                if params is not None:
-                    prediction = predict_fixture(
-                        session,
-                        params,
-                        row.home_team_id,
-                        row.away_team_id,
-                        home_name,
-                        away_name,
-                        fixture_date=row.date,
-                    )
-                    fixture_row = fixture_prediction_row(home_name, away_name, prediction)
-                else:
-                    fixture_row = {"Home": home_name, "Away": away_name}
-                fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
-                fixture_rows.append(fixture_row)
-                fixture_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
-
-        fixture_columns = fixture_columns_with_kickoff_first(fixture_rows[0])
-        fixtures_height = 35 * (len(fixture_rows) + 1) + 3
-        has_predictions = "P(Home)" in fixture_rows[0]
-        fixtures_event = st.dataframe(
-            style_fixture_predictions(fixture_rows) if has_predictions else fixture_rows,
-            use_container_width=True,
-            hide_index=True,
-            height=fixtures_height,
-            column_order=fixture_columns,
-            on_select="rerun" if has_predictions else "ignore",
-            selection_mode="single-row",
-            key=f"upcoming_fixtures_table_{league.code}",
-        )
-        if params is None:
-            if league.supports_predictions:
-                st.caption(
-                    f"Predictions unavailable -- run `uv run python scripts/run_training.py {league.code}` "
-                    "to fit the model."
-                )
+    with st.expander("Upcoming Matches", expanded=True, key=f"upcoming_fixtures_expander_{league.code}"):
+        if upcoming_fixtures_df.empty:
+            if season_not_yet_scheduled(league, season):
+                st.info(f"{league.name} {season} hasn't been scheduled yet - check back closer to the tournament.")
             else:
-                st.caption(
-                    "This competition has no historical match data to train a prediction "
-                    "model from, so scores aren't predicted here -- just the schedule."
+                st.info(
+                    f"No upcoming Matches loaded for {league.name}. Run "
+                    f"`uv run python scripts/refresh_live_data.py {league.code}`"
+                    f"{live_sync_requirement_note(league)} to pull them. "
+                    "(This shows the schedule, not live in-play scores - that would need a separate real-time feed.)"
                 )
         else:
-            st.caption("Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction.")
-            selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
-            if selected:
-                home_id, away_id, home_name, away_name, fixture_date = fixture_meta[selected[0]]
+            tz = timezone_selector()
+            fixture_rows = []
+            fixture_meta = []  # parallel to fixture_rows: (home_id, away_id, home_name, away_name, date)
+            with session_scope() as session:
+                for row in upcoming_fixtures_df.sort_values("date").itertuples(index=False):
+                    home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
+                    away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
+                    if params is not None:
+                        prediction = predict_fixture(
+                            session,
+                            params,
+                            row.home_team_id,
+                            row.away_team_id,
+                            home_name,
+                            away_name,
+                            fixture_date=row.date,
+                        )
+                        fixture_row = fixture_prediction_row(home_name, away_name, prediction)
+                    else:
+                        fixture_row = {"Home": home_name, "Away": away_name}
+                    fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
+                    fixture_rows.append(fixture_row)
+                    fixture_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
 
-                with session_scope() as session:
-                    home_matches = matches_for_team(session, home_id)
-                h2h = compute_head_to_head(home_id, away_id, home_matches)
-                if h2h is not None:
-                    render_head_to_head(h2h, home_name, away_name)
+            fixture_columns = fixture_columns_with_kickoff_first(fixture_rows[0])
+            fixtures_height = 35 * (len(fixture_rows) + 1) + 3
+            has_predictions = "P(Home)" in fixture_rows[0]
+            fixtures_event = st.dataframe(
+                style_fixture_predictions(fixture_rows) if has_predictions else fixture_rows,
+                use_container_width=True,
+                hide_index=True,
+                height=fixtures_height,
+                column_order=fixture_columns,
+                on_select="rerun" if has_predictions else "ignore",
+                selection_mode="single-row",
+                key=f"upcoming_fixtures_table_{league.code}",
+            )
+            if params is None:
+                if league.supports_predictions:
+                    st.caption(
+                        f"Predictions unavailable - run `uv run python scripts/run_training.py {league.code}` "
+                        "to fit the model."
+                    )
                 else:
-                    st.caption(f"No history on record between {home_name} and {away_name} yet.")
+                    st.caption(
+                        "This competition has no historical match data to train a prediction "
+                        "model from, so scores aren't predicted here - just the schedule."
+                    )
+            else:
+                st.caption("Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction.")
+                selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
+                if selected:
+                    home_id, away_id, home_name, away_name, fixture_date = fixture_meta[selected[0]]
 
-                with session_scope() as session:
-                    prediction = predict_fixture(
-                        session, params, home_id, away_id, home_name, away_name, fixture_date=fixture_date
-                    )
-                    render_prediction_breakdown(
-                        prediction, home_name, away_name, session, league, home_id, away_id
-                    )
+                    with session_scope() as session:
+                        home_matches = matches_for_team(session, home_id)
+                    h2h = compute_head_to_head(home_id, away_id, home_matches)
+                    if h2h is not None:
+                        render_head_to_head(h2h, home_name, away_name)
+                    else:
+                        st.caption(f"No history on record between {home_name} and {away_name} yet.")
+
+                    with session_scope() as session:
+                        prediction = predict_fixture(
+                            session, params, home_id, away_id, home_name, away_name, fixture_date=fixture_date
+                        )
+                        render_prediction_breakdown(
+                            prediction, home_name, away_name, session, league, home_id, away_id
+                        )
 
     st.caption("Click a team's row for its schedule, recent results, and injuries.")
     if league.zones:
@@ -251,48 +311,24 @@ def render() -> None:
         st.caption(legend)
 
     standings = compute_standings(matches, team_names, season)
-    table_df = standings_dataframe(standings, crest_urls, next_opponent_names, league.zones)
 
-    # Streamlit's dataframe grid (glide-data-grid) is a canvas, not real DOM
-    # text -- the browser's own Ctrl+F can't see into it at all, so this is
-    # a real search, not decoration: filtering table_df server-side before
-    # it's ever rendered.
-    search_query = st.text_input(
-        "Search team", placeholder="e.g. Man City", key=f"standings_search_{league.code}"
+    # Split into per-conference tables only when every team in the current
+    # standings has a known conference (e.g. MLS's Eastern/Western) -- a
+    # partial split (some teams unassigned) would silently drop teams from
+    # both tables, so this falls back to one flat table unless the data is
+    # complete.
+    has_full_conference_split = bool(conference_by_team) and all(
+        s.team_id in conference_by_team for s in standings
     )
-    if search_query:
-        filtered_df = table_df[table_df["Team"].str.contains(search_query, case=False, na=False, regex=False)]
+
+    if has_full_conference_split:
+        for conference_name, table_key in _CONFERENCE_TABLE_KEYS.items():
+            conference_standings = [s for s in standings if conference_by_team[s.team_id] == conference_name]
+            if not conference_standings:
+                continue
+            st.markdown(f"**{conference_name}**")
+            table_df = standings_dataframe(conference_standings, crest_urls, next_opponent_names, league.zones)
+            _render_standings_table(table_df, table_key, f"standings_search_{league.code}_{table_key}", league.code)
     else:
-        filtered_df = table_df
-
-    if search_query and filtered_df.empty:
-        st.info(f'No team matches "{search_query}".')
-    else:
-        # Streamlit's dataframe otherwise caps itself at a fixed default
-        # height with its own internal scrollbar -- size it to fit every
-        # (post-search) row instead, so the whole table renders in one page
-        # (35px/row + 35px header, per Streamlit's own default row height).
-        table_height = 35 * (len(filtered_df) + 1) + 3
-
-        event = st.dataframe(
-            style_standings(filtered_df),
-            use_container_width=True,
-            hide_index=True,
-            height=table_height,
-            column_order=STANDINGS_DISPLAY_COLUMNS,
-            column_config={"Crest": st.column_config.ImageColumn(" ", width="small")},
-            on_select="rerun",
-            selection_mode="single-row",
-            key=RANKINGS_TABLE_KEY,
-        )
-
-        selected_rows = event.selection.rows if event and event.selection else []
-        if selected_rows:
-            team_id = int(filtered_df.iloc[selected_rows[0]]["team_id"])
-            # Defer clearing the selection to the top of the *next* run of
-            # this page (see above) -- can't touch it in this run, the
-            # widget above is already instantiated.
-            st.session_state[_CLEAR_SELECTION_FLAG] = True
-            st.switch_page(
-                navigation.team_detail_page(), query_params={"league": league.code, "team": str(team_id)}
-            )
+        table_df = standings_dataframe(standings, crest_urls, next_opponent_names, league.zones)
+        _render_standings_table(table_df, RANKINGS_TABLE_KEY, f"standings_search_{league.code}", league.code)

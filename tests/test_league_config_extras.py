@@ -53,3 +53,78 @@ def test_load_leagues_parses_optional_csv_code_and_season_display(tmp_path, monk
         assert league.season_display == "single_year"
     finally:
         config.load_leagues.cache_clear()
+
+
+def test_data_source_defaults_to_football_data_org():
+    league = League(code="UCL", name="UEFA Champions League", api_competition_id=2001, seasons=["2425"])
+    assert league.data_source == "football_data_org"
+    assert league.espn_league_slug is None
+
+
+def test_load_leagues_parses_espn_data_source_with_no_api_competition_id(tmp_path, monkeypatch):
+    import soccer_predictor.config as config
+
+    (tmp_path / "leagues.yaml").write_text(
+        "leagues:\n"
+        "  - code: MLS\n"
+        "    name: Major League Soccer\n"
+        "    data_source: espn\n"
+        "    espn_league_slug: usa.1\n"
+        '    seasons: ["2026"]\n'
+        "    season_display: single_year\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    config.load_leagues.cache_clear()
+
+    try:
+        league = config.load_leagues()["MLS"]
+        assert league.api_competition_id is None
+        assert league.data_source == "espn"
+        assert league.espn_league_slug == "usa.1"
+    finally:
+        config.load_leagues.cache_clear()
+
+
+def test_trainable_defaults_to_false():
+    league = League(code="UCL", name="UEFA Champions League", api_competition_id=2001, seasons=["2425"])
+    assert league.trainable is False
+    assert league.supports_predictions is False
+
+
+def test_trainable_true_gives_supports_predictions_without_csv_code():
+    league = League(
+        code="MLS",
+        name="Major League Soccer",
+        seasons=["2026"],
+        data_source="espn",
+        espn_league_slug="usa.1",
+        trainable=True,
+    )
+    assert league.csv_code is None
+    assert league.supports_predictions is True
+
+
+def test_load_leagues_parses_trainable_flag(tmp_path, monkeypatch):
+    import soccer_predictor.config as config
+
+    (tmp_path / "leagues.yaml").write_text(
+        "leagues:\n"
+        "  - code: MLS\n"
+        "    name: Major League Soccer\n"
+        "    data_source: espn\n"
+        "    espn_league_slug: usa.1\n"
+        "    trainable: true\n"
+        '    seasons: ["2026"]\n'
+        "    season_display: single_year\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    config.load_leagues.cache_clear()
+
+    try:
+        league = config.load_leagues()["MLS"]
+        assert league.trainable is True
+        assert league.supports_predictions is True
+    finally:
+        config.load_leagues.cache_clear()

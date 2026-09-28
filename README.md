@@ -55,8 +55,14 @@ Four leagues are configured out of the box: EPL, La Liga, Bundesliga, Serie A
 3. **Launch the dashboard**:
 
    ```bash
-   uv run streamlit run src/soccer_predictor/dashboard/app.py
+   uv run streamlit run src/soccer_predictor/dashboard/app.py --server.address localhost
    ```
+
+   `--server.address localhost` matters: Streamlit's own default is to
+   listen on every network interface (`0.0.0.0`), not just this machine --
+   without it, anyone else on the same Wi-Fi/LAN can open your dashboard in
+   their own browser and use it, spending your API-Football/football-data.org/
+   Anthropic quota. This app has no login of its own.
 
 **For everyday use, just run step 3 on its own.** The dashboard only ever
 reads `data/soccer.db` -- it never re-fetches or re-trains anything at

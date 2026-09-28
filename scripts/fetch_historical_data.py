@@ -22,9 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from soccer_predictor.config import DATA_DIR, load_leagues  # noqa: E402
 from soccer_predictor.ingest.api_client import MissingApiKey  # noqa: E402
-from soccer_predictor.ingest.fixtures import sync_results_to_db  # noqa: E402
+from soccer_predictor.ingest.fixtures import sync_results_to_db, sync_results_to_db_espn  # noqa: E402
 from soccer_predictor.ingest.historical_csv import ingest_into_db, parse_csv  # noqa: E402
-from soccer_predictor.ingest.team_mapper import seed_teams_and_aliases, seed_teams_from_api  # noqa: E402
+from soccer_predictor.ingest.team_mapper import (  # noqa: E402
+    seed_teams_and_aliases,
+    seed_teams_from_api,
+    seed_teams_from_espn,
+)
 from soccer_predictor.storage.db import init_db, session_scope  # noqa: E402
 
 BASE_URL = "https://www.football-data.co.uk/mmz4281"
@@ -58,6 +62,27 @@ def main() -> None:
     for code in requested:
         league = leagues[code]
         print(f"League {league.name} ({league.code})")
+
+        if league.data_source == "espn":
+            # No football-data.org coverage at all for this competition --
+            # team list and match history both come from ESPN's public,
+            # keyless endpoints instead (see ingest/espn_client.py).
+            with session_scope() as session:
+                seeded = seed_teams_from_espn(session, league)
+            print(f"  seeded {seeded} teams from ESPN")
+            if seeded == 0:
+                print("  skipping season sync -- ESPN team seeding returned nothing")
+                continue
+
+            for season in league.seasons:
+                try:
+                    with session_scope() as session:
+                        synced, skipped = sync_results_to_db_espn(session, league, season)
+                except requests.RequestException as exc:
+                    print(f"  season {season}: skipped -- {exc}")
+                    continue
+                print(f"  season {season}: {synced} matches synced, {skipped} skipped (unresolved teams)")
+            continue
 
         if league.csv_code is None:
             # No football-data.co.uk source for this competition -- team

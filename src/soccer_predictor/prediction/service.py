@@ -23,7 +23,6 @@ from soccer_predictor.storage.models import FittedParams
 from soccer_predictor.storage.repository import (
     form_notes_for_team,
     injuries_for_team,
-    team_by_canonical_name,
 )
 
 
@@ -32,13 +31,6 @@ class TeamInjuries:
     entries: list[InjuryEntry]
     sources: list[str]  # parallel list: "manual" | "api" | "chat" per entry, for dashboard display
     expected_return_dates: list[dt.date | None]  # parallel list, for display
-
-
-@dataclass
-class TeamFormNotes:
-    entries: list[FormNoteEntry]
-    summaries: list[str]
-    expires_on: list[dt.date]
 
 
 def load_latest_params(session: Session, league_code: str) -> DixonColesParams | None:
@@ -104,13 +96,9 @@ def get_injuries_for_team(
     )
 
 
-def get_form_notes_for_team(session: Session, team_id: int, as_of: dt.date) -> TeamFormNotes:
+def get_form_notes_for_team(session: Session, team_id: int, as_of: dt.date) -> list[FormNoteEntry]:
     active = [row for row in form_notes_for_team(session, team_id) if row.expires_on >= as_of]
-    return TeamFormNotes(
-        entries=[FormNoteEntry(magnitude=row.magnitude, affects=row.affects) for row in active],
-        summaries=[row.summary for row in active],
-        expires_on=[row.expires_on for row in active],
-    )
+    return [FormNoteEntry(magnitude=row.magnitude, affects=row.affects) for row in active]
 
 
 def predict_fixture(
@@ -127,8 +115,8 @@ def predict_fixture(
 
     home_injuries = get_injuries_for_team(session, home_team_id, home_team_name, fixture_date).entries
     away_injuries = get_injuries_for_team(session, away_team_id, away_team_name, fixture_date).entries
-    home_form = get_form_notes_for_team(session, home_team_id, fixture_date).entries
-    away_form = get_form_notes_for_team(session, away_team_id, fixture_date).entries
+    home_form = get_form_notes_for_team(session, home_team_id, fixture_date)
+    away_form = get_form_notes_for_team(session, away_team_id, fixture_date)
 
     base_home_attack, base_home_defense = params.attack[home_team_id], params.defense[home_team_id]
     base_away_attack, base_away_defense = params.attack[away_team_id], params.defense[away_team_id]

@@ -10,19 +10,20 @@ logged to `data/unmatched_teams.log` for manual review instead.
 from __future__ import annotations
 
 import datetime as dt
-from pathlib import Path
 
 import requests
 from rapidfuzz import fuzz, process
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import DATA_DIR, League, load_team_aliases
-from soccer_predictor.ingest import api_client
+from soccer_predictor.ingest import api_client, espn_client
 from soccer_predictor.storage.models import Team
 from soccer_predictor.storage.repository import (
     all_alias_texts,
     find_team_by_alias,
     get_or_create_team,
+    update_espn_team_id,
+    update_team_conference,
     update_team_crest,
     upsert_team_alias,
 )
@@ -74,6 +75,31 @@ def seed_teams_from_api(session: Session, league: League) -> int:
         team = get_or_create_team(session, name, league.code)
         upsert_team_alias(session, team, name, source="api")
         update_team_crest(session, team.id, entry.get("crest"))
+        count += 1
+    return count
+
+
+def seed_teams_from_espn(session: Session, league: League) -> int:
+    """Populates teams for a league with data_source == "espn" (e.g. MLS --
+    no football-data.org coverage at all, so seed_teams_from_api can't be
+    used). ESPN keys everything by a stable numeric id, so this caches
+    Team.espn_team_id directly rather than creating a "api" TeamAlias --
+    fixture/result resolution for these leagues never needs name-based
+    fuzzy matching (see ingest/fixtures.py's *_espn functions).
+
+    Returns the number of teams seeded; 0 (never raises) on any failure.
+    """
+    count = 0
+    for entry in espn_client.fetch_teams(league.espn_league_slug):
+        team = get_or_create_team(session, entry.display_name, league.code)
+        update_team_crest(session, team.id, entry.logo_url)
+        update_espn_team_id(session, team.id, int(entry.espn_id))
+        # Shares its on-disk cache with fetch_team_roster (same request) --
+        # this doesn't cost an extra network call once squad/injuries have
+        # already been synced for this team in the same refresh run, or
+        # vice versa.
+        conference = espn_client.fetch_team_conference(league.espn_league_slug, entry.espn_id)
+        update_team_conference(session, team.id, conference)
         count += 1
     return count
 

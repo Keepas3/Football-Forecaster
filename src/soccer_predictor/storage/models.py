@@ -43,6 +43,15 @@ class Team(Base):
     # name every single time, which was the single biggest cost in
     # refresh_live_data.py's runtime (2 API-Football calls/team -> 1).
     api_football_team_id: Mapped[int | None] = mapped_column(nullable=True, default=None)
+    # ESPN's own numeric team id (site.api.espn.com), for leagues with
+    # League.data_source == "espn" (e.g. MLS) -- same permanent-cache idiom
+    # as api_football_team_id above. ESPN keys everything by this stable id,
+    # so leagues using it never need name-based alias resolution at all.
+    espn_team_id: Mapped[int | None] = mapped_column(nullable=True, default=None)
+    # e.g. "Eastern Conference"/"Western Conference" for MLS -- only ever
+    # populated for leagues with a real conference split (see
+    # ingest/espn_client.py::fetch_team_conference); None everywhere else.
+    conference: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
     aliases: Mapped[list["TeamAlias"]] = relationship(back_populates="team")
 
@@ -149,3 +158,25 @@ class FittedParams(Base):
     fitted_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
     params_json: Mapped[str] = mapped_column(String)
     time_window_desc: Mapped[str] = mapped_column(String, default="")
+
+
+class PredictionRecord(Base):
+    """A prediction locked in the first time a fixture was seen as upcoming
+    with a trained model available -- never overwritten, even if the model
+    is later retrained, so this stays a genuine advance forecast to grade
+    against once the real result is known (see prediction/tracking.py).
+    """
+
+    __tablename__ = "prediction_records"
+    __table_args__ = (
+        UniqueConstraint("league_code", "date", "home_team_id", "away_team_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    league_code: Mapped[str] = mapped_column(String, index=True)
+    date: Mapped[dt.date] = mapped_column(Date, index=True)
+    home_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
+    away_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
+    predicted_home_goals: Mapped[int]
+    predicted_away_goals: Mapped[int]
+    snapshotted_at: Mapped[dt.datetime] = mapped_column(DateTime)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import urllib.parse
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -103,6 +104,32 @@ def format_kickoff(
     if kickoff_utc <= now < kickoff_utc + LIVE_MATCH_WINDOW:
         return f"🔴 LIVE · {formatted}"
     return formatted
+
+
+def youtube_search_url(home_name: str, away_name: str, match_date: dt.date) -> str:
+    """A YouTube search-results link for one specific match -- no API key or
+    network call, just a query built to reliably surface that match's real
+    highlights near the top of YouTube's own results (home team first,
+    since that's how highlight videos are usually titled).
+    """
+    query = f"{home_name} vs {away_name} {match_date.isoformat()} highlights"
+    return f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}"
+
+
+def live_sync_requirement_note(league: League | None) -> str:
+    """The parenthetical explaining what running refresh_live_data.py needs
+    for this league -- football-data.org leagues need an API key; ESPN
+    -backed leagues (data_source == "espn", e.g. MLS) need nothing at all.
+    Returns "" (not a placeholder) so callers can splice it straight into a
+    sentence without a leading space appearing for ESPN leagues. `league`
+    may be None at some call sites (e.g. an unresolved league code) -- falls
+    back to the football-data.org note in that case, same as this app's
+    prior (pre-ESPN) behavior everywhere.
+    """
+    if league is not None and league.data_source == "espn":
+        return ""
+    return " (needs FOOTBALL_DATA_ORG_API_KEY in .env)"
+
 
 _FORM_EMOJI = {"W": "🟩", "D": "⬜", "L": "🟥"}
 
@@ -274,6 +301,27 @@ def _predicted_outcome_styles(row: pd.Series) -> pd.Series:
     return styles
 
 
+_RESULT_STYLE = {"W": _WINNER_STYLE, "D": _DRAW_STYLE, "L": _LOSER_STYLE}
+
+
+def _result_style(row: pd.Series) -> pd.Series:
+    styles = pd.Series("", index=row.index)
+    if "Result" in styles.index:
+        styles["Result"] = _RESULT_STYLE.get(row.get("Result", ""), "")
+    return styles
+
+
+def style_match_results(rows: list[dict]):
+    """Colors a "Result" column of W/D/L values green/grey/red (same palette
+    as style_fixture_predictions' predicted-outcome colors) -- shared by
+    Team Detail's "Recent results" table and render_head_to_head's table,
+    both of which use this exact W/D/L convention. Pass the returned Styler
+    straight to st.dataframe in place of the plain list/DataFrame.
+    """
+    df = pd.DataFrame(rows)
+    return df.style.apply(_result_style, axis=1)
+
+
 def fixture_columns_with_kickoff_first(row: dict) -> list[str]:
     """Column order for a fixture_prediction_row dict once "Kickoff" has
     been added: Kickoff first, then everything else -- except any hidden
@@ -324,7 +372,10 @@ def _render_squad_reference(
     if not home_squad and not away_squad:
         return
 
-    st.caption("Current squads (shown for reference only -- not used in the calculation above):")
+    st.caption(
+        "Current squads (shown for reference - browsing this list has no effect; only players "
+        "flagged injured/absent on Team Detail affect the calculation above):"
+    )
     cols = st.columns(2)
     for col, name, squad in ((cols[0], home_name, home_squad), (cols[1], away_name, away_squad)):
         with col:
@@ -358,7 +409,7 @@ def render_team_rating_breakdown(
         )
         st.write(
             "This is a joint statistical fit (Poisson/Dixon-Coles maximum likelihood), not a "
-            "per-team formula -- the optimizer solves for every team's attack/defense "
+            "per-team formula - the optimizer solves for every team's attack/defense "
             "simultaneously so that, together, they best explain the actual final scores across "
             "every match in the league. There's no standalone equation that produces one team's "
             'number in isolation (see a fixture\'s "How this prediction was calculated" for how '
@@ -391,8 +442,8 @@ def render_team_rating_breakdown(
         )
         st.caption(
             f"Fitted Attack **{params.attack[team_id]:.3f}** / Defense **{params.defense[team_id]:.3f}** "
-            "should broadly track these per-game averages -- higher attack ≈ scores more than a "
-            "league-average team, lower defense ≈ concedes fewer -- but the fit also accounts for "
+            "should broadly track these per-game averages - higher attack ≈ scores more than a "
+            "league-average team, lower defense ≈ concedes fewer - but the fit also accounts for "
             "opponent strength and recency, so it won't match the raw average exactly."
         )
 
@@ -420,7 +471,7 @@ def render_team_facts(facts: TeamFacts, team_names: dict[int, str], league_name:
         return f"{result.goals_for}-{result.goals_against} vs {_opponent_name(result.opponent_id)} ({venue}), {result.date}"
 
     st.write(
-        f"**{league_name} record** (from {facts.total_matches:,} matches on record -- this "
+        f"**{league_name} record** (from {facts.total_matches:,} matches on record - this "
         f"league only, not cup/continental competitions this team has also played in): "
         f"{facts.total_goals_for:,} scored, {facts.total_goals_against:,} conceded."
     )
@@ -471,20 +522,28 @@ def render_head_to_head(h2h: HeadToHeadRecord, team_name: str, opponent_name: st
     """
     st.markdown(f"**{team_name} vs {opponent_name}: head-to-head**")
     st.write(
-        f"{h2h.total_matches} meeting{'s' if h2h.total_matches != 1 else ''} on record -- "
+        f"{h2h.total_matches} meeting{'s' if h2h.total_matches != 1 else ''} on record - "
         f"**{h2h.wins}W-{h2h.draws}D-{h2h.losses}L**, {h2h.goals_for}-{h2h.goals_against} goals "
         f"(from {team_name}'s side)."
     )
-    rows = [
-        {
-            "Date": m.date,
-            "Venue": "Home" if m.is_home else "Away",
-            "Score": f"{m.goals_for}-{m.goals_against}",
-            "Result": "W" if m.goal_diff > 0 else ("D" if m.goal_diff == 0 else "L"),
-        }
-        for m in h2h.recent_matches
-    ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    rows = []
+    for m in h2h.recent_matches:
+        home_name, away_name = (team_name, opponent_name) if m.is_home else (opponent_name, team_name)
+        rows.append(
+            {
+                "Date": m.date,
+                "Venue": "Home" if m.is_home else "Away",
+                "Score": f"{m.goals_for}-{m.goals_against}",
+                "Result": "W" if m.goal_diff > 0 else ("D" if m.goal_diff == 0 else "L"),
+                "Watch": youtube_search_url(home_name, away_name, m.date),
+            }
+        )
+    st.dataframe(
+        style_match_results(rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Watch": st.column_config.LinkColumn("Watch", display_text="▶ Highlights")},
+    )
 
 
 def render_prediction_breakdown(
@@ -505,25 +564,36 @@ def render_prediction_breakdown(
 
     Pass `session`/`league`/`home_team_id`/`away_team_id` to also show each
     team's current squad for reference -- attack/defense come entirely from
-    historical TEAM match results, never from individual player data, so the
-    squad is shown as context, explicitly labeled as not part of the
-    calculation (see the "0." section below), rather than implying it feeds
-    the rating.
+    historical TEAM match results, never from individual player data. The
+    squad list itself is shown purely as context (see the "0." section
+    below): browsing it has no effect. A player only matters to the
+    calculation once they're actually flagged injured/absent (Team Detail's
+    Injuries section, sourced from config/injuries.yaml, the live API, or
+    chat notes) -- at which point their OWN stats size the adjustment (see
+    injury_adjustment.adjust_strength / ingest.player_importance).
     """
     b = prediction.breakdown
     if b is None:
         return
 
     with st.expander(f"How this prediction was calculated: {home_name} vs {away_name}", expanded=True):
-        st.markdown("**0. Where these ratings actually come from**")
+        st.markdown("**Where these ratings actually come from**")
         st.write(
-            f"Attack/defense are fit **only from past match results** (final scores) -- "
+            f"Attack/defense are fit **only from past match results** (final scores) - "
             f"{b.n_matches:,} matches across this whole league (every team at once, not just "
-            f"{home_name}/{away_name}), last fitted {b.fitted_at[:10]}. Individual player stats "
-            f"(the Squad / Player Stats sections on Team Detail) play **no role** in this number "
-            f"at all -- the model has no idea who's actually on the pitch, only how many goals "
-            f"this team has scored and conceded historically. Recent results count for more than "
-            f"old ones (time-decay rate ξ = {b.xi:.4f})."
+            f"{home_name}/{away_name}), last fitted {b.fitted_at[:10]}. This base rating never "
+            f"looks at individual player data - only how many goals this team has scored and "
+            f"conceded historically. Recent results count for more than old ones (time-decay rate "
+            f"ξ = {b.xi:.4f})."
+        )
+        st.write(
+            "Player data *does* feed into the adjusted numbers in step 1 below, but only for "
+            "whoever is actually flagged injured/absent on Team Detail's Injuries section - "
+            "simply being on the squad has no effect. Once a player is marked out, the *size* of "
+            "the hit to their team's attack/defense is based on that player's own real "
+            "goals/assists/minutes (and, when available, current-season xG/xA from Understat), "
+            "not a flat guess - see Team Detail's Injuries section for each flagged player's "
+            "computed weight."
         )
         _render_squad_reference(session, league, home_team_id, home_name, away_team_id, away_name)
 
@@ -595,7 +665,7 @@ def render_prediction_breakdown(
         st.write(
             f"Every scoreline from 0-0 up to 10-10 is computed the same way, then all of them are "
             f"divided by their total so the full grid sums to 1. That gives this scoreline's final "
-            f"probability: **{matrix[h, a]:.3f}** -- the same number shown in the table's "
+            f"probability: **{matrix[h, a]:.3f}** - the same number shown in the table's "
             f'"Predicted score" column ({h}-{a}).'
         )
 

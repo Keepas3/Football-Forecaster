@@ -4,8 +4,9 @@
     {
       "name": "soccer-dashboard",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "streamlit", "run", "src/soccer_predictor/dashboard/app.py", "--server.headless", "true"],
-      "port": 8501
+      "runtimeArgs": ["run", "streamlit", "run", "src/soccer_predictor/dashboard/app.py", "--server.headless", "true", "--server.address", "localhost"],
+      "port": 8501,
+      "autoPort": true
     }
   ]
 }

@@ -36,13 +36,16 @@ class TableZone:
 class League:
     code: str
     name: str
-    api_competition_id: int
     seasons: list[str]
     # None for a competition with no football-data.co.uk historical CSV
     # (e.g. UEFA Champions League, European Championship) -- these rely
     # entirely on football-data.org's live API for match history, so they
     # never get a trained Dixon-Coles model (see supports_predictions).
     csv_code: str | None = None
+    # None for a league football-data.org doesn't cover at all (e.g. MLS,
+    # see data_source below) -- every football-data.org call site must
+    # guard on this before building a URL from it.
+    api_competition_id: int | None = None
     flag_url: str | None = None
     # A unicode flag emoji -- st.selectbox only renders plain text for its
     # options, so this is what shows next to the league name in the League
@@ -56,14 +59,32 @@ class League:
     # tournaments like the Euros run entirely within one calendar year and
     # only happen every 4 years, so they don't fit the two-year convention.
     season_display: str = "range"
+    # "football_data_org" (default): fixtures/results/team-seeding come from
+    # football-data.org (api_competition_id). "espn": from ESPN's public,
+    # keyless site.api.espn.com endpoints instead (ingest/espn_client.py) --
+    # used for leagues football-data.org doesn't cover at all, e.g. MLS.
+    data_source: str = "football_data_org"
+    # Only meaningful when data_source == "espn" -- ESPN's own league slug,
+    # e.g. "usa.1" for MLS (verified live against site.api.espn.com; no
+    # documented, stable list of these exists).
+    espn_league_slug: str | None = None
+    # Explicit opt-in for a league with a real historical-match source that
+    # ISN'T a football-data.co.uk CSV (e.g. MLS via ESPN) -- see
+    # supports_predictions. Defaults to False so every existing league's
+    # behavior is unchanged unless a league's config explicitly sets this;
+    # UEFA Champions League/Euros/World Cup deliberately leave it False even
+    # though they also have a non-CSV live-API match history, since a
+    # trained model was never wanted for them.
+    trainable: bool = False
 
     @property
     def supports_predictions(self) -> bool:
-        return self.csv_code is not None
+        return self.csv_code is not None or self.trainable
 
     def api_season_year(self, season: str) -> int:
-        """Converts one of this league's season codes to football-data.org's
-        `season=` query value (a single start year)."""
+        """Converts one of this league's season codes to a live API's
+        `season=` query value (a single start year) -- shared by
+        football-data.org and ESPN, which both use this convention."""
         if self.season_display == "single_year":
             return int(season)
         return int(f"20{season[:2]}")
@@ -94,7 +115,7 @@ def load_leagues() -> dict[str, League]:
             code=entry["code"],
             name=entry["name"],
             csv_code=entry.get("csv_code"),
-            api_competition_id=entry["api_competition_id"],
+            api_competition_id=entry.get("api_competition_id"),
             seasons=list(entry["seasons"]),
             flag_url=entry.get("flag_url"),
             flag_emoji=entry.get("flag_emoji"),
@@ -103,6 +124,9 @@ def load_leagues() -> dict[str, League]:
                 for z in entry.get("zones", [])
             ],
             season_display=entry.get("season_display", "range"),
+            data_source=entry.get("data_source", "football_data_org"),
+            espn_league_slug=entry.get("espn_league_slug"),
+            trainable=entry.get("trainable", False),
         )
         for entry in raw["leagues"]
     }

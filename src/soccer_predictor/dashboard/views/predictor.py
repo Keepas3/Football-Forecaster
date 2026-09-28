@@ -20,6 +20,7 @@ from soccer_predictor.dashboard.components import (
     format_kickoff,
     leaderboard_dataframe,
     league_option_label,
+    live_sync_requirement_note,
     render_prediction_breakdown,
     scoreline_chart,
     style_fixture_predictions,
@@ -31,6 +32,7 @@ from soccer_predictor.prediction.service import (
     load_latest_params,
     predict_fixture,
 )
+from soccer_predictor.prediction.tracking import compute_prediction_accuracy
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import (
     add_form_note,
@@ -79,8 +81,26 @@ def render() -> None:
             value=(dt.date.today(), dt.date.today() + dt.timedelta(days=14)),
         )
 
+        st.divider()
+        st.header("Track Record")
+        st.caption("Across every league - how often a locked-in prediction matched the real result.")
+        with session_scope() as session:
+            accuracy = compute_prediction_accuracy(session)
+        # Stacked, not side-by-side columns -- the sidebar is too narrow for
+        # 3 st.metric labels to fit without truncating.
+        st.metric("Exact score", accuracy.exact)
+        st.metric("Right outcome", accuracy.correct_outcome)
+        st.metric("Wrong", accuracy.wrong)
+        if accuracy.hit_rate is None:
+            st.caption("No graded predictions yet.")
+        else:
+            st.caption(
+                f"{accuracy.hit_rate:.0%} hit rate ({accuracy.graded_total} graded, "
+                f"{accuracy.pending} still pending)."
+            )
+
     league = leagues[league_code]
-    st.title(f"⚽ {league.name} Match Predictor")
+    st.title(f"{league.name} Match Predictor")
 
     with session_scope() as session:
         params = load_latest_params(session, league.code)
@@ -90,7 +110,7 @@ def render() -> None:
         if not league.supports_predictions:
             st.warning(
                 f"{league.name} has no historical match data to train a prediction model from, "
-                "so this predictions-focused page doesn't apply to it -- see its Leagues page "
+                "so this predictions-focused page doesn't apply to it - see its Leagues page "
                 "for standings/fixtures/squad instead."
             )
         else:
@@ -118,8 +138,8 @@ def render() -> None:
         if fixtures_df.empty:
             st.info(
                 "No upcoming fixtures loaded for this range. Run "
-                f"`uv run python scripts/refresh_live_data.py {league.code}` "
-                "(needs FOOTBALL_DATA_ORG_API_KEY in .env) to pull them, or try "
+                f"`uv run python scripts/refresh_live_data.py {league.code}`"
+                f"{live_sync_requirement_note(league)} to pull them, or try "
                 "a custom matchup below."
             )
         else:
@@ -227,7 +247,7 @@ def render() -> None:
                 return_note = f", est. return {return_date}" if return_date else ""
                 st.write(
                     f"- {entry.player_name} ({entry.position}, weight={entry.importance_weight:.2f}) "
-                    f"— source: {source}{return_note}"
+                    f"- source: {source}{return_note}"
                 )
             adj_attack, adj_defense = adjust_strength(
                 params.attack[team_id], params.defense[team_id], team_injuries.entries
@@ -248,7 +268,7 @@ def render() -> None:
         st.caption(
             'Type notes about players or teams (e.g. "Saka is injured, ~3 weeks out", '
             '"Arsenal have been flat since the manager change"). An AI parses them into '
-            "structured entries below for you to review and save — nothing is applied to "
+            "structured entries below for you to review and save - nothing is applied to "
             "predictions until you click Save."
         )
 
@@ -286,7 +306,7 @@ def render() -> None:
                     if result.injuries or result.form_notes:
                         summary = (
                             f"Found {len(result.injuries)} availability note(s) and "
-                            f"{len(result.form_notes)} form note(s) — review below before saving."
+                            f"{len(result.form_notes)} form note(s) - review below before saving."
                         )
                     else:
                         summary = "Didn't find anything extractable in that note."
@@ -295,7 +315,7 @@ def render() -> None:
 
         if st.session_state.pending_cards:
             st.subheader("Review pending notes")
-            team_options = ["— select team —"] + sorted(team_names.values())
+            team_options = ["- select team -"] + sorted(team_names.values())
             position_options = ["attack", "defense"]
             affects_options = ["attack", "defense", "both"]
 
@@ -304,7 +324,7 @@ def render() -> None:
                 with st.container(border=True):
                     if card["kind"] == "injury":
                         data = card["data"]
-                        default_team = team_names.get(data.team_id, "— select team —")
+                        default_team = team_names.get(data.team_id, "- select team -")
                         cols = st.columns([2, 2, 1, 1, 2])
                         team_choice = cols[0].selectbox(
                             "Team", team_options, index=_safe_index(team_options, default_team), key=f"team_{uid}"
@@ -324,9 +344,9 @@ def render() -> None:
                             value=data.expected_return_date or (dt.date.today() + dt.timedelta(weeks=3)),
                             key=f"return_{uid}",
                         )
-                        st.caption(f'Matched from "{data.team_name_raw}" — {data.rationale}')
+                        st.caption(f'Matched from "{data.team_name_raw}": {data.rationale}')
 
-                        save_disabled = team_choice == "— select team —"
+                        save_disabled = team_choice == "- select team -"
                         save_col, discard_col = st.columns([1, 1])
                         if save_col.button("Save", key=f"save_{uid}", disabled=save_disabled):
                             with session_scope() as session:
@@ -347,7 +367,7 @@ def render() -> None:
 
                     else:  # form note
                         data = card["data"]
-                        default_team = team_names.get(data.team_id, "— select team —")
+                        default_team = team_names.get(data.team_id, "- select team -")
                         cols = st.columns([2, 1, 1, 2])
                         team_choice = cols[0].selectbox(
                             "Team", team_options, index=_safe_index(team_options, default_team), key=f"team_{uid}"
@@ -364,12 +384,12 @@ def render() -> None:
                         expires_on = cols[3].date_input("Expires", value=data.expires_on, key=f"expires_{uid}")
                         summary_text = st.text_input("Summary", value=data.summary, key=f"summary_{uid}")
                         st.caption(
-                            f'Matched from "{data.team_name_raw}" — {data.rationale}. '
-                            "Form notes are a rough, unvalidated heuristic (small, capped effect) — "
+                            f'Matched from "{data.team_name_raw}": {data.rationale}. '
+                            "Form notes are a rough, unvalidated heuristic (small, capped effect) - "
                             "treat with skepticism."
                         )
 
-                        save_disabled = team_choice == "— select team —"
+                        save_disabled = team_choice == "- select team -"
                         save_col, discard_col = st.columns([1, 1])
                         if save_col.button("Save", key=f"save_{uid}", disabled=save_disabled):
                             with session_scope() as session:

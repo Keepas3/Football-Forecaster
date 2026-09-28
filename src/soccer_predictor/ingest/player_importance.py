@@ -60,7 +60,11 @@ def aggregate_understat_team_output(players: list[UnderstatPlayerStats]) -> Unde
     return UnderstatTeamTotals(xg_contribution_total=total)
 
 
-def _find_player(player_name: str, team_stats: list[HistoricalPlayerStats]) -> HistoricalPlayerStats | None:
+def find_player_stats(player_name: str, team_stats: list[HistoricalPlayerStats]) -> HistoricalPlayerStats | None:
+    """Fuzzy-matches `player_name` against a team's API-Football historical
+    stats list. Public: also used by dashboard/views/players.py to look up
+    one specific player's historical row, not just internally here.
+    """
     if not team_stats:
         return None
     names = [p.name for p in team_stats]
@@ -73,9 +77,13 @@ def _find_player(player_name: str, team_stats: list[HistoricalPlayerStats]) -> H
     return team_stats[index]
 
 
-def _find_understat_player(
+def find_understat_player(
     player_name: str, understat_players: list[UnderstatPlayerStats]
 ) -> UnderstatPlayerStats | None:
+    """Fuzzy-matches `player_name` against a team's Understat player list.
+    Public: also used by dashboard/views/players.py to look up one specific
+    player's current-season xG/xA row, not just internally here.
+    """
     if not understat_players:
         return None
     names = [p.name for p in understat_players]
@@ -102,7 +110,7 @@ def resolve_api_importance_weight(
     degrade-gracefully contract as the rest of this app's API integrations.
     """
     if position != "defense" and understat_players:
-        understat_player = _find_understat_player(player_name, understat_players)
+        understat_player = find_understat_player(player_name, understat_players)
         if understat_player is not None and understat_totals is not None:
             weight = compute_attack_importance(
                 understat_player.xg, understat_player.xa, understat_totals.xg_contribution_total
@@ -110,7 +118,7 @@ def resolve_api_importance_weight(
             if weight is not None:
                 return weight
 
-    player = _find_player(player_name, team_stats)
+    player = find_player_stats(player_name, team_stats)
     if player is None:
         return DEFAULT_API_IMPORTANCE_WEIGHT
 

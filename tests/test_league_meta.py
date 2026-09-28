@@ -36,3 +36,13 @@ def test_returns_none_on_http_error(monkeypatch):
 def test_returns_none_when_emblem_field_missing(monkeypatch):
     monkeypatch.setattr(api_client, "get", lambda *args, **kwargs: {"name": "Premier League"})
     assert league_meta.fetch_competition_emblem(LEAGUE) is None
+
+
+def test_returns_none_without_calling_api_when_no_api_competition_id(monkeypatch):
+    espn_league = League(code="MLS", name="Major League Soccer", seasons=["2026"], data_source="espn")
+
+    def fail(*args, **kwargs):
+        raise AssertionError("should never call api_client.get with no api_competition_id")
+
+    monkeypatch.setattr(api_client, "get", fail)
+    assert league_meta.fetch_competition_emblem(espn_league) is None

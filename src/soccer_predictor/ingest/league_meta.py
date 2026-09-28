@@ -17,6 +17,8 @@ LEAGUE_META_CACHE_TTL_SECONDS = 7 * 24 * 3600  # emblems essentially never chang
 
 
 def fetch_competition_emblem(league: League) -> str | None:
+    if league.api_competition_id is None:
+        return None
     try:
         data = api_client.get(
             f"/competitions/{league.api_competition_id}",
