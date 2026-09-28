@@ -1,0 +1,439 @@
+"""Query helpers shared by ingestion, the model layer, and the dashboard."""
+
+from __future__ import annotations
+
+import datetime as dt
+
+import pandas as pd
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
+
+from soccer_predictor.storage.models import (
+    Fixture,
+    Injury,
+    Match,
+    Team,
+    TeamAlias,
+    TeamFormNote,
+)
+
+
+def team_by_canonical_name(session: Session, canonical_name: str) -> Team | None:
+    return session.scalar(select(Team).where(Team.canonical_name == canonical_name))
+
+
+def team_by_id(session: Session, team_id: int) -> Team | None:
+    return session.get(Team, team_id)
+
+
+def update_team_crest(session: Session, team_id: int, crest_url: str | None) -> None:
+    """Sets Team.crest_url. Never clobbers a known crest with a falsy one."""
+    if not crest_url:
+        return
+    team = session.get(Team, team_id)
+    if team is not None:
+        team.crest_url = crest_url
+
+
+def update_api_football_team_id(session: Session, team_id: int, api_football_team_id: int | None) -> None:
+    """Sets Team.api_football_team_id. Never clobbers a known id with a
+    falsy one -- same "learn once, keep forever" pattern as update_team_crest.
+    """
+    if not api_football_team_id:
+        return
+    team = session.get(Team, team_id)
+    if team is not None:
+        team.api_football_team_id = api_football_team_id
+
+
+def get_or_create_team(session: Session, canonical_name: str, league_code: str) -> Team:
+    """Teams are scoped per league now -- the same club name can have a
+    separate row per competition (see storage.models.Team's docstring), so
+    the lookup must match on league_code too, not canonical_name alone.
+    """
+    team = session.scalar(
+        select(Team).where(Team.canonical_name == canonical_name, Team.league_code == league_code)
+    )
+    if team is None:
+        team = Team(canonical_name=canonical_name, league_code=league_code)
+        session.add(team)
+        session.flush()
+    return team
+
+
+def upsert_team_alias(session: Session, team: Team, alias_text: str, source: str) -> None:
+    existing = session.scalar(
+        select(TeamAlias).where(
+            TeamAlias.alias_text == alias_text,
+            TeamAlias.source == source,
+            TeamAlias.league_code == team.league_code,
+        )
+    )
+    if existing is None:
+        session.add(
+            TeamAlias(
+                alias_text=alias_text, source=source, team_id=team.id, league_code=team.league_code
+            )
+        )
+
+
+def find_team_by_alias(session: Session, alias_text: str, source: str, league_code: str) -> Team | None:
+    alias = session.scalar(
+        select(TeamAlias).where(
+            TeamAlias.alias_text == alias_text,
+            TeamAlias.source == source,
+            TeamAlias.league_code == league_code,
+        )
+    )
+    return alias.team if alias else None
+
+
+def all_alias_texts(session: Session, source: str, league_code: str) -> list[tuple[str, int]]:
+    """Returns (alias_text, team_id) pairs for a source, scoped to one league.
+
+    Scoping matters for fuzzy matching: with several leagues sharing one
+    aliases table, an unscoped candidate list could fuzzy-match a
+    similarly-spelled team from the wrong league instead of correctly
+    falling through to unmatched.
+    """
+    rows = session.execute(
+        select(TeamAlias.alias_text, TeamAlias.team_id).where(
+            TeamAlias.source == source, TeamAlias.league_code == league_code
+        )
+    ).all()
+    return [(text, team_id) for text, team_id in rows]
+
+
+def upsert_match(
+    session: Session,
+    league_code: str,
+    season: str,
+    date: dt.date,
+    home_team_id: int,
+    away_team_id: int,
+    home_goals: int,
+    away_goals: int,
+    source: str = "football-data.co.uk",
+) -> None:
+    existing = session.scalar(
+        select(Match).where(
+            Match.league_code == league_code,
+            Match.date == date,
+            Match.home_team_id == home_team_id,
+            Match.away_team_id == away_team_id,
+        )
+    )
+    if existing is not None:
+        existing.home_goals = home_goals
+        existing.away_goals = away_goals
+        existing.season = season
+        return
+    session.add(
+        Match(
+            league_code=league_code,
+            season=season,
+            date=date,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_goals=home_goals,
+            away_goals=away_goals,
+            source=source,
+        )
+    )
+
+
+def matches_for_league(session: Session, league_code: str) -> pd.DataFrame:
+    rows = session.execute(
+        select(
+            Match.date,
+            Match.season,
+            Match.home_team_id,
+            Match.away_team_id,
+            Match.home_goals,
+            Match.away_goals,
+        ).where(Match.league_code == league_code)
+    ).all()
+    return pd.DataFrame(
+        rows,
+        columns=["date", "season", "home_team_id", "away_team_id", "home_goals", "away_goals"],
+    )
+
+
+def matches_for_team(session: Session, team_id: int) -> pd.DataFrame:
+    """Newest-first: this feeds a "recent results" display, unlike
+    matches_for_league (which feeds the trainer and doesn't care about order).
+    """
+    rows = session.execute(
+        select(
+            Match.date,
+            Match.home_team_id,
+            Match.away_team_id,
+            Match.home_goals,
+            Match.away_goals,
+        )
+        .where(or_(Match.home_team_id == team_id, Match.away_team_id == team_id))
+        .order_by(Match.date.desc())
+    ).all()
+    return pd.DataFrame(
+        rows,
+        columns=["date", "home_team_id", "away_team_id", "home_goals", "away_goals"],
+    )
+
+
+def teams_for_league(session: Session, league_code: str) -> dict[int, str]:
+    rows = session.execute(
+        select(Team.id, Team.canonical_name).where(Team.league_code == league_code)
+    ).all()
+    return {team_id: name for team_id, name in rows}
+
+
+def team_crests_for_league(session: Session, league_code: str) -> dict[int, str]:
+    """Only includes teams with a known crest -- callers should .get(id, "")."""
+    rows = session.execute(
+        select(Team.id, Team.crest_url).where(
+            Team.league_code == league_code, Team.crest_url.is_not(None)
+        )
+    ).all()
+    return {team_id: crest_url for team_id, crest_url in rows}
+
+
+def upsert_fixture(
+    session: Session,
+    league_code: str,
+    date: dt.date,
+    home_team_id: int,
+    away_team_id: int,
+    status: str,
+    kickoff_utc: dt.datetime | None = None,
+) -> None:
+    existing = session.scalar(
+        select(Fixture).where(
+            Fixture.league_code == league_code,
+            Fixture.date == date,
+            Fixture.home_team_id == home_team_id,
+            Fixture.away_team_id == away_team_id,
+        )
+    )
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    if existing is not None:
+        existing.status = status
+        existing.fetched_at = now
+        if kickoff_utc is not None:
+            existing.kickoff_utc = kickoff_utc
+        return
+    session.add(
+        Fixture(
+            league_code=league_code,
+            date=date,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            status=status,
+            fetched_at=now,
+            kickoff_utc=kickoff_utc,
+        )
+    )
+
+
+def fixtures_for_league(
+    session: Session, league_code: str, start: dt.date, end: dt.date
+) -> pd.DataFrame:
+    rows = session.execute(
+        select(
+            Fixture.date,
+            Fixture.home_team_id,
+            Fixture.away_team_id,
+            Fixture.status,
+            Fixture.kickoff_utc,
+        ).where(
+            Fixture.league_code == league_code,
+            Fixture.date >= start,
+            Fixture.date <= end,
+        )
+    ).all()
+    return pd.DataFrame(
+        rows, columns=["date", "home_team_id", "away_team_id", "status", "kickoff_utc"]
+    )
+
+
+def live_fixtures_across_leagues(
+    session: Session, now: dt.datetime, window: dt.timedelta
+) -> pd.DataFrame:
+    """Every fixture (any league) whose kickoff falls within `window` before
+    `now` -- i.e. plausibly still in progress (see
+    dashboard.components.LIVE_MATCH_WINDOW). Used for the global "Live Now"
+    strip on the Leagues page, which shows live games across every league
+    regardless of which one is currently selected.
+    """
+    rows = session.execute(
+        select(
+            Fixture.league_code,
+            Fixture.home_team_id,
+            Fixture.away_team_id,
+            Fixture.kickoff_utc,
+        ).where(
+            Fixture.kickoff_utc.is_not(None),
+            Fixture.kickoff_utc <= now,
+            Fixture.kickoff_utc >= now - window,
+        )
+    ).all()
+    return pd.DataFrame(
+        rows, columns=["league_code", "home_team_id", "away_team_id", "kickoff_utc"]
+    )
+
+
+def fixtures_for_team(
+    session: Session, team_id: int, start: dt.date, end: dt.date
+) -> pd.DataFrame:
+    rows = session.execute(
+        select(
+            Fixture.date,
+            Fixture.home_team_id,
+            Fixture.away_team_id,
+            Fixture.status,
+            Fixture.kickoff_utc,
+        ).where(
+            or_(Fixture.home_team_id == team_id, Fixture.away_team_id == team_id),
+            Fixture.date >= start,
+            Fixture.date <= end,
+        )
+    ).all()
+    return pd.DataFrame(
+        rows, columns=["date", "home_team_id", "away_team_id", "status", "kickoff_utc"]
+    )
+
+
+def next_fixture_per_team(
+    session: Session, league_code: str, as_of: dt.date
+) -> dict[int, int]:
+    """Maps each team_id to its soonest opponent's team_id on/after `as_of`.
+
+    Teams with no upcoming fixture loaded are simply absent from the result.
+    """
+    rows = session.execute(
+        select(Fixture.date, Fixture.home_team_id, Fixture.away_team_id)
+        .where(Fixture.league_code == league_code, Fixture.date >= as_of)
+        .order_by(Fixture.date.asc())
+    ).all()
+
+    next_opponent: dict[int, int] = {}
+    for _, home_team_id, away_team_id in rows:
+        if home_team_id not in next_opponent:
+            next_opponent[home_team_id] = away_team_id
+        if away_team_id not in next_opponent:
+            next_opponent[away_team_id] = home_team_id
+    return next_opponent
+
+
+def replace_injuries(
+    session: Session, team_id: int, source: str, injuries: list[dict]
+) -> None:
+    """Replaces all injuries for (team_id, source) with the given list."""
+    existing = session.scalars(
+        select(Injury).where(Injury.team_id == team_id, Injury.source == source)
+    ).all()
+    for row in existing:
+        session.delete(row)
+    session.flush()
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    for entry in injuries:
+        session.add(
+            Injury(
+                team_id=team_id,
+                player_name=entry["player_name"],
+                position=entry["position"],
+                importance_weight=entry["importance_weight"],
+                source=source,
+                note=entry.get("note", ""),
+                fetched_at=now,
+            )
+        )
+
+
+def injuries_for_team(session: Session, team_id: int) -> list[Injury]:
+    return list(session.scalars(select(Injury).where(Injury.team_id == team_id)).all())
+
+
+def add_or_update_chat_injury(
+    session: Session,
+    team_id: int,
+    player_name: str,
+    position: str,
+    importance_weight: float,
+    expected_return_date: dt.date | None,
+    note: str = "",
+) -> Injury:
+    """Upserts a source="chat" injury, keyed on (team_id, player_name).
+
+    Plain insert would duplicate every time the user corrects an estimate
+    for the same player ("actually he's back sooner") -- this keeps one row.
+    """
+    existing = session.scalar(
+        select(Injury).where(
+            Injury.team_id == team_id,
+            Injury.source == "chat",
+            Injury.player_name.ilike(player_name),
+        )
+    )
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    if existing is not None:
+        existing.position = position
+        existing.importance_weight = importance_weight
+        existing.expected_return_date = expected_return_date
+        existing.note = note
+        existing.fetched_at = now
+        return existing
+
+    injury = Injury(
+        team_id=team_id,
+        player_name=player_name,
+        position=position,
+        importance_weight=importance_weight,
+        source="chat",
+        note=note,
+        fetched_at=now,
+        expected_return_date=expected_return_date,
+    )
+    session.add(injury)
+    session.flush()
+    return injury
+
+
+def delete_injury(session: Session, injury_id: int) -> None:
+    injury = session.get(Injury, injury_id)
+    if injury is not None:
+        session.delete(injury)
+
+
+def add_form_note(
+    session: Session,
+    team_id: int,
+    raw_text: str,
+    summary: str,
+    magnitude: float,
+    affects: str,
+    expires_on: dt.date,
+) -> TeamFormNote:
+    note = TeamFormNote(
+        team_id=team_id,
+        raw_text=raw_text,
+        summary=summary,
+        magnitude=magnitude,
+        affects=affects,
+        expires_on=expires_on,
+        fetched_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+    )
+    session.add(note)
+    session.flush()
+    return note
+
+
+def delete_form_note(session: Session, note_id: int) -> None:
+    note = session.get(TeamFormNote, note_id)
+    if note is not None:
+        session.delete(note)
+
+
+def form_notes_for_team(session: Session, team_id: int) -> list[TeamFormNote]:
+    return list(
+        session.scalars(select(TeamFormNote).where(TeamFormNote.team_id == team_id)).all()
+    )

@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Project data (downloaded/generated locally)
+data/raw/*
+!data/raw/.gitkeep
+data/*.db
+data/*.db.bak-*
+data/cache/
+data/unmatched_teams.log
+
+# Secrets
+.env
+
+# Editors
+.vscode/
+.idea/
+

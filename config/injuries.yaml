@@ -1,0 +1,18 @@
+# Manual injury fallback list. Free injury APIs have weak/incomplete
+# coverage, so this file is the reliable source the prediction service
+# trusts most (see model/injury_adjustment.py and prediction/service.py,
+# which merge this with any API data and let manual entries win).
+#
+# importance_weight is 0-1: how much the team relies on this player.
+# position is "attack" or "defense" (defenders + goalkeeper); it decides
+# which team rating (attack or defense) the injury pulls down.
+#
+# Example:
+# injuries:
+#   - team: Arsenal
+#     player: Bukayo Saka
+#     position: attack
+#     importance_weight: 0.8
+#     note: "Hamstring, out ~4 weeks (manual entry 2026-09-25)"
+
+injuries: []

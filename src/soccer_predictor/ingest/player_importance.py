@@ -1,0 +1,122 @@
+"""Glue between a team's real historical player stats
+(ingest/player_stats.py) and model/player_importance.py's pure formulas --
+resolves one injured player's name to their own stats and turns that into a
+real per-player importance_weight for ingest/injuries.py, instead of the
+flat DEFAULT_API_IMPORTANCE_WEIGHT every API-sourced injury used to get.
+
+DEFAULT_API_IMPORTANCE_WEIGHT lives here (not injuries.py, which imports it
+back) so injuries.py can depend on this module without a circular import.
+
+Optionally also takes Understat data (ingest/understat_client.py) for the
+attack side: its xG/xA reflects the CURRENT season (unlike API-Football's
+free-plan goals/assists, stuck on 2022-2024 -- see player_stats.py's
+AVAILABLE_SEASONS), so it's preferred when a name match exists there, with
+API-Football goals/assists as the fallback. The two are never mixed in one
+ratio -- a player's xG against an xG-space team total, or their goals
+against a goals-space team total, never one against the other's denominator.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from rapidfuzz import fuzz, process
+
+from soccer_predictor.ingest.player_stats import HistoricalPlayerStats
+from soccer_predictor.ingest.understat_client import UnderstatPlayerStats
+from soccer_predictor.model.player_importance import (
+    compute_attack_importance,
+    compute_defense_importance,
+)
+
+DEFAULT_API_IMPORTANCE_WEIGHT = 0.5
+
+# Looser than team_mapper.py's 90 -- API-Football's injuries endpoint and its
+# player-stats endpoint sometimes format the same player's name differently
+# ("N. Kante" vs "N'Golo Kante"), similar to why note_parser.py's chat-note
+# matching (85) is also looser than team-name matching.
+PLAYER_NAME_FUZZY_THRESHOLD = 80
+
+
+@dataclass
+class TeamOutputTotals:
+    goal_contribution_total: float
+    max_minutes: int
+
+
+@dataclass
+class UnderstatTeamTotals:
+    xg_contribution_total: float
+
+
+def aggregate_team_output(players: list[HistoricalPlayerStats]) -> TeamOutputTotals:
+    total = sum((p.goals or 0) + (p.assists or 0) * 0.7 for p in players)
+    max_minutes = max((p.minutes or 0 for p in players), default=0)
+    return TeamOutputTotals(goal_contribution_total=total, max_minutes=max_minutes)
+
+
+def aggregate_understat_team_output(players: list[UnderstatPlayerStats]) -> UnderstatTeamTotals:
+    total = sum((p.xg or 0) + (p.xa or 0) * 0.7 for p in players)
+    return UnderstatTeamTotals(xg_contribution_total=total)
+
+
+def _find_player(player_name: str, team_stats: list[HistoricalPlayerStats]) -> HistoricalPlayerStats | None:
+    if not team_stats:
+        return None
+    names = [p.name for p in team_stats]
+    match = process.extractOne(player_name, names, scorer=fuzz.WRatio)
+    if match is None:
+        return None
+    _, score, index = match
+    if score < PLAYER_NAME_FUZZY_THRESHOLD:
+        return None
+    return team_stats[index]
+
+
+def _find_understat_player(
+    player_name: str, understat_players: list[UnderstatPlayerStats]
+) -> UnderstatPlayerStats | None:
+    if not understat_players:
+        return None
+    names = [p.name for p in understat_players]
+    match = process.extractOne(player_name, names, scorer=fuzz.WRatio)
+    if match is None:
+        return None
+    _, score, index = match
+    if score < PLAYER_NAME_FUZZY_THRESHOLD:
+        return None
+    return understat_players[index]
+
+
+def resolve_api_importance_weight(
+    player_name: str,
+    position: str,
+    team_stats: list[HistoricalPlayerStats],
+    team_totals: TeamOutputTotals,
+    understat_players: list[UnderstatPlayerStats] | None = None,
+    understat_totals: UnderstatTeamTotals | None = None,
+) -> float:
+    """Never returns None -- falls back to DEFAULT_API_IMPORTANCE_WEIGHT
+    whenever there's no name match or not enough data to compute a real
+    number (new signing, unresolved team, empty roster fetch), same
+    degrade-gracefully contract as the rest of this app's API integrations.
+    """
+    if position != "defense" and understat_players:
+        understat_player = _find_understat_player(player_name, understat_players)
+        if understat_player is not None and understat_totals is not None:
+            weight = compute_attack_importance(
+                understat_player.xg, understat_player.xa, understat_totals.xg_contribution_total
+            )
+            if weight is not None:
+                return weight
+
+    player = _find_player(player_name, team_stats)
+    if player is None:
+        return DEFAULT_API_IMPORTANCE_WEIGHT
+
+    if position == "defense":
+        weight = compute_defense_importance(player.minutes, team_totals.max_minutes, player.rating)
+    else:
+        weight = compute_attack_importance(player.goals, player.assists, team_totals.goal_contribution_total)
+
+    return weight if weight is not None else DEFAULT_API_IMPORTANCE_WEIGHT

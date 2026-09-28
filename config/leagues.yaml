@@ -1,0 +1,111 @@
+# One entry per league. `csv_code` is the football-data.co.uk code used in
+# historical season CSV filenames (https://www.football-data.co.uk/data.php),
+# e.g. season 2023-24 English Premier League is "2324/E0.csv".
+# `api_competition_id` is the football-data.org competition id used for
+# live fixtures (see https://www.football-data.org/documentation/api).
+# `flag_url` is a country flag image from flagcdn.com (static, never
+# expires/rate-limits, unlike the API-sourced competition emblem).
+# `zones` are 1-indexed table position ranges shown on the standings table:
+# `kind` picks the marker ("qualify"=green, "playoff"=amber, "relegation"=red).
+# All 4 domestic leagues below are top-flight divisions, so there's no
+# promotion playoff (that's a second-tier thing, e.g. the EFL Championship
+# playoffs -- it doesn't apply to the Premier League itself). Simplified
+# deliberately: real Europa/Conference League qualification also depends on
+# domestic cup winners and varies year to year, so only the stable Champions
+# League and relegation bands are marked.
+#
+# Entry order here is the League picker's display order (dashboard/views/
+# home.py and predictor.py both just do list(leagues.keys())) -- domestic
+# leagues first (Premier League first), with the international/UN-flagged
+# competitions grouped at the end.
+leagues:
+  - code: EPL
+    name: English Premier League
+    csv_code: E0
+    api_competition_id: 2021
+    seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/gb-eng.png
+    flag_emoji: "🏴󠁧󠁢󠁥󠁮󠁧󠁿"
+    zones:
+      - {start: 1, end: 4, kind: qualify, label: "Champions League"}
+      - {start: 18, end: 20, kind: relegation, label: "Relegation"}
+  - code: LALIGA
+    name: La Liga
+    csv_code: SP1
+    api_competition_id: 2014
+    seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/es.png
+    flag_emoji: "🇪🇸"
+    zones:
+      - {start: 1, end: 4, kind: qualify, label: "Champions League"}
+      - {start: 18, end: 20, kind: relegation, label: "Relegation"}
+  - code: BUNDESLIGA
+    name: Bundesliga
+    csv_code: D1
+    api_competition_id: 2002
+    seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/de.png
+    flag_emoji: "🇩🇪"
+    zones:
+      - {start: 1, end: 4, kind: qualify, label: "Champions League"}
+      - {start: 16, end: 16, kind: playoff, label: "Relegation playoff"}
+      - {start: 17, end: 18, kind: relegation, label: "Relegation"}
+  - code: SERIEA
+    name: Serie A
+    csv_code: I1
+    api_competition_id: 2019
+    seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/it.png
+    flag_emoji: "🇮🇹"
+    zones:
+      - {start: 1, end: 4, kind: qualify, label: "Champions League"}
+      - {start: 18, end: 20, kind: relegation, label: "Relegation"}
+  - code: LIGUE1
+    name: Ligue 1
+    csv_code: F1
+    api_competition_id: 2015
+    seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/fr.png
+    flag_emoji: "🇫🇷"
+    zones:
+      - {start: 1, end: 3, kind: qualify, label: "Champions League"}
+      - {start: 16, end: 16, kind: playoff, label: "Relegation playoff"}
+      - {start: 17, end: 18, kind: relegation, label: "Relegation"}
+  # No football-data.co.uk CSV exists for any competition in this group --
+  # their match history/standings/squads come entirely from football-data.org's
+  # live API (see ingest/fixtures.py's sync_results_to_db and
+  # ingest/team_mapper.py's seed_teams_from_api). No csv_code means no
+  # Dixon-Coles model either (League.supports_predictions is False) -- the
+  # dashboard shows standings/fixtures/squads for these but skips score
+  # predictions. Flagged with the UN flag rather than a country flag, since
+  # none of them is a single nation's competition.
+  - code: WC
+    name: FIFA World Cup
+    api_competition_id: 2000
+    # Held every 4 years -- 2022 already finished; 2026 has no zones since
+    # the group/knockout qualification math varies by tournament format
+    # (48 teams from 2026 onward, top-2-per-group plus best third-placed).
+    seasons: ["2022", "2026", "2030"]
+    season_display: single_year
+    flag_url: https://flagcdn.com/w40/un.png
+    flag_emoji: "🇺🇳"
+  - code: UCL
+    name: UEFA Champions League
+    api_competition_id: 2001
+    # Scoped to the 2024/25+ 36-team single league-phase table format --
+    # older seasons used an 8-group format that a flat table can't represent
+    # correctly, so they're deliberately left out.
+    seasons: ["2425", "2526", "2627"]
+    flag_url: https://flagcdn.com/w40/un.png
+    flag_emoji: "🇺🇳"
+    zones:
+      - {start: 1, end: 8, kind: qualify, label: "Round of 16"}
+      - {start: 9, end: 24, kind: playoff, label: "Knockout Playoff"}
+      - {start: 25, end: 36, kind: relegation, label: "Eliminated"}
+  - code: EURO
+    name: European Championship
+    api_competition_id: 2018
+    seasons: ["2024", "2028"]
+    season_display: single_year
+    flag_url: https://flagcdn.com/w40/un.png
+    flag_emoji: "🇺🇳"

@@ -1,0 +1,688 @@
+# Maps every team-name spelling we might see across data sources to one
+# canonical name. `csv` = football-data.co.uk historical CSVs, `api` =
+# football-data.org live API. `league` scopes each row to one league code
+# from config/leagues.yaml -- ingest/team_mapper.py::seed_teams_and_aliases
+# only processes rows matching the league it's currently seeding, so entries
+# from different leagues never leak into each other even though they live in
+# one flat file.
+#
+# EPL rows are seeded for clubs active in any of the 2021-22..2024-25
+# seasons and confirmed clean (zero unresolved names on ingestion). The
+# LALIGA/BUNDESLIGA/SERIEA rows are a good-faith first pass over the same
+# season range -- non-English spellings are less certain than EPL's; check
+# data/unmatched_teams.log after first ingesting each league and fix any
+# rows here rather than guessing. Add new rows whenever a newly promoted or
+# renamed club shows up unmatched.
+teams:
+  - canonical_name: Arsenal
+    csv: Arsenal
+    api: Arsenal FC
+    league: EPL
+  - canonical_name: Aston Villa
+    csv: Aston Villa
+    api: Aston Villa FC
+    league: EPL
+  - canonical_name: Bournemouth
+    csv: Bournemouth
+    api: AFC Bournemouth
+    league: EPL
+  - canonical_name: Brentford
+    csv: Brentford
+    api: Brentford FC
+    league: EPL
+  - canonical_name: Brighton
+    csv: Brighton
+    api: Brighton & Hove Albion FC
+    league: EPL
+  - canonical_name: Burnley
+    csv: Burnley
+    api: Burnley FC
+    league: EPL
+  - canonical_name: Chelsea
+    csv: Chelsea
+    api: Chelsea FC
+    league: EPL
+  - canonical_name: Crystal Palace
+    csv: Crystal Palace
+    api: Crystal Palace FC
+    league: EPL
+  - canonical_name: Everton
+    csv: Everton
+    api: Everton FC
+    league: EPL
+  - canonical_name: Fulham
+    csv: Fulham
+    api: Fulham FC
+    league: EPL
+  - canonical_name: Ipswich
+    csv: Ipswich
+    api: Ipswich Town FC
+    league: EPL
+  - canonical_name: Leeds
+    csv: Leeds
+    api: Leeds United FC
+    league: EPL
+  - canonical_name: Leicester
+    csv: Leicester
+    api: Leicester City FC
+    league: EPL
+  - canonical_name: Liverpool
+    csv: Liverpool
+    api: Liverpool FC
+    league: EPL
+  - canonical_name: Luton
+    csv: Luton
+    api: Luton Town FC
+    league: EPL
+  - canonical_name: Man City
+    csv: Man City
+    api: Manchester City FC
+    league: EPL
+  - canonical_name: Man United
+    csv: Man United
+    api: Manchester United FC
+    league: EPL
+  - canonical_name: Newcastle
+    csv: Newcastle
+    api: Newcastle United FC
+    league: EPL
+  - canonical_name: Norwich
+    csv: Norwich
+    api: Norwich City FC
+    league: EPL
+  - canonical_name: Nott'm Forest
+    csv: Nott'm Forest
+    api: Nottingham Forest FC
+    league: EPL
+  - canonical_name: Sheffield United
+    csv: Sheffield United
+    api: Sheffield United FC
+    league: EPL
+  - canonical_name: Southampton
+    csv: Southampton
+    api: Southampton FC
+    league: EPL
+  - canonical_name: Tottenham
+    csv: Tottenham
+    api: Tottenham Hotspur FC
+    league: EPL
+  - canonical_name: Watford
+    csv: Watford
+    api: Watford FC
+    league: EPL
+  - canonical_name: West Brom
+    csv: West Brom
+    api: West Bromwich Albion FC
+    league: EPL
+  - canonical_name: West Ham
+    csv: West Ham
+    api: West Ham United FC
+    league: EPL
+  - canonical_name: Wolves
+    csv: Wolves
+    api: Wolverhampton Wanderers FC
+    league: EPL
+  - canonical_name: Sunderland
+    csv: Sunderland
+    api: Sunderland AFC
+    league: EPL
+  - canonical_name: Coventry
+    csv: Coventry
+    api: Coventry City FC
+    league: EPL
+  - canonical_name: Hull
+    csv: Hull
+    api: Hull City AFC
+    league: EPL
+
+  - canonical_name: Real Madrid
+    csv: Real Madrid
+    api: Real Madrid CF
+    league: LALIGA
+  - canonical_name: Barcelona
+    csv: Barcelona
+    api: FC Barcelona
+    league: LALIGA
+  - canonical_name: Atletico Madrid
+    csv: Ath Madrid
+    api: Club Atlético de Madrid
+    league: LALIGA
+  - canonical_name: Sevilla
+    csv: Sevilla
+    api: Sevilla FC
+    league: LALIGA
+  - canonical_name: Real Betis
+    csv: Betis
+    api: Real Betis Balompié
+    league: LALIGA
+  - canonical_name: Real Sociedad
+    csv: Sociedad
+    api: Real Sociedad de Fútbol
+    league: LALIGA
+  - canonical_name: Villarreal
+    csv: Villarreal
+    api: Villarreal CF
+    league: LALIGA
+  - canonical_name: Athletic Bilbao
+    csv: Ath Bilbao
+    api: Athletic Club
+    league: LALIGA
+  - canonical_name: Valencia
+    csv: Valencia
+    api: Valencia CF
+    league: LALIGA
+  - canonical_name: Osasuna
+    csv: Osasuna
+    api: CA Osasuna
+    league: LALIGA
+  - canonical_name: Celta Vigo
+    csv: Celta
+    api: RC Celta de Vigo
+    league: LALIGA
+  - canonical_name: Rayo Vallecano
+    csv: Vallecano
+    api: Rayo Vallecano de Madrid
+    league: LALIGA
+  - canonical_name: Elche
+    csv: Elche
+    api: Elche CF
+    league: LALIGA
+  - canonical_name: Espanyol
+    csv: Espanol
+    api: RCD Espanyol de Barcelona
+    league: LALIGA
+  - canonical_name: Getafe
+    csv: Getafe
+    api: Getafe CF
+    league: LALIGA
+  - canonical_name: Mallorca
+    csv: Mallorca
+    api: RCD Mallorca
+    league: LALIGA
+  - canonical_name: Cadiz
+    csv: Cadiz
+    api: Cádiz CF
+    league: LALIGA
+  - canonical_name: Granada
+    csv: Granada
+    api: Granada CF
+    league: LALIGA
+  - canonical_name: Levante
+    csv: Levante
+    api: Levante UD
+    league: LALIGA
+  - canonical_name: Alaves
+    csv: Alaves
+    api: Deportivo Alavés
+    league: LALIGA
+  - canonical_name: Almeria
+    csv: Almeria
+    api: UD Almería
+    league: LALIGA
+  - canonical_name: Girona
+    csv: Girona
+    api: Girona FC
+    league: LALIGA
+  - canonical_name: Valladolid
+    csv: Valladolid
+    api: Real Valladolid CF
+    league: LALIGA
+  - canonical_name: Las Palmas
+    csv: Las Palmas
+    api: UD Las Palmas
+    league: LALIGA
+  - canonical_name: Leganes
+    csv: Leganes
+    api: CD Leganés
+    league: LALIGA
+  - canonical_name: Deportivo La Coruna
+    csv: La Coruna
+    api: RC Deportivo La Coruña
+    league: LALIGA
+  - canonical_name: Malaga
+    csv: Malaga
+    api: Málaga CF
+    league: LALIGA
+  - canonical_name: Real Oviedo
+    csv: Oviedo
+    api: Real Oviedo
+    league: LALIGA
+  - canonical_name: Racing Santander
+    csv: Santander
+    api: Racing Club de Santander
+    league: LALIGA
+
+  - canonical_name: Bayern Munich
+    csv: Bayern Munich
+    api: FC Bayern München
+    league: BUNDESLIGA
+  - canonical_name: Dortmund
+    csv: Dortmund
+    api: Borussia Dortmund
+    league: BUNDESLIGA
+  - canonical_name: RB Leipzig
+    csv: RB Leipzig
+    api: RB Leipzig
+    league: BUNDESLIGA
+  - canonical_name: Bayer Leverkusen
+    csv: Leverkusen
+    api: Bayer 04 Leverkusen
+    league: BUNDESLIGA
+  - canonical_name: Union Berlin
+    csv: Union Berlin
+    api: 1. FC Union Berlin
+    league: BUNDESLIGA
+  - canonical_name: Freiburg
+    csv: Freiburg
+    api: SC Freiburg
+    league: BUNDESLIGA
+  - canonical_name: FC Koln
+    csv: FC Koln
+    api: 1. FC Köln
+    league: BUNDESLIGA
+  - canonical_name: Mainz
+    csv: Mainz
+    api: 1. FSV Mainz 05
+    league: BUNDESLIGA
+  - canonical_name: Hoffenheim
+    csv: Hoffenheim
+    api: TSG 1899 Hoffenheim
+    league: BUNDESLIGA
+  - canonical_name: Wolfsburg
+    csv: Wolfsburg
+    api: VfL Wolfsburg
+    league: BUNDESLIGA
+  - canonical_name: M'gladbach
+    csv: M'gladbach
+    api: Borussia Mönchengladbach
+    league: BUNDESLIGA
+  - canonical_name: Ein Frankfurt
+    csv: Ein Frankfurt
+    api: Eintracht Frankfurt
+    league: BUNDESLIGA
+  - canonical_name: Hertha
+    csv: Hertha
+    api: Hertha BSC
+    league: BUNDESLIGA
+  - canonical_name: Augsburg
+    csv: Augsburg
+    api: FC Augsburg
+    league: BUNDESLIGA
+  - canonical_name: Stuttgart
+    csv: Stuttgart
+    api: VfB Stuttgart
+    league: BUNDESLIGA
+  - canonical_name: Bielefeld
+    csv: Bielefeld
+    api: DSC Arminia Bielefeld
+    league: BUNDESLIGA
+  - canonical_name: Bochum
+    csv: Bochum
+    api: VfL Bochum 1848
+    league: BUNDESLIGA
+  - canonical_name: Greuther Furth
+    csv: Greuther Furth
+    api: SpVgg Greuther Fürth
+    league: BUNDESLIGA
+  - canonical_name: Schalke 04
+    csv: Schalke 04
+    api: FC Schalke 04
+    league: BUNDESLIGA
+  - canonical_name: Werder Bremen
+    csv: Werder Bremen
+    api: SV Werder Bremen
+    league: BUNDESLIGA
+  - canonical_name: Darmstadt
+    csv: Darmstadt
+    api: SV Darmstadt 98
+    league: BUNDESLIGA
+  - canonical_name: Heidenheim
+    csv: Heidenheim
+    api: 1. FC Heidenheim 1846
+    league: BUNDESLIGA
+  - canonical_name: Holstein Kiel
+    csv: Holstein Kiel
+    api: Holstein Kiel
+    league: BUNDESLIGA
+  - canonical_name: St Pauli
+    csv: St Pauli
+    api: FC St. Pauli 1910
+    league: BUNDESLIGA
+  - canonical_name: SV Elversberg
+    csv: Elversberg
+    api: SV 07 Elversberg
+    league: BUNDESLIGA
+  - canonical_name: Hamburg
+    csv: Hamburg
+    api: Hamburger SV
+    league: BUNDESLIGA
+  - canonical_name: Paderborn
+    csv: Paderborn
+    api: SC Paderborn 07
+    league: BUNDESLIGA
+
+  - canonical_name: Inter
+    csv: Inter
+    api: FC Internazionale Milano
+    league: SERIEA
+  - canonical_name: Milan
+    csv: Milan
+    api: AC Milan
+    league: SERIEA
+  - canonical_name: Napoli
+    csv: Napoli
+    api: SSC Napoli
+    league: SERIEA
+  - canonical_name: Juventus
+    csv: Juventus
+    api: Juventus FC
+    league: SERIEA
+  - canonical_name: Lazio
+    csv: Lazio
+    api: SS Lazio
+    league: SERIEA
+  - canonical_name: Roma
+    csv: Roma
+    api: AS Roma
+    league: SERIEA
+  - canonical_name: Fiorentina
+    csv: Fiorentina
+    api: ACF Fiorentina
+    league: SERIEA
+  - canonical_name: Atalanta
+    csv: Atalanta
+    api: Atalanta BC
+    league: SERIEA
+  - canonical_name: Verona
+    csv: Verona
+    api: Hellas Verona FC
+    league: SERIEA
+  - canonical_name: Torino
+    csv: Torino
+    api: Torino FC
+    league: SERIEA
+  - canonical_name: Sassuolo
+    csv: Sassuolo
+    api: US Sassuolo Calcio
+    league: SERIEA
+  - canonical_name: Udinese
+    csv: Udinese
+    api: Udinese Calcio
+    league: SERIEA
+  - canonical_name: Bologna
+    csv: Bologna
+    api: Bologna FC 1909
+    league: SERIEA
+  - canonical_name: Empoli
+    csv: Empoli
+    api: Empoli FC
+    league: SERIEA
+  - canonical_name: Sampdoria
+    csv: Sampdoria
+    api: UC Sampdoria
+    league: SERIEA
+  - canonical_name: Spezia
+    csv: Spezia
+    api: Spezia Calcio
+    league: SERIEA
+  - canonical_name: Cagliari
+    csv: Cagliari
+    api: Cagliari Calcio
+    league: SERIEA
+  - canonical_name: Venezia
+    csv: Venezia
+    api: Venezia FC
+    league: SERIEA
+  - canonical_name: Genoa
+    csv: Genoa
+    api: Genoa CFC
+    league: SERIEA
+  - canonical_name: Salernitana
+    csv: Salernitana
+    api: US Salernitana 1919
+    league: SERIEA
+  - canonical_name: Cremonese
+    csv: Cremonese
+    api: US Cremonese
+    league: SERIEA
+  - canonical_name: Monza
+    csv: Monza
+    api: AC Monza
+    league: SERIEA
+  - canonical_name: Lecce
+    csv: Lecce
+    api: US Lecce
+    league: SERIEA
+  - canonical_name: Frosinone
+    csv: Frosinone
+    api: Frosinone Calcio
+    league: SERIEA
+  - canonical_name: Como
+    csv: Como
+    api: Como 1907
+    league: SERIEA
+  - canonical_name: Parma
+    csv: Parma
+    api: Parma Calcio 1913
+    league: SERIEA
+  - canonical_name: Pisa
+    csv: Pisa
+    api: AC Pisa 1909
+    league: SERIEA
+  - canonical_name: Paris SG
+    csv: Paris SG
+    api: Paris Saint-Germain FC
+    league: LIGUE1
+  - canonical_name: Marseille
+    csv: Marseille
+    api: Olympique de Marseille
+    league: LIGUE1
+  - canonical_name: Monaco
+    csv: Monaco
+    api: AS Monaco FC
+    league: LIGUE1
+  - canonical_name: Lyon
+    csv: Lyon
+    api: Olympique Lyonnais
+    league: LIGUE1
+  - canonical_name: Lille
+    csv: Lille
+    api: Lille OSC
+    league: LIGUE1
+  - canonical_name: Rennes
+    csv: Rennes
+    api: Stade Rennais FC 1901
+    league: LIGUE1
+  - canonical_name: Nice
+    csv: Nice
+    api: OGC Nice
+    league: LIGUE1
+  - canonical_name: Lens
+    csv: Lens
+    api: Racing Club de Lens
+    league: LIGUE1
+  - canonical_name: Nantes
+    csv: Nantes
+    api: FC Nantes
+    league: LIGUE1
+  - canonical_name: Strasbourg
+    csv: Strasbourg
+    api: RC Strasbourg Alsace
+    league: LIGUE1
+  - canonical_name: Toulouse
+    csv: Toulouse
+    api: Toulouse FC
+    league: LIGUE1
+  - canonical_name: Montpellier
+    csv: Montpellier
+    api: Montpellier HSC
+    league: LIGUE1
+  - canonical_name: Reims
+    csv: Reims
+    api: Stade de Reims
+    league: LIGUE1
+  - canonical_name: Brest
+    csv: Brest
+    api: Stade Brestois 29
+    league: LIGUE1
+  - canonical_name: Le Havre
+    csv: Le Havre
+    api: Le Havre AC
+    league: LIGUE1
+  - canonical_name: Auxerre
+    csv: Auxerre
+    api: AJ Auxerre
+    league: LIGUE1
+  - canonical_name: Angers
+    csv: Angers
+    api: Angers SCO
+    league: LIGUE1
+  - canonical_name: Metz
+    csv: Metz
+    api: FC Metz
+    league: LIGUE1
+  - canonical_name: Clermont
+    csv: Clermont
+    api: Clermont Foot 63
+    league: LIGUE1
+  - canonical_name: Lorient
+    csv: Lorient
+    api: FC Lorient
+    league: LIGUE1
+  - canonical_name: Ajaccio
+    csv: Ajaccio
+    api: AC Ajaccio
+    league: LIGUE1
+  - canonical_name: Troyes
+    csv: Troyes
+    api: ES Troyes AC
+    league: LIGUE1
+  - canonical_name: St Etienne
+    csv: St Etienne
+    api: AS Saint-Étienne
+    league: LIGUE1
+  - canonical_name: Bordeaux
+    csv: Bordeaux
+    api: FC Girondins de Bordeaux
+    league: LIGUE1
+  - canonical_name: Paris FC
+    csv: Paris FC
+    api: Paris FC
+    league: LIGUE1
+  - canonical_name: Le Mans
+    csv: Le Mans
+    api: Le Mans FC
+    league: LIGUE1
+  # Added when domestic seasons list was extended back to 2015-16 (from
+  # 2021-22) -- all relegated/no-longer-top-flight clubs, so their `api`
+  # value is a best-guess (same "check unmatched_teams.log" caveat as
+  # above) since they don't appear in any current live sync to verify
+  # against; only `csv` (verified 0 skipped on re-ingestion) is load-bearing.
+  - canonical_name: Cardiff City
+    csv: Cardiff
+    api: Cardiff City FC
+    league: EPL
+  - canonical_name: Huddersfield
+    csv: Huddersfield
+    api: Huddersfield Town FC
+    league: EPL
+  - canonical_name: Middlesbrough
+    csv: Middlesbrough
+    api: Middlesbrough FC
+    league: EPL
+  - canonical_name: Stoke
+    csv: Stoke
+    api: Stoke City FC
+    league: EPL
+  - canonical_name: Swansea
+    csv: Swansea
+    api: Swansea City AFC
+    league: EPL
+  - canonical_name: Eibar
+    csv: Eibar
+    api: SD Eibar
+    league: LALIGA
+  - canonical_name: Huesca
+    csv: Huesca
+    api: SD Huesca
+    league: LALIGA
+  - canonical_name: Sporting Gijon
+    csv: Sp Gijon
+    api: Real Sporting de Gijón, S.A.D.
+    league: LALIGA
+  - canonical_name: Fortuna Dusseldorf
+    csv: Fortuna Dusseldorf
+    api: Fortuna Düsseldorf
+    league: BUNDESLIGA
+  - canonical_name: Hannover
+    csv: Hannover
+    api: Hannover 96
+    league: BUNDESLIGA
+  - canonical_name: Ingolstadt
+    csv: Ingolstadt
+    api: FC Ingolstadt 04
+    league: BUNDESLIGA
+  - canonical_name: Nurnberg
+    csv: Nurnberg
+    api: 1. FC Nürnberg
+    league: BUNDESLIGA
+  - canonical_name: Benevento
+    csv: Benevento
+    api: Benevento Calcio
+    league: SERIEA
+  - canonical_name: Brescia
+    csv: Brescia
+    api: Brescia Calcio
+    league: SERIEA
+  - canonical_name: Carpi
+    csv: Carpi
+    api: Carpi FC 1909
+    league: SERIEA
+  - canonical_name: Chievo
+    csv: Chievo
+    api: AC ChievoVerona
+    league: SERIEA
+  - canonical_name: Crotone
+    csv: Crotone
+    api: FC Crotone
+    league: SERIEA
+  - canonical_name: Palermo
+    csv: Palermo
+    api: Palermo FC
+    league: SERIEA
+  - canonical_name: Pescara
+    csv: Pescara
+    api: Delfino Pescara 1936
+    league: SERIEA
+  - canonical_name: Spal
+    csv: Spal
+    api: SPAL 2013
+    league: SERIEA
+  - canonical_name: Amiens
+    csv: Amiens
+    api: Amiens SC
+    league: LIGUE1
+  - canonical_name: Bastia
+    csv: Bastia
+    api: SC Bastia
+    league: LIGUE1
+  - canonical_name: Caen
+    csv: Caen
+    api: Stade Malherbe Caen
+    league: LIGUE1
+  - canonical_name: Dijon
+    csv: Dijon
+    api: Dijon FCO
+    league: LIGUE1
+  - canonical_name: Guingamp
+    csv: Guingamp
+    api: EA Guingamp
+    league: LIGUE1
+  - canonical_name: Nancy
+    csv: Nancy
+    api: AS Nancy Lorraine
+    league: LIGUE1
+  - canonical_name: Nimes
+    csv: Nimes
+    api: Nîmes Olympique
+    league: LIGUE1
