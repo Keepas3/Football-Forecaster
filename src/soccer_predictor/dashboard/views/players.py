@@ -18,6 +18,7 @@ from soccer_predictor.config import load_leagues, load_manual_captains, load_man
 from soccer_predictor.dashboard.components import league_option_label
 from soccer_predictor.ingest import understat_client
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
+from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
     find_asa_player,
     find_understat_player,
@@ -136,20 +137,35 @@ def render() -> None:
         st.caption(" · ".join(detail_bits))
 
     st.markdown("**Current season**")
-    understat_players = understat_client.fetch_team_season(selection.team_name, league.code, dt.date.today().year)
-    understat_row = find_understat_player(player.name, understat_players) if understat_players else None
-    if understat_row is None:
-        st.caption(
-            "No current-season xG/xA data available - either this league isn't covered by "
-            "Understat, or this player couldn't be matched in it."
+    if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG:
+        current_season_players = understat_client.fetch_team_season(
+            selection.team_name, league.code, dt.date.today().year
         )
+        current_season_row = find_understat_player(player.name, current_season_players)
+        current_season_source = "Understat"
+    elif league.code == "MLS":
+        current_season_players = fetch_asa_team_season(selection.team_name, dt.date.today().year)
+        current_season_row = find_asa_player(player.name, current_season_players)
+        current_season_source = "American Soccer Analysis"
+    else:
+        current_season_row = None
+        current_season_source = None
+
+    if current_season_row is None:
+        if current_season_source is None:
+            st.caption("No current-season stats source is available for this competition.")
+        else:
+            st.caption(
+                f"No current-season data available from {current_season_source} - this player "
+                "may not be matched in it."
+            )
     else:
         stat_cols = st.columns(4)
-        stat_cols[0].metric("Goals", understat_row.goals)
-        stat_cols[1].metric("Assists", understat_row.assists)
-        stat_cols[2].metric("xG", f"{understat_row.xg:.2f}")
-        stat_cols[3].metric("xA", f"{understat_row.xa:.2f}")
-        st.caption(f"{understat_row.minutes} minutes played this season (Understat).")
+        stat_cols[0].metric("Goals", current_season_row.goals)
+        stat_cols[1].metric("Assists", current_season_row.assists)
+        stat_cols[2].metric("xG", f"{current_season_row.xg:.2f}")
+        stat_cols[3].metric("xA", f"{current_season_row.xa:.2f}")
+        st.caption(f"{current_season_row.minutes} minutes played this season ({current_season_source}).")
 
     st.markdown("**Player Stats (Historical)**")
     if league.code not in understat_client.UNDERSTAT_LEAGUE_SLUG and league.code != "MLS":
