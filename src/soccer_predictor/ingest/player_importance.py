@@ -174,8 +174,7 @@ def resolve_team_importance_weights(
     """A real importance_weight per squad member with actual stats coverage
     -- unlike resolve_api_importance_weight, players with no stats match are
     left out entirely rather than defaulted to DEFAULT_API_IMPORTANCE_WEIGHT,
-    since a flat 0.5 for every unmatched player would be meaningless noise
-    for star-player detection (dashboard/components.py::compute_automatic_stars).
+    since a flat 0.5 for every unmatched player would be meaningless noise.
 
     `squad` is a list of ingest.squad.SquadPlayer (not imported here to
     avoid a circular import -- squad.py doesn't depend on this module).
@@ -189,6 +188,35 @@ def resolve_team_importance_weights(
         if weight is not None:
             weights[player.name] = weight
     return weights
+
+
+def resolve_team_goals_and_assists(
+    squad: list,
+    understat_players: list[UnderstatPlayerStats] | None = None,
+    asa_players: list[AsaPlayerStats] | None = None,
+) -> dict[str, tuple[int, int]]:
+    """Maps each squad member (keyed by their own SquadPlayer.name, not the
+    stats source's spelling of it) to their season (goals, assists) --
+    used by dashboard/components.py::compute_top_scorer_and_assister for
+    the automatic star/top-assister badges. Fuzzy-matched the same way
+    resolve_team_importance_weights is, and for the same reason: a stats
+    source's own name spelling can differ slightly from the squad's
+    (confirmed live -- Understat's "Alexey Miranchuk" vs this app's
+    ESPN-sourced "Aleksey Miranchuk"). Players with no stats match are left
+    out entirely, not defaulted to (0, 0), so a whole team with no stats
+    coverage correctly produces no badges rather than a false "0 goals is
+    the most goals" winner.
+    """
+    result: dict[str, tuple[int, int]] = {}
+    for player in squad:
+        stats_row = None
+        if understat_players:
+            stats_row = find_understat_player(player.name, understat_players)
+        elif asa_players:
+            stats_row = find_asa_player(player.name, asa_players)
+        if stats_row is not None:
+            result[player.name] = (stats_row.goals or 0, stats_row.assists or 0)
+    return result
 
 
 def resolve_team_historical_stats(team_name: str, league_code: str, season: int) -> tuple[str, list]:

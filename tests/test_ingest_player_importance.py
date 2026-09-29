@@ -8,6 +8,7 @@ from soccer_predictor.ingest.player_importance import (
     aggregate_asa_team_output,
     aggregate_understat_team_output,
     resolve_api_importance_weight,
+    resolve_team_goals_and_assists,
     resolve_team_historical_stats,
     resolve_team_importance_weights,
 )
@@ -255,3 +256,47 @@ def test_resolve_team_historical_stats_mls_can_be_empty(monkeypatch):
 
     assert source == "asa"
     assert players == []
+
+
+def test_resolve_team_goals_and_assists_keys_by_squad_name_not_stats_name():
+    # Real-world case this must handle: Understat spells this player
+    # "Alexey Miranchuk", this app's ESPN-sourced squad spells him
+    # "Aleksey Miranchuk" -- confirmed live earlier this session.
+    squad = [_squad_player("Aleksey Miranchuk", position="Midfield")]
+    understat_roster = [_understat_player("Alexey Miranchuk", goals=6, assists=6, minutes=2000)]
+
+    result = resolve_team_goals_and_assists(squad, understat_players=understat_roster)
+
+    assert result == {"Aleksey Miranchuk": (6, 6)}
+
+
+def test_resolve_team_goals_and_assists_uses_asa_when_no_understat_given():
+    squad = [_squad_player("Star Striker", position="Offence")]
+    asa_roster = [_asa_player("Star Striker", goals=15, assists=3, minutes=2000)]
+
+    result = resolve_team_goals_and_assists(squad, asa_players=asa_roster)
+
+    assert result == {"Star Striker": (15, 3)}
+
+
+def test_resolve_team_goals_and_assists_excludes_unmatched_players():
+    squad = [
+        _squad_player("Star Striker", position="Offence"),
+        _squad_player("New Signing", position="Offence"),
+    ]
+    understat_roster = [_understat_player("Star Striker", goals=15, assists=3, minutes=2000)]
+
+    result = resolve_team_goals_and_assists(squad, understat_players=understat_roster)
+
+    assert "Star Striker" in result
+    assert "New Signing" not in result
+
+
+def test_resolve_team_goals_and_assists_empty_squad():
+    assert resolve_team_goals_and_assists([]) == {}
+
+
+def test_resolve_team_goals_and_assists_no_stats_source_gives_empty_dict():
+    squad = [_squad_player("Star Striker", position="Offence")]
+
+    assert resolve_team_goals_and_assists(squad) == {}

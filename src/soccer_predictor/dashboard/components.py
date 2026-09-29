@@ -517,25 +517,36 @@ def render_star_players(players: list, top_n: int = 3) -> None:
             st.caption(detail)
 
 
-def compute_automatic_stars(weights: dict[str, float], top_n: int = 2, min_weight: float = 0.5) -> set[str]:
-    """Player names from a resolve_team_importance_weights() result that
-    qualify as an automatic "star" badge -- the top `top_n` by weight,
-    provided they actually clear `min_weight` (roughly the midpoint of
-    model/player_importance.py's MIN/MAX_IMPORTANCE_WEIGHT 0.05-0.95 range),
-    so a genuinely middling squad with no real standout gets zero forced
-    stars rather than two arbitrary ones.
+def compute_top_scorer_and_assister(goals_and_assists: dict[str, tuple[int, int]]) -> tuple[str | None, str | None]:
+    """The team's top goalscorer and top assist-provider for the season,
+    from a resolve_team_goals_and_assists() result -- the literal top-1 by
+    each stat (not a blended importance score). Either is None if nobody on
+    the team has scored/assisted at all (e.g. no stats coverage, or a
+    stats-sparse squad). Ties go to whichever name sorts first in the dict
+    -- not worth a tiebreaker for a display badge.
     """
-    ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    return {name for name, weight in ranked[:top_n] if weight >= min_weight}
+    scorers = [(name, g) for name, (g, a) in goals_and_assists.items() if g > 0]
+    assisters = [(name, a) for name, (g, a) in goals_and_assists.items() if a > 0]
+    top_scorer = max(scorers, key=lambda item: item[1])[0] if scorers else None
+    top_assister = max(assisters, key=lambda item: item[1])[0] if assisters else None
+    return top_scorer, top_assister
 
 
-def render_player_badges(name: str, team_name: str, automatic_stars: set[str] | None = None) -> str:
-    """Prefixes `name` with a captain crown and/or star badge for display --
-    NOT related to render_star_players() above (that's an ephemeral "top-3
-    scorers in the currently-loaded stats table" highlight; this is a
-    persistent captain/world-class badge looked up from config/captains.yaml
-    and config/star_players.yaml, unioned with an optional stats-based
-    `automatic_stars` set from compute_automatic_stars()).
+def render_player_badges(
+    name: str,
+    team_name: str,
+    top_scorer: str | None = None,
+    top_assister: str | None = None,
+) -> str:
+    """Prefixes `name` with a captain crown, star, and/or top-assister badge
+    for display -- NOT related to render_star_players() above (that's an
+    ephemeral "top-3 scorers in the currently-loaded stats table" highlight;
+    this is a persistent badge). The star (⭐) is the team's season top
+    scorer (from compute_top_scorer_and_assister(), already resolved to
+    squad-name-space) OR anyone in config/star_players.yaml; a separate
+    🎯 marks the team's top assist-provider, which can be the same player
+    as the top scorer or a different one. `top_scorer`/`top_assister` are
+    single names, not sets -- there's exactly one of each per team.
 
     Matches team name exactly and player name case-insensitively, mirroring
     prediction/service.py::get_injuries_for_team's manual-entry matching.
@@ -545,9 +556,10 @@ def render_player_badges(name: str, team_name: str, automatic_stars: set[str] | 
     )
     is_star = any(
         s.team == team_name and s.player.lower() == name.lower() for s in load_manual_star_players()
-    ) or (automatic_stars is not None and name in automatic_stars)
+    ) or (top_scorer is not None and name.lower() == top_scorer.lower())
+    is_top_assister = top_assister is not None and name.lower() == top_assister.lower()
 
-    prefix = ("👑 " if is_captain else "") + ("⭐ " if is_star else "")
+    prefix = ("👑 " if is_captain else "") + ("⭐ " if is_star else "") + ("🎯 " if is_top_assister else "")
     return f"{prefix}{name}"
 
 

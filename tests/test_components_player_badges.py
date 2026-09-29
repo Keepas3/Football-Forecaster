@@ -2,23 +2,37 @@ from __future__ import annotations
 
 import soccer_predictor.dashboard.components as components
 from soccer_predictor.config import ManualCaptain, ManualStarPlayer
-from soccer_predictor.dashboard.components import compute_automatic_stars, render_player_badges, render_star_players
+from soccer_predictor.dashboard.components import (
+    compute_top_scorer_and_assister,
+    render_player_badges,
+    render_star_players,
+)
 from soccer_predictor.ingest.understat_client import UnderstatPlayerStats
 
 
-def test_compute_automatic_stars_picks_top_n_above_threshold():
-    weights = {"Star Striker": 0.9, "Solid Starter": 0.6, "Bench Player": 0.2}
-    assert compute_automatic_stars(weights, top_n=2, min_weight=0.5) == {"Star Striker", "Solid Starter"}
+def test_compute_top_scorer_and_assister_picks_the_max_of_each():
+    goals_and_assists = {"Top Scorer": (15, 2), "Top Assister": (3, 10), "Bench Player": (0, 0)}
+    scorer, assister = compute_top_scorer_and_assister(goals_and_assists)
+    assert scorer == "Top Scorer"
+    assert assister == "Top Assister"
 
 
-def test_compute_automatic_stars_no_standout_gives_empty_set():
-    weights = {"Player A": 0.3, "Player B": 0.25, "Player C": 0.1}
-    assert compute_automatic_stars(weights, top_n=2, min_weight=0.5) == set()
+def test_compute_top_scorer_and_assister_same_player_can_be_both():
+    goals_and_assists = {"All-Rounder": (10, 8), "Bench Player": (1, 1)}
+    scorer, assister = compute_top_scorer_and_assister(goals_and_assists)
+    assert scorer == "All-Rounder"
+    assert assister == "All-Rounder"
 
 
-def test_compute_automatic_stars_respects_top_n_even_if_more_clear_threshold():
-    weights = {"A": 0.9, "B": 0.8, "C": 0.7}
-    assert compute_automatic_stars(weights, top_n=2, min_weight=0.5) == {"A", "B"}
+def test_compute_top_scorer_and_assister_no_goals_or_assists_gives_none():
+    goals_and_assists = {"Player A": (0, 0), "Player B": (0, 0)}
+    scorer, assister = compute_top_scorer_and_assister(goals_and_assists)
+    assert scorer is None
+    assert assister is None
+
+
+def test_compute_top_scorer_and_assister_empty_input():
+    assert compute_top_scorer_and_assister({}) == (None, None)
 
 
 def test_render_player_badges_captain_only(monkeypatch):
@@ -69,12 +83,36 @@ def test_render_player_badges_requires_exact_team_match(monkeypatch):
     assert render_player_badges("Saka", "Arsenal") == "Saka"
 
 
-def test_render_player_badges_automatic_star_set(monkeypatch):
+def test_render_player_badges_top_scorer_gets_star(monkeypatch):
     monkeypatch.setattr(components, "load_manual_captains", lambda: [])
     monkeypatch.setattr(components, "load_manual_star_players", lambda: [])
 
-    assert render_player_badges("Haaland", "Man City", automatic_stars={"Haaland"}) == "⭐ Haaland"
-    assert render_player_badges("Backup", "Man City", automatic_stars={"Haaland"}) == "Backup"
+    assert render_player_badges("Haaland", "Man City", top_scorer="Haaland") == "⭐ Haaland"
+    assert render_player_badges("Backup", "Man City", top_scorer="Haaland") == "Backup"
+
+
+def test_render_player_badges_top_assister_gets_target_symbol(monkeypatch):
+    monkeypatch.setattr(components, "load_manual_captains", lambda: [])
+    monkeypatch.setattr(components, "load_manual_star_players", lambda: [])
+
+    assert render_player_badges("De Bruyne", "Man City", top_assister="De Bruyne") == "🎯 De Bruyne"
+    assert render_player_badges("Backup", "Man City", top_assister="De Bruyne") == "Backup"
+
+
+def test_render_player_badges_top_scorer_and_top_assister_can_be_different_players(monkeypatch):
+    monkeypatch.setattr(components, "load_manual_captains", lambda: [])
+    monkeypatch.setattr(components, "load_manual_star_players", lambda: [])
+
+    result = render_player_badges("Haaland", "Man City", top_scorer="Haaland", top_assister="De Bruyne")
+    assert result == "⭐ Haaland"
+
+
+def test_render_player_badges_same_player_top_scorer_and_assister_gets_both_symbols(monkeypatch):
+    monkeypatch.setattr(components, "load_manual_captains", lambda: [])
+    monkeypatch.setattr(components, "load_manual_star_players", lambda: [])
+
+    result = render_player_badges("All-Rounder", "Man City", top_scorer="All-Rounder", top_assister="All-Rounder")
+    assert result == "⭐ 🎯 All-Rounder"
 
 
 def test_render_star_players_does_not_raise_for_understat_players_with_no_rating():

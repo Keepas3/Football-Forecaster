@@ -11,7 +11,7 @@ import streamlit as st
 from soccer_predictor.config import load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
-    compute_automatic_stars,
+    compute_top_scorer_and_assister,
     fixture_columns_with_kickoff_first,
     fixture_prediction_row,
     format_kickoff,
@@ -30,10 +30,8 @@ from soccer_predictor.dashboard.components import (
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
-    aggregate_asa_team_output,
-    aggregate_understat_team_output,
+    resolve_team_goals_and_assists,
     resolve_team_historical_stats,
-    resolve_team_importance_weights,
 )
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
 from soccer_predictor.ingest.understat_client import (
@@ -317,32 +315,27 @@ def render() -> None:
                 f"{live_sync_requirement_note(league)} to pull it."
             )
         else:
-            # Automatic star detection reuses the same stats the "Player
-            # Stats (Historical)" section below fetches -- only computed
-            # once that section has already been opened (same session_state
-            # flag), so this never fires an extra request on its own; a
-            # second fetch here just reads the on-disk cache. No-ops
-            # entirely for UCL/EURO/WC -- no stats source covers them.
+            # Top-scorer/top-assister badges reuse the same stats the
+            # "Player Stats (Historical)" section below fetches -- only
+            # computed once that section has already been opened (same
+            # session_state flag), so this never fires an extra request on
+            # its own; a second fetch here just reads the on-disk cache.
+            # No-ops entirely for UCL/EURO/WC -- no stats source covers them.
             stats_shown = st.session_state.get(f"show_historical_stats_{team_id}", False)
-            automatic_stars: set[str] = set()
+            top_scorer: str | None = None
+            top_assister: str | None = None
             if stats_shown and team_league_code in UNDERSTAT_LEAGUE_SLUG:
                 understat_players = fetch_team_season(team_canonical_name, team_league_code, dt.date.today().year)
                 if understat_players:
-                    weights = resolve_team_importance_weights(
-                        squad_players,
-                        understat_players=understat_players,
-                        understat_totals=aggregate_understat_team_output(understat_players),
+                    goals_and_assists = resolve_team_goals_and_assists(
+                        squad_players, understat_players=understat_players
                     )
-                    automatic_stars = compute_automatic_stars(weights)
+                    top_scorer, top_assister = compute_top_scorer_and_assister(goals_and_assists)
             elif stats_shown and team_league_code == "MLS":
                 asa_players = fetch_asa_team_season(team_canonical_name, dt.date.today().year)
                 if asa_players:
-                    weights = resolve_team_importance_weights(
-                        squad_players,
-                        asa_players=asa_players,
-                        asa_totals=aggregate_asa_team_output(asa_players),
-                    )
-                    automatic_stars = compute_automatic_stars(weights)
+                    goals_and_assists = resolve_team_goals_and_assists(squad_players, asa_players=asa_players)
+                    top_scorer, top_assister = compute_top_scorer_and_assister(goals_and_assists)
 
             today = dt.date.today()
             squad_rows = []
@@ -356,7 +349,7 @@ def render() -> None:
                         age = None
                 squad_rows.append(
                     {
-                        "Name": render_player_badges(player.name, team_canonical_name, automatic_stars),
+                        "Name": render_player_badges(player.name, team_canonical_name, top_scorer, top_assister),
                         "Position": player.position,
                         "Nationality": player.nationality,
                         "Age": age,
