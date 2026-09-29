@@ -315,23 +315,23 @@ def render() -> None:
                 f"{live_sync_requirement_note(league)} to pull it."
             )
         else:
-            # Top-scorer/top-assister badges reuse the same stats the
-            # "Player Stats (Historical)" section below fetches -- only
-            # computed once that section has already been opened (same
-            # session_state flag), so this never fires an extra request on
-            # its own; a second fetch here just reads the on-disk cache.
-            # No-ops entirely for UCL/EURO/WC -- no stats source covers them.
-            stats_shown = st.session_state.get(f"show_historical_stats_{team_id}", False)
+            # Top-scorer/top-assister badges: fetched unconditionally (not
+            # gated behind the "Player Stats (Historical)" section below
+            # having been opened) -- unlike the old API-Football-backed
+            # design this replaced, Understat and American Soccer Analysis
+            # are both keyless with no daily cap, and both already disk-
+            # cache for 24h, so a repeat page view costs nothing. No-ops
+            # entirely for UCL/EURO/WC -- no stats source covers them.
             top_scorer: str | None = None
             top_assister: str | None = None
-            if stats_shown and team_league_code in UNDERSTAT_LEAGUE_SLUG:
+            if team_league_code in UNDERSTAT_LEAGUE_SLUG:
                 understat_players = fetch_team_season(team_canonical_name, team_league_code, dt.date.today().year)
                 if understat_players:
                     goals_and_assists = resolve_team_goals_and_assists(
                         squad_players, understat_players=understat_players
                     )
                     top_scorer, top_assister = compute_top_scorer_and_assister(goals_and_assists)
-            elif stats_shown and team_league_code == "MLS":
+            elif team_league_code == "MLS":
                 asa_players = fetch_asa_team_season(team_canonical_name, dt.date.today().year)
                 if asa_players:
                     goals_and_assists = resolve_team_goals_and_assists(squad_players, asa_players=asa_players)
