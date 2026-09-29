@@ -491,12 +491,14 @@ def render_team_facts(facts: TeamFacts, team_names: dict[int, str], league_name:
 
 
 def render_star_players(players: list, top_n: int = 3) -> None:
-    """Highlights the top scorers from a season's HistoricalPlayerStats list
-    (ingest/player_stats.py) as metric cards -- e.g. Haaland's 22 goals for
-    Man City -- rather than making the user scan the full stats table for
-    who actually stood out. No-op if nobody on the list has scored (some
-    goalkeeper-heavy or stats-sparse rosters), since a "top scorer" of 0
-    goals isn't a meaningful highlight.
+    """Highlights the top scorers from a season's player-stats list --
+    HistoricalPlayerStats (ingest/player_stats.py) or UnderstatPlayerStats
+    (ingest/understat_client.py, no .rating attribute at all, hence the
+    getattr below) -- as metric cards, e.g. Haaland's 22 goals for Man City,
+    rather than making the user scan the full stats table for who actually
+    stood out. No-op if nobody on the list has scored (some goalkeeper-heavy
+    or stats-sparse rosters), since a "top scorer" of 0 goals isn't a
+    meaningful highlight.
     """
     top_scorers = sorted(players, key=lambda p: p.goals or 0, reverse=True)[:top_n]
     top_scorers = [p for p in top_scorers if (p.goals or 0) > 0]
@@ -509,8 +511,9 @@ def render_star_players(players: list, top_n: int = 3) -> None:
         with col:
             st.metric(p.name, f"{p.goals} goals", f"{p.assists or 0} assists")
             detail = p.position
-            if p.rating:
-                detail += f" · Rating {p.rating:.2f}"
+            rating = getattr(p, "rating", None)
+            if rating:
+                detail += f" · Rating {rating:.2f}"
             st.caption(detail)
 
 

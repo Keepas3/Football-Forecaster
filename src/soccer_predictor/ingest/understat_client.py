@@ -28,6 +28,7 @@ less-noisy one.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import time
@@ -63,6 +64,11 @@ UNDERSTAT_LEAGUE_SLUG = {
     "SERIEA": "Serie A",
     "LIGUE1": "Ligue 1",
 }
+
+# Understat's real floor, confirmed live (2026-09): season 2014 returns real
+# players, 2013 returns none. Generated rather than hand-typed since this
+# grows every season, unlike player_stats.py's frozen API-Football window.
+UNDERSTAT_AVAILABLE_SEASONS = list(range(2014, dt.date.today().year + 1))
 
 
 @dataclass

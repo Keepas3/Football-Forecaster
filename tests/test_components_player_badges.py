@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import soccer_predictor.dashboard.components as components
 from soccer_predictor.config import ManualCaptain, ManualStarPlayer
-from soccer_predictor.dashboard.components import compute_automatic_stars, render_player_badges
+from soccer_predictor.dashboard.components import compute_automatic_stars, render_player_badges, render_star_players
+from soccer_predictor.ingest.understat_client import UnderstatPlayerStats
 
 
 def test_compute_automatic_stars_picks_top_n_above_threshold():
@@ -74,3 +75,22 @@ def test_render_player_badges_automatic_star_set(monkeypatch):
 
     assert render_player_badges("Haaland", "Man City", automatic_stars={"Haaland"}) == "⭐ Haaland"
     assert render_player_badges("Backup", "Man City", automatic_stars={"Haaland"}) == "Backup"
+
+
+def test_render_star_players_does_not_raise_for_understat_players_with_no_rating():
+    # UnderstatPlayerStats has no .rating attribute at all -- render_star_players
+    # used to do `if p.rating:`, which raised AttributeError for this dataclass.
+    understat_roster = [
+        UnderstatPlayerStats(
+            name="Bukayo Saka",
+            team_title="Arsenal",
+            position="F",
+            minutes=2200,
+            goals=12,
+            assists=8,
+            xg=10.5,
+            xa=6.2,
+        )
+    ]
+
+    render_star_players(understat_roster)  # must not raise

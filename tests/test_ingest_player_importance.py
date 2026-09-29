@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import soccer_predictor.ingest.player_importance as player_importance
 from soccer_predictor.ingest.player_importance import (
     DEFAULT_API_IMPORTANCE_WEIGHT,
     TeamOutputTotals,
     aggregate_team_output,
     aggregate_understat_team_output,
     resolve_api_importance_weight,
+    resolve_team_historical_stats,
     resolve_team_importance_weights,
 )
 from soccer_predictor.ingest.player_stats import HistoricalPlayerStats
@@ -204,3 +206,52 @@ def test_resolve_team_importance_weights_uses_understat_and_position_bucketing()
     weights = resolve_team_importance_weights(squad, roster, totals, understat_roster, understat_totals)
 
     assert set(weights) == {"Bukayo Saka", "Undisputed Keeper"}
+
+
+def test_resolve_team_historical_stats_prefers_understat_for_covered_league(monkeypatch):
+    understat_roster = [_understat_player("Bukayo Saka", goals=12, assists=8, xg=10.5, xa=6.2, minutes=2200)]
+    monkeypatch.setattr(player_importance, "fetch_team_season", lambda *a, **k: understat_roster)
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("API-Football should not be called when Understat has data")
+
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", fail_if_called)
+
+    source, players = resolve_team_historical_stats("Arsenal", "EPL", 2026)
+
+    assert source == "understat"
+    assert players == understat_roster
+
+
+def test_resolve_team_historical_stats_falls_back_to_api_football_when_understat_empty(monkeypatch):
+    monkeypatch.setattr(player_importance, "fetch_team_season", lambda *a, **k: [])
+    api_roster = [_player("Bukayo Saka", goals=12, assists=8, minutes=2200)]
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", lambda *a, **k: api_roster)
+
+    source, players = resolve_team_historical_stats("Arsenal", "EPL", 2019)
+
+    assert source == "api_football"
+    assert players == api_roster
+
+
+def test_resolve_team_historical_stats_skips_understat_for_uncovered_league(monkeypatch):
+    def fail_if_called(*a, **k):
+        raise AssertionError("Understat should not be called for a league it doesn't cover")
+
+    monkeypatch.setattr(player_importance, "fetch_team_season", fail_if_called)
+    api_roster = [_player("Some MLS Player", goals=5, assists=2, minutes=1800)]
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", lambda *a, **k: api_roster)
+
+    source, players = resolve_team_historical_stats("Inter Miami", "MLS", 2024)
+
+    assert source == "api_football"
+    assert players == api_roster
+
+
+def test_resolve_team_historical_stats_both_empty(monkeypatch):
+    monkeypatch.setattr(player_importance, "fetch_team_season", lambda *a, **k: [])
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", lambda *a, **k: [])
+
+    source, players = resolve_team_historical_stats("Arsenal", "EPL", 2019)
+
+    assert players == []

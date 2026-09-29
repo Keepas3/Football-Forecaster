@@ -17,7 +17,11 @@ import streamlit as st
 from soccer_predictor.config import load_leagues, load_manual_captains, load_manual_star_players
 from soccer_predictor.dashboard.components import league_option_label
 from soccer_predictor.ingest import player_stats, understat_client
-from soccer_predictor.ingest.player_importance import find_player_stats, find_understat_player
+from soccer_predictor.ingest.player_importance import (
+    find_player_stats,
+    find_understat_player,
+    resolve_team_historical_stats,
+)
 from soccer_predictor.ingest.squad import PlayerSearchResult, search_players_in_league
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import team_crests_for_league
@@ -147,16 +151,21 @@ def render() -> None:
         st.caption(f"{understat_row.minutes} minutes played this season (Understat).")
 
     st.markdown("**Player Stats (Historical)**")
-    # Gated behind an explicit click -- API-Football's free plan is capped
-    # at 100 requests/day, same reasoning as Team Detail's own historical
-    # stats section; must not fire just because a player was selected.
+    # Gated behind an explicit click -- even though Understat is now
+    # preferred and keyless, API-Football remains the fallback for the
+    # other 4 leagues and its free plan is capped at 100 requests/day, same
+    # reasoning as Team Detail's own historical stats section; must not
+    # fire just because a player was selected.
     stats_shown_key = f"players_show_historical_{league.code}_{selection.team_id}_{player.name}"
     stats_shown = st.session_state.get(stats_shown_key, False)
+    league_has_understat = league.code in understat_client.UNDERSTAT_LEAGUE_SLUG
+    season_options = understat_client.UNDERSTAT_AVAILABLE_SEASONS if league_has_understat else player_stats.AVAILABLE_SEASONS
 
     if not stats_shown:
         st.caption(
-            "A separate lookup from API-Football - kept manual since its free plan only "
-            "allows 100 requests/day."
+            "Sourced from Understat where available (5 leagues, any season), falling back to "
+            "API-Football otherwise - kept manual since API-Football's free plan only allows "
+            "100 requests/day."
         )
         if st.button("Load player stats", key=f"players_load_stats_btn_{selection.team_id}_{player.name}"):
             st.session_state[stats_shown_key] = True
@@ -169,25 +178,37 @@ def render() -> None:
             st.rerun()
         season = season_col.selectbox(
             "Season",
-            options=list(reversed(player_stats.AVAILABLE_SEASONS)),
+            options=list(reversed(season_options)),
             format_func=_season_label,
             key="players_stats_season",
         )
-        st.caption(
-            "Its free plan only covers past seasons, not the one in progress, so this shows "
-            "whoever played for the team in the season you pick (using API-Football's own "
-            "player names, which may differ slightly from the current squad)."
-        )
-        historical_players = player_stats.fetch_team_player_stats(selection.team_name, league.code, season)
-        historical_row = find_player_stats(player.name, historical_players)
+        source, team_historical_players = resolve_team_historical_stats(selection.team_name, league.code, season)
+
+        if source == "understat":
+            historical_row = find_understat_player(player.name, team_historical_players)
+        else:
+            historical_row = find_player_stats(player.name, team_historical_players)
 
         if historical_row is None:
             st.info(
-                "No stats found for this player/season - requires API_FOOTBALL_KEY in .env, "
-                "this team must be resolvable against API-Football's own team list, and this "
-                f"player must have played for it in {_season_label(season)}."
+                f"No stats found for this player/season ({_season_label(season)}) from either "
+                "Understat or API-Football (needs API_FOOTBALL_KEY in .env and this team "
+                "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
             )
+        elif source == "understat":
+            st.caption("Understat - goals/assists/xG/xA/minutes only (no saves/tackles/cards/rating).")
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("Goals", historical_row.goals)
+            stat_cols[1].metric("Assists", historical_row.assists)
+            stat_cols[2].metric("xG", f"{historical_row.xg:.2f}")
+            stat_cols[3].metric("xA", f"{historical_row.xa:.2f}")
+            st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
         else:
+            st.caption(
+                "API-Football - its free plan only covers past seasons, not the one in "
+                "progress, using API-Football's own player names, which may differ slightly "
+                "from the current squad."
+            )
             stat_cols = st.columns(4)
             stat_cols[0].metric("Appearances", historical_row.appearances)
             stat_cols[1].metric("Goals", historical_row.goals)

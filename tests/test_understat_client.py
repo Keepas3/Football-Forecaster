@@ -130,3 +130,13 @@ def test_fetch_league_players_returns_empty_when_success_false(tmp_path, monkeyp
     monkeypatch.setattr(understat_client.requests, "post", lambda *a, **k: FakeResponse())
 
     assert understat_client._fetch_league_players("EPL", 2026) == []
+
+
+def test_understat_available_seasons_starts_at_2014_and_includes_current_year():
+    import datetime as dt
+
+    seasons = understat_client.UNDERSTAT_AVAILABLE_SEASONS
+
+    assert seasons[0] == 2014
+    assert seasons == sorted(seasons)
+    assert dt.date.today().year in seasons

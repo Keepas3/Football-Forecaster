@@ -22,8 +22,12 @@ from dataclasses import dataclass
 
 from rapidfuzz import fuzz, process
 
-from soccer_predictor.ingest.player_stats import HistoricalPlayerStats
-from soccer_predictor.ingest.understat_client import UnderstatPlayerStats
+from soccer_predictor.ingest.player_stats import HistoricalPlayerStats, fetch_team_player_stats
+from soccer_predictor.ingest.understat_client import (
+    UNDERSTAT_LEAGUE_SLUG,
+    UnderstatPlayerStats,
+    fetch_team_season,
+)
 from soccer_predictor.model.player_importance import (
     compute_attack_importance,
     compute_defense_importance,
@@ -171,3 +175,26 @@ def resolve_team_importance_weights(
         if weight is not None:
             weights[player.name] = weight
     return weights
+
+
+def resolve_team_historical_stats(team_name: str, league_code: str, season: int) -> tuple[str, list]:
+    """Picks the best available per-player season-stats source for a team --
+    Understat (goals/assists/xG/xA/minutes/position) preferred for its 5
+    covered leagues (fresher, no season restriction -- see
+    understat_client.py's module docstring), falling back to API-Football
+    (adds saves/tackles/cards/rating/appearances/nationality, but capped to
+    player_stats.AVAILABLE_SEASONS and currently degraded by an account
+    suspension) when Understat has nothing for this team/season or doesn't
+    cover the league at all.
+
+    Returns (source, players) where source is "understat" or
+    "api_football" -- players may be empty either way; callers treat an
+    empty list as "no stats found" regardless of which source produced it,
+    same degrade-gracefully contract as both underlying fetch functions.
+    """
+    if league_code in UNDERSTAT_LEAGUE_SLUG:
+        understat_players = fetch_team_season(team_name, league_code, season)
+        if understat_players:
+            return "understat", understat_players
+
+    return "api_football", fetch_team_player_stats(team_name, league_code, season)

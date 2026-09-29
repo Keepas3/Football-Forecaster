@@ -27,9 +27,19 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
     youtube_search_url,
 )
-from soccer_predictor.ingest.player_importance import aggregate_team_output, resolve_team_importance_weights
+from soccer_predictor.ingest.player_importance import (
+    aggregate_team_output,
+    aggregate_understat_team_output,
+    resolve_team_historical_stats,
+    resolve_team_importance_weights,
+)
 from soccer_predictor.ingest.player_stats import AVAILABLE_SEASONS, fetch_team_player_stats
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
+from soccer_predictor.ingest.understat_client import (
+    UNDERSTAT_AVAILABLE_SEASONS,
+    UNDERSTAT_LEAGUE_SLUG,
+    fetch_team_season,
+)
 from soccer_predictor.model.injury_adjustment import adjust_strength
 from soccer_predictor.model.team_facts import compute_head_to_head, compute_team_facts
 from soccer_predictor.prediction.service import (
@@ -306,18 +316,30 @@ def render() -> None:
                 f"{live_sync_requirement_note(league)} to pull it."
             )
         else:
-            # Automatic star detection reuses the same API-Football historical
-            # stats the "Player Stats (Historical)" section below fetches --
-            # only computed once that section has already been opened (same
-            # session_state flag), so this never fires an extra request on
-            # its own; a second fetch here just reads the on-disk cache.
+            # Automatic star detection reuses the same stats the "Player
+            # Stats (Historical)" section below fetches -- only computed
+            # once that section has already been opened (same session_state
+            # flag), so this never fires an extra request on its own; a
+            # second fetch here just reads the on-disk cache. Both sources
+            # are fetched (not just whichever resolve_team_historical_stats
+            # would pick for display) since resolve_team_importance_weights
+            # already knows how to prefer Understat internally per player.
             stats_shown = st.session_state.get(f"show_historical_stats_{team_id}", False)
             automatic_stars: set[str] = set()
             if stats_shown and league is not None:
-                latest_stats = fetch_team_player_stats(team_canonical_name, team_league_code, AVAILABLE_SEASONS[-1])
-                if latest_stats:
+                latest_api_stats = fetch_team_player_stats(team_canonical_name, team_league_code, AVAILABLE_SEASONS[-1])
+                understat_players = (
+                    fetch_team_season(team_canonical_name, team_league_code, dt.date.today().year)
+                    if team_league_code in UNDERSTAT_LEAGUE_SLUG
+                    else []
+                )
+                if latest_api_stats or understat_players:
                     weights = resolve_team_importance_weights(
-                        squad_players, latest_stats, aggregate_team_output(latest_stats)
+                        squad_players,
+                        latest_api_stats,
+                        aggregate_team_output(latest_api_stats),
+                        understat_players or None,
+                        aggregate_understat_team_output(understat_players) if understat_players else None,
                     )
                     automatic_stars = compute_automatic_stars(weights)
 
@@ -366,18 +388,22 @@ def render() -> None:
     if league is None:
         st.caption("Stats unavailable.")
     else:
-        # Gated behind an explicit click -- API-Football's free plan is
-        # capped at 100 requests/day, so this must NOT fire just because the
-        # team page was opened (or its season selectbox has a default). The
+        # Gated behind an explicit click -- even though Understat is now
+        # preferred and keyless, API-Football remains the fallback for the
+        # other 4 leagues and its free plan is capped at 100 requests/day,
+        # so this must NOT fire just because the team page was opened. The
         # flag is keyed per-team so leaving and coming back to a *different*
         # team doesn't inherit "already loaded" from the last one.
         stats_shown_key = f"show_historical_stats_{team_id}"
         stats_shown = st.session_state.get(stats_shown_key, False)
+        league_has_understat = team_league_code in UNDERSTAT_LEAGUE_SLUG
+        season_options = UNDERSTAT_AVAILABLE_SEASONS if league_has_understat else AVAILABLE_SEASONS
 
         if not stats_shown:
             st.caption(
-                "A separate lookup from API-Football (not the current squad above) - kept "
-                "manual since its free plan only allows 100 requests/day."
+                "Sourced from Understat where available (5 leagues, any season), falling back "
+                "to API-Football otherwise - kept manual since API-Football's free plan only "
+                "allows 100 requests/day."
             )
             if st.button("Load player stats", key=f"load_stats_btn_{team_id}"):
                 st.session_state[stats_shown_key] = True
@@ -390,25 +416,44 @@ def render() -> None:
                 st.rerun()
             season = season_col.selectbox(
                 "Season",
-                options=list(reversed(AVAILABLE_SEASONS)),
+                options=list(reversed(season_options)),
                 format_func=_season_label,
                 key="team_detail_stats_season",
             )
-            st.caption(
-                "Its free plan only covers past seasons, not the one in progress, so this "
-                "shows whoever played for the team in the season you pick (using "
-                "API-Football's own player names, which may differ slightly from the squad "
-                "list)."
-            )
-            historical_players = fetch_team_player_stats(team_canonical_name, team_league_code, season)
+            source, historical_players = resolve_team_historical_stats(team_canonical_name, team_league_code, season)
 
             if not historical_players:
                 st.info(
-                    "No stats found for this team/season - requires API_FOOTBALL_KEY in .env, "
-                    "and this team must be resolvable against API-Football's own team list for "
-                    f"{_season_label(season)}."
+                    f"No stats found for this team/season ({_season_label(season)}) from either "
+                    "Understat or API-Football (needs API_FOOTBALL_KEY in .env and this team "
+                    "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
                 )
+            elif source == "understat":
+                st.caption(
+                    "Understat - current-season-capable, but only goals/assists/xG/xA/minutes "
+                    "(no saves/tackles/cards/rating)."
+                )
+                render_star_players(historical_players)
+                stats_rows = [
+                    {
+                        "Name": p.name,
+                        "Position": p.position,
+                        "Minutes": p.minutes,
+                        "Goals": p.goals,
+                        "Assists": p.assists,
+                        "xG": round(p.xg, 2),
+                        "xA": round(p.xa, 2),
+                    }
+                    for p in sorted(historical_players, key=lambda p: p.name)
+                ]
+                stats_height = 35 * (len(stats_rows) + 1) + 3
+                st.dataframe(stats_rows, use_container_width=True, hide_index=True, height=stats_height)
             else:
+                st.caption(
+                    "API-Football - its free plan only covers past seasons, not the one in "
+                    "progress, using API-Football's own player names, which may differ "
+                    "slightly from the squad list."
+                )
                 render_star_players(historical_players)
                 stats_rows = [
                     {
