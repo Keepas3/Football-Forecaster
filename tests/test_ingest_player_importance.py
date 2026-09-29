@@ -234,18 +234,47 @@ def test_resolve_team_historical_stats_falls_back_to_api_football_when_understat
     assert players == api_roster
 
 
-def test_resolve_team_historical_stats_skips_understat_for_uncovered_league(monkeypatch):
+def test_resolve_team_historical_stats_skips_understat_and_asa_for_uncovered_league(monkeypatch):
     def fail_if_called(*a, **k):
         raise AssertionError("Understat should not be called for a league it doesn't cover")
 
     monkeypatch.setattr(player_importance, "fetch_team_season", fail_if_called)
-    api_roster = [_player("Some MLS Player", goals=5, assists=2, minutes=1800)]
+    api_roster = [_player("Some UCL Player", goals=5, assists=2, minutes=1800)]
     monkeypatch.setattr(player_importance, "fetch_team_player_stats", lambda *a, **k: api_roster)
 
-    source, players = resolve_team_historical_stats("Inter Miami", "MLS", 2024)
+    source, players = resolve_team_historical_stats("Real Madrid", "UCL", 2024)
 
     assert source == "api_football"
     assert players == api_roster
+
+
+def test_resolve_team_historical_stats_mls_uses_asa(monkeypatch):
+    asa_roster = [object()]
+    monkeypatch.setattr(player_importance, "fetch_asa_team_season", lambda *a, **k: asa_roster)
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("API-Football should never be attempted for MLS -- account is gone, not just suspended")
+
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", fail_if_called)
+
+    source, players = resolve_team_historical_stats("Atlanta United FC", "MLS", 2026)
+
+    assert source == "asa"
+    assert players == asa_roster
+
+
+def test_resolve_team_historical_stats_mls_empty_asa_never_falls_back(monkeypatch):
+    monkeypatch.setattr(player_importance, "fetch_asa_team_season", lambda *a, **k: [])
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("API-Football should never be attempted for MLS")
+
+    monkeypatch.setattr(player_importance, "fetch_team_player_stats", fail_if_called)
+
+    source, players = resolve_team_historical_stats("Atlanta United FC", "MLS", 2026)
+
+    assert source == "asa"
+    assert players == []
 
 
 def test_resolve_team_historical_stats_both_empty(monkeypatch):

@@ -17,7 +17,9 @@ import streamlit as st
 from soccer_predictor.config import load_leagues, load_manual_captains, load_manual_star_players
 from soccer_predictor.dashboard.components import league_option_label
 from soccer_predictor.ingest import player_stats, understat_client
+from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.player_importance import (
+    find_asa_player,
     find_player_stats,
     find_understat_player,
     resolve_team_historical_stats,
@@ -158,14 +160,18 @@ def render() -> None:
     # fire just because a player was selected.
     stats_shown_key = f"players_show_historical_{league.code}_{selection.team_id}_{player.name}"
     stats_shown = st.session_state.get(stats_shown_key, False)
-    league_has_understat = league.code in understat_client.UNDERSTAT_LEAGUE_SLUG
-    season_options = understat_client.UNDERSTAT_AVAILABLE_SEASONS if league_has_understat else player_stats.AVAILABLE_SEASONS
+    if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG:
+        season_options = understat_client.UNDERSTAT_AVAILABLE_SEASONS
+    elif league.code == "MLS":
+        season_options = ASA_AVAILABLE_SEASONS
+    else:
+        season_options = player_stats.AVAILABLE_SEASONS
 
     if not stats_shown:
         st.caption(
-            "Sourced from Understat where available (5 leagues, any season), falling back to "
-            "API-Football otherwise - kept manual since API-Football's free plan only allows "
-            "100 requests/day."
+            "Sourced from Understat or American Soccer Analysis where available (keyless, any "
+            "season), falling back to API-Football otherwise - kept manual since API-Football's "
+            "free plan only allows 100 requests/day."
         )
         if st.button("Load player stats", key=f"players_load_stats_btn_{selection.team_id}_{player.name}"):
             st.session_state[stats_shown_key] = True
@@ -186,14 +192,21 @@ def render() -> None:
 
         if source == "understat":
             historical_row = find_understat_player(player.name, team_historical_players)
+        elif source == "asa":
+            historical_row = find_asa_player(player.name, team_historical_players)
         else:
             historical_row = find_player_stats(player.name, team_historical_players)
 
-        if historical_row is None:
+        if historical_row is None and league.code == "MLS":
+            st.info(
+                f"No stats found for this player/season ({_season_label(season)}) from "
+                "American Soccer Analysis."
+            )
+        elif historical_row is None:
             st.info(
                 f"No stats found for this player/season ({_season_label(season)}) from either "
                 "Understat or API-Football (needs API_FOOTBALL_KEY in .env and this team "
-                "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
+                "resolvable against its team list, for the leagues Understat doesn't cover)."
             )
         elif source == "understat":
             st.caption("Understat - no saves/tackles/rating (goalkeeper stats) available.")
@@ -211,6 +224,18 @@ def render() -> None:
             card_cols[0].metric("Non-penalty goals", historical_row.non_penalty_goals)
             card_cols[1].metric("Yellow cards", historical_row.yellow_cards)
             card_cols[2].metric("Red cards", historical_row.red_cards)
+            st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
+        elif source == "asa":
+            st.caption("American Soccer Analysis - no appearances/cards/rating data available.")
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("Goals", historical_row.goals)
+            stat_cols[1].metric("Assists", historical_row.assists)
+            stat_cols[2].metric("Shots", historical_row.shots)
+            stat_cols[3].metric("Key passes", historical_row.key_passes)
+            detail_cols = st.columns(3)
+            detail_cols[0].metric("xG", f"{historical_row.xg:.2f}")
+            detail_cols[1].metric("xA", f"{historical_row.xa:.2f}")
+            detail_cols[2].metric("Points added", f"{historical_row.points_added:.2f}")
             st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
         else:
             st.caption(

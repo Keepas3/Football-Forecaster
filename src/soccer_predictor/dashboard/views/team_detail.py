@@ -33,6 +33,7 @@ from soccer_predictor.ingest.player_importance import (
     resolve_team_historical_stats,
     resolve_team_importance_weights,
 )
+from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.player_stats import AVAILABLE_SEASONS, fetch_team_player_stats
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
 from soccer_predictor.ingest.understat_client import (
@@ -396,14 +397,18 @@ def render() -> None:
         # team doesn't inherit "already loaded" from the last one.
         stats_shown_key = f"show_historical_stats_{team_id}"
         stats_shown = st.session_state.get(stats_shown_key, False)
-        league_has_understat = team_league_code in UNDERSTAT_LEAGUE_SLUG
-        season_options = UNDERSTAT_AVAILABLE_SEASONS if league_has_understat else AVAILABLE_SEASONS
+        if team_league_code in UNDERSTAT_LEAGUE_SLUG:
+            season_options = UNDERSTAT_AVAILABLE_SEASONS
+        elif team_league_code == "MLS":
+            season_options = ASA_AVAILABLE_SEASONS
+        else:
+            season_options = AVAILABLE_SEASONS
 
         if not stats_shown:
             st.caption(
-                "Sourced from Understat where available (5 leagues, any season), falling back "
-                "to API-Football otherwise - kept manual since API-Football's free plan only "
-                "allows 100 requests/day."
+                "Sourced from Understat or American Soccer Analysis where available (keyless, "
+                "any season), falling back to API-Football otherwise - kept manual since "
+                "API-Football's free plan only allows 100 requests/day."
             )
             if st.button("Load player stats", key=f"load_stats_btn_{team_id}"):
                 st.session_state[stats_shown_key] = True
@@ -422,11 +427,17 @@ def render() -> None:
             )
             source, historical_players = resolve_team_historical_stats(team_canonical_name, team_league_code, season)
 
-            if not historical_players:
+            if not historical_players and team_league_code == "MLS":
+                st.info(
+                    f"No stats found for this team/season ({_season_label(season)}) from "
+                    "American Soccer Analysis - this team may not be resolvable against its "
+                    "team list for that season."
+                )
+            elif not historical_players:
                 st.info(
                     f"No stats found for this team/season ({_season_label(season)}) from either "
                     "Understat or API-Football (needs API_FOOTBALL_KEY in .env and this team "
-                    "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
+                    "resolvable against its team list, for the leagues Understat doesn't cover)."
                 )
             elif source == "understat":
                 st.caption("Understat - current-season-capable, but no saves/tackles/rating (goalkeeper stats).")
@@ -447,6 +458,29 @@ def render() -> None:
                         "xA": round(p.xa, 2),
                         "Yellow": p.yellow_cards,
                         "Red": p.red_cards,
+                    }
+                    for p in sorted(historical_players, key=lambda p: p.name)
+                ]
+                stats_height = 35 * (len(stats_rows) + 1) + 3
+                st.dataframe(stats_rows, use_container_width=True, hide_index=True, height=stats_height)
+            elif source == "asa":
+                st.caption(
+                    "American Soccer Analysis - current-season-capable, but no "
+                    "appearances/cards/rating data available."
+                )
+                render_star_players(historical_players)
+                stats_rows = [
+                    {
+                        "Name": p.name,
+                        "Position": p.position,
+                        "Minutes": p.minutes,
+                        "Goals": p.goals,
+                        "Assists": p.assists,
+                        "Shots": p.shots,
+                        "Key passes": p.key_passes,
+                        "xG": round(p.xg, 2),
+                        "xA": round(p.xa, 2),
+                        "Points added": round(p.points_added, 2),
                     }
                     for p in sorted(historical_players, key=lambda p: p.name)
                 ]

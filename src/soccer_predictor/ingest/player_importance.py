@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 from rapidfuzz import fuzz, process
 
+from soccer_predictor.ingest.asa_client import AsaPlayerStats
+from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_stats import HistoricalPlayerStats, fetch_team_player_stats
 from soccer_predictor.ingest.understat_client import (
     UNDERSTAT_LEAGUE_SLUG,
@@ -98,6 +100,23 @@ def find_understat_player(
     if score < PLAYER_NAME_FUZZY_THRESHOLD:
         return None
     return understat_players[index]
+
+
+def find_asa_player(player_name: str, asa_players: list[AsaPlayerStats]) -> AsaPlayerStats | None:
+    """Fuzzy-matches `player_name` against a team's American Soccer Analysis
+    player list. Public: also used by dashboard/views/players.py, same
+    pattern as find_understat_player.
+    """
+    if not asa_players:
+        return None
+    names = [p.name for p in asa_players]
+    match = process.extractOne(player_name, names, scorer=fuzz.WRatio)
+    if match is None:
+        return None
+    _, score, index = match
+    if score < PLAYER_NAME_FUZZY_THRESHOLD:
+        return None
+    return asa_players[index]
 
 
 def _resolve_real_importance_weight(
@@ -181,20 +200,29 @@ def resolve_team_historical_stats(team_name: str, league_code: str, season: int)
     """Picks the best available per-player season-stats source for a team --
     Understat (goals/assists/xG/xA/npxG/shots/key passes/cards/appearances)
     preferred for its 5 covered leagues (fresher, no season restriction --
-    see understat_client.py's module docstring), falling back to
-    API-Football (adds saves/tackles/rating/nationality, but capped to
-    player_stats.AVAILABLE_SEASONS and currently degraded by an account
-    suspension) when Understat has nothing for this team/season or doesn't
-    cover the league at all.
+    see understat_client.py's module docstring); American Soccer Analysis
+    (goals/assists/xG/xA/shots/key passes/points_added, keyless -- see
+    asa_client.py) for MLS specifically; API-Football (adds
+    saves/tackles/rating/nationality, but capped to
+    player_stats.AVAILABLE_SEASONS) as the fallback for every other league.
 
-    Returns (source, players) where source is "understat" or
+    MLS deliberately never falls through to API-Football: the account this
+    app used is gone, not just temporarily suspended, so for MLS an empty
+    ASA result just means "no stats found" rather than also attempting a
+    call that cannot work. UCL/EURO/WC are unaffected -- they still fall
+    through to API-Football exactly as before.
+
+    Returns (source, players) where source is "understat", "asa", or
     "api_football" -- players may be empty either way; callers treat an
     empty list as "no stats found" regardless of which source produced it,
-    same degrade-gracefully contract as both underlying fetch functions.
+    same degrade-gracefully contract as every underlying fetch function.
     """
     if league_code in UNDERSTAT_LEAGUE_SLUG:
         understat_players = fetch_team_season(team_name, league_code, season)
         if understat_players:
             return "understat", understat_players
+
+    if league_code == "MLS":
+        return "asa", fetch_asa_team_season(team_name, season)
 
     return "api_football", fetch_team_player_stats(team_name, league_code, season)
