@@ -5,7 +5,6 @@ import requests
 from soccer_predictor.config import League
 from soccer_predictor.ingest import refresh
 from soccer_predictor.ingest.api_client import MissingApiKey
-from soccer_predictor.ingest.injuries import MissingApiKey as InjuriesMissingApiKey
 
 CSV_LEAGUE = League(code="EPL", name="English Premier League", csv_code="E0", seasons=["2526"])
 NO_CSV_LEAGUE = League(code="UCL", name="UEFA Champions League", seasons=["2627"])
@@ -123,15 +122,3 @@ def test_no_trained_model_means_zero_snapshots_no_error(monkeypatch):
     assert result.snapshots_created == 0
 
 
-def test_injuries_missing_key_is_captured(monkeypatch):
-    _patch_common(monkeypatch)
-    monkeypatch.setattr(refresh, "sync_fixtures_to_db", lambda *a, **k: (0, 0))
-
-    def raise_missing_key(*a, **k):
-        raise InjuriesMissingApiKey("no key")
-
-    monkeypatch.setattr(refresh.injuries_module, "sync_injuries_to_db", raise_missing_key)
-
-    result = refresh.refresh_league(CSV_LEAGUE)
-
-    assert result.injuries_error == "no key"

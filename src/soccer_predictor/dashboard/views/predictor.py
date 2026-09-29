@@ -258,11 +258,17 @@ def render() -> None:
             )
 
         if not any_injuries_shown:
-            st.info(
-                "No injuries on record. Add entries to config/injuries.yaml, or run "
-                f"`uv run python scripts/refresh_live_data.py {league.code}` "
-                "(needs API_FOOTBALL_KEY in .env) to pull best-effort data from the API."
-            )
+            if league.data_source == "espn":
+                st.info(
+                    "No injuries on record. Add entries to config/injuries.yaml, or run "
+                    f"`uv run python scripts/refresh_live_data.py {league.code}` to pull "
+                    "best-effort data from ESPN."
+                )
+            else:
+                st.info(
+                    "No injuries on record. This competition has no automatic injury source "
+                    "-- add entries to config/injuries.yaml, or use the Notes tab below."
+                )
 
     with notes_tab:
         st.caption(

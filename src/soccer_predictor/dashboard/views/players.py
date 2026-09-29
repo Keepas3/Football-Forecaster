@@ -3,7 +3,7 @@ in a league, then see their current club plus (opt-in, quota-conscious)
 stats across past seasons. Reached from the sidebar nav.
 
 Every fetch here reuses existing team-scoped ingest functions (squad.py,
-understat_client.py, player_stats.py) -- there is no per-player database
+understat_client.py, asa_client.py) -- there is no per-player database
 table anywhere in this app; everything is fetched live and disk-cached by
 those clients, same as Team Detail's own squad/player-stats sections.
 """
@@ -16,11 +16,10 @@ import streamlit as st
 
 from soccer_predictor.config import load_leagues, load_manual_captains, load_manual_star_players
 from soccer_predictor.dashboard.components import league_option_label
-from soccer_predictor.ingest import player_stats, understat_client
+from soccer_predictor.ingest import understat_client
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.player_importance import (
     find_asa_player,
-    find_player_stats,
     find_understat_player,
     resolve_team_historical_stats,
 )
@@ -153,26 +152,25 @@ def render() -> None:
         st.caption(f"{understat_row.minutes} minutes played this season (Understat).")
 
     st.markdown("**Player Stats (Historical)**")
-    # Gated behind an explicit click -- even though Understat is now
-    # preferred and keyless, API-Football remains the fallback for the
-    # other 4 leagues and its free plan is capped at 100 requests/day, same
-    # reasoning as Team Detail's own historical stats section; must not
-    # fire just because a player was selected.
+    if league.code not in understat_client.UNDERSTAT_LEAGUE_SLUG and league.code != "MLS":
+        # No stats source at all for this competition -- see
+        # team_detail.py's matching branch for why.
+        st.caption("No historical player-stats source is available for this competition.")
+        return
+
+    # Gated behind an explicit click -- keyless, but still a real fetch for
+    # a whole team's roster, kept opt-in rather than automatic, same
+    # reasoning as Team Detail's own historical stats section.
     stats_shown_key = f"players_show_historical_{league.code}_{selection.team_id}_{player.name}"
     stats_shown = st.session_state.get(stats_shown_key, False)
-    if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG:
-        season_options = understat_client.UNDERSTAT_AVAILABLE_SEASONS
-    elif league.code == "MLS":
-        season_options = ASA_AVAILABLE_SEASONS
-    else:
-        season_options = player_stats.AVAILABLE_SEASONS
+    season_options = (
+        understat_client.UNDERSTAT_AVAILABLE_SEASONS
+        if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG
+        else ASA_AVAILABLE_SEASONS
+    )
 
     if not stats_shown:
-        st.caption(
-            "Sourced from Understat or American Soccer Analysis where available (keyless, any "
-            "season), falling back to API-Football otherwise - kept manual since API-Football's "
-            "free plan only allows 100 requests/day."
-        )
+        st.caption("Sourced from Understat or American Soccer Analysis (keyless, any season).")
         if st.button("Load player stats", key=f"players_load_stats_btn_{selection.team_id}_{player.name}"):
             st.session_state[stats_shown_key] = True
             stats_shown = True
@@ -192,21 +190,14 @@ def render() -> None:
 
         if source == "understat":
             historical_row = find_understat_player(player.name, team_historical_players)
-        elif source == "asa":
-            historical_row = find_asa_player(player.name, team_historical_players)
         else:
-            historical_row = find_player_stats(player.name, team_historical_players)
+            historical_row = find_asa_player(player.name, team_historical_players)
 
-        if historical_row is None and league.code == "MLS":
+        if historical_row is None:
+            source_name = "American Soccer Analysis" if source == "asa" else "Understat"
             st.info(
                 f"No stats found for this player/season ({_season_label(season)}) from "
-                "American Soccer Analysis."
-            )
-        elif historical_row is None:
-            st.info(
-                f"No stats found for this player/season ({_season_label(season)}) from either "
-                "Understat or API-Football (needs API_FOOTBALL_KEY in .env and this team "
-                "resolvable against its team list, for the leagues Understat doesn't cover)."
+                f"{source_name}."
             )
         elif source == "understat":
             st.caption("Understat - no saves/tackles/rating (goalkeeper stats) available.")
@@ -225,7 +216,7 @@ def render() -> None:
             card_cols[1].metric("Yellow cards", historical_row.yellow_cards)
             card_cols[2].metric("Red cards", historical_row.red_cards)
             st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
-        elif source == "asa":
+        else:  # source == "asa"
             st.caption("American Soccer Analysis - no appearances/cards/rating data available.")
             stat_cols = st.columns(4)
             stat_cols[0].metric("Goals", historical_row.goals)
@@ -237,19 +228,3 @@ def render() -> None:
             detail_cols[1].metric("xA", f"{historical_row.xa:.2f}")
             detail_cols[2].metric("Points added", f"{historical_row.points_added:.2f}")
             st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
-        else:
-            st.caption(
-                "API-Football - its free plan only covers past seasons, not the one in "
-                "progress, using API-Football's own player names, which may differ slightly "
-                "from the current squad."
-            )
-            stat_cols = st.columns(4)
-            stat_cols[0].metric("Appearances", historical_row.appearances)
-            stat_cols[1].metric("Goals", historical_row.goals)
-            stat_cols[2].metric("Assists", historical_row.assists)
-            stat_cols[3].metric("Rating", historical_row.rating)
-            detail_cols = st.columns(4)
-            detail_cols[0].metric("Minutes", historical_row.minutes)
-            detail_cols[1].metric("Saves", historical_row.saves)
-            detail_cols[2].metric("Yellow cards", historical_row.yellow_cards)
-            detail_cols[3].metric("Red cards", historical_row.red_cards)

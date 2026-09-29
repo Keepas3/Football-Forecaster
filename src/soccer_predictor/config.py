@@ -195,10 +195,6 @@ def football_data_org_api_key() -> str | None:
     return os.environ.get("FOOTBALL_DATA_ORG_API_KEY") or None
 
 
-def api_football_key() -> str | None:
-    return os.environ.get("API_FOOTBALL_KEY") or None
-
-
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 

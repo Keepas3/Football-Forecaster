@@ -3,8 +3,9 @@
 Usage:
     uv run python scripts/refresh_live_data.py [LEAGUE_CODE ...]
 
-Requires FOOTBALL_DATA_ORG_API_KEY in .env for fixtures. API_FOOTBALL_KEY
-is optional; without it, injuries fall back to config/injuries.yaml only.
+Requires FOOTBALL_DATA_ORG_API_KEY in .env for fixtures. Automatic
+injuries only exist for MLS (via ESPN); every other league relies on
+config/injuries.yaml and the dashboard's chat notes tab instead.
 
 This is a thin printing loop over ingest.refresh.refresh_league -- the
 actual per-league orchestration is shared with dashboard/views/admin.py's

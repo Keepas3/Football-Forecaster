@@ -1,19 +1,19 @@
-"""Glue between a team's real historical player stats
-(ingest/player_stats.py) and model/player_importance.py's pure formulas --
-resolves one injured player's name to their own stats and turns that into a
-real per-player importance_weight for ingest/injuries.py, instead of the
-flat DEFAULT_API_IMPORTANCE_WEIGHT every API-sourced injury used to get.
+"""Turns a player's own real stats into an injury importance_weight
+(model/injury_adjustment.py's per-player [0, 1] multiplier input) -- so
+losing a team's top scorer hurts a prediction more than losing a rarely-used
+squad player, instead of every injury counting identically.
 
 DEFAULT_API_IMPORTANCE_WEIGHT lives here (not injuries.py, which imports it
 back) so injuries.py can depend on this module without a circular import.
 
-Optionally also takes Understat data (ingest/understat_client.py) for the
-attack side: its xG/xA reflects the CURRENT season (unlike API-Football's
-free-plan goals/assists, stuck on 2022-2024 -- see player_stats.py's
-AVAILABLE_SEASONS), so it's preferred when a name match exists there, with
-API-Football goals/assists as the fallback. The two are never mixed in one
-ratio -- a player's xG against an xG-space team total, or their goals
-against a goals-space team total, never one against the other's denominator.
+Two possible sources, never mixed for one player: Understat
+(ingest/understat_client.py, 5 European leagues) or American Soccer
+Analysis (ingest/asa_client.py, MLS only) -- whichever one covers the
+league in question. API-Football used to be a third source here (and the
+primary one, at that), but that account is gone, not just temporarily
+suspended, so it was removed entirely rather than left as permanent dead
+code. UCL/EURO/World Cup have no per-player stats source at all now -- every
+weight for those leagues falls back to DEFAULT_API_IMPORTANCE_WEIGHT.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from rapidfuzz import fuzz, process
 
 from soccer_predictor.ingest.asa_client import AsaPlayerStats
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
-from soccer_predictor.ingest.player_stats import HistoricalPlayerStats, fetch_team_player_stats
 from soccer_predictor.ingest.understat_client import (
     UNDERSTAT_LEAGUE_SLUG,
     UnderstatPlayerStats,
@@ -37,50 +36,35 @@ from soccer_predictor.model.player_importance import (
 
 DEFAULT_API_IMPORTANCE_WEIGHT = 0.5
 
-# Looser than team_mapper.py's 90 -- API-Football's injuries endpoint and its
-# player-stats endpoint sometimes format the same player's name differently
-# ("N. Kante" vs "N'Golo Kante"), similar to why note_parser.py's chat-note
-# matching (85) is also looser than team-name matching.
+# Looser than team_mapper.py's 90 -- these sources' own name spellings can
+# differ slightly from this app's canonical names ("Alexey" vs "Aleksey"),
+# similar to why note_parser.py's chat-note matching (85) is also looser
+# than team-name matching.
 PLAYER_NAME_FUZZY_THRESHOLD = 80
-
-
-@dataclass
-class TeamOutputTotals:
-    goal_contribution_total: float
-    max_minutes: int
 
 
 @dataclass
 class UnderstatTeamTotals:
     xg_contribution_total: float
+    max_minutes: int
 
 
-def aggregate_team_output(players: list[HistoricalPlayerStats]) -> TeamOutputTotals:
-    total = sum((p.goals or 0) + (p.assists or 0) * 0.7 for p in players)
-    max_minutes = max((p.minutes or 0 for p in players), default=0)
-    return TeamOutputTotals(goal_contribution_total=total, max_minutes=max_minutes)
+@dataclass
+class AsaTeamTotals:
+    xg_contribution_total: float
+    max_minutes: int
 
 
 def aggregate_understat_team_output(players: list[UnderstatPlayerStats]) -> UnderstatTeamTotals:
     total = sum((p.xg or 0) + (p.xa or 0) * 0.7 for p in players)
-    return UnderstatTeamTotals(xg_contribution_total=total)
+    max_minutes = max((p.minutes or 0 for p in players), default=0)
+    return UnderstatTeamTotals(xg_contribution_total=total, max_minutes=max_minutes)
 
 
-def find_player_stats(player_name: str, team_stats: list[HistoricalPlayerStats]) -> HistoricalPlayerStats | None:
-    """Fuzzy-matches `player_name` against a team's API-Football historical
-    stats list. Public: also used by dashboard/views/players.py to look up
-    one specific player's historical row, not just internally here.
-    """
-    if not team_stats:
-        return None
-    names = [p.name for p in team_stats]
-    match = process.extractOne(player_name, names, scorer=fuzz.WRatio)
-    if match is None:
-        return None
-    _, score, index = match
-    if score < PLAYER_NAME_FUZZY_THRESHOLD:
-        return None
-    return team_stats[index]
+def aggregate_asa_team_output(players: list[AsaPlayerStats]) -> AsaTeamTotals:
+    total = sum((p.xg or 0) + (p.xa or 0) * 0.7 for p in players)
+    max_minutes = max((p.minutes or 0 for p in players), default=0)
+    return AsaTeamTotals(xg_contribution_total=total, max_minutes=max_minutes)
 
 
 def find_understat_player(
@@ -122,59 +106,70 @@ def find_asa_player(player_name: str, asa_players: list[AsaPlayerStats]) -> AsaP
 def _resolve_real_importance_weight(
     player_name: str,
     position: str,
-    team_stats: list[HistoricalPlayerStats],
-    team_totals: TeamOutputTotals,
     understat_players: list[UnderstatPlayerStats] | None = None,
     understat_totals: UnderstatTeamTotals | None = None,
+    asa_players: list[AsaPlayerStats] | None = None,
+    asa_totals: AsaTeamTotals | None = None,
 ) -> float | None:
     """Returns None (rather than a default) when there's no real stats match
     -- used by resolve_api_importance_weight (which then falls back to
     DEFAULT_API_IMPORTANCE_WEIGHT) and by resolve_team_importance_weights
     (which excludes the player entirely instead, see its own docstring).
+
+    Unlike the old API-Football-backed version, defense positions ARE
+    covered here now: compute_defense_importance only strictly needs
+    minutes (rating is optional, see model/player_importance.py), and both
+    Understat and ASA carry that.
     """
-    if position != "defense" and understat_players:
-        understat_player = find_understat_player(player_name, understat_players)
-        if understat_player is not None and understat_totals is not None:
-            weight = compute_attack_importance(
-                understat_player.xg, understat_player.xa, understat_totals.xg_contribution_total
-            )
+    if understat_players and understat_totals is not None:
+        player = find_understat_player(player_name, understat_players)
+        if player is not None:
+            if position == "defense":
+                weight = compute_defense_importance(player.minutes, understat_totals.max_minutes, None)
+            else:
+                weight = compute_attack_importance(player.xg, player.xa, understat_totals.xg_contribution_total)
             if weight is not None:
                 return weight
 
-    player = find_player_stats(player_name, team_stats)
-    if player is None:
-        return None
+    if asa_players and asa_totals is not None:
+        player = find_asa_player(player_name, asa_players)
+        if player is not None:
+            if position == "defense":
+                weight = compute_defense_importance(player.minutes, asa_totals.max_minutes, None)
+            else:
+                weight = compute_attack_importance(player.xg, player.xa, asa_totals.xg_contribution_total)
+            if weight is not None:
+                return weight
 
-    if position == "defense":
-        return compute_defense_importance(player.minutes, team_totals.max_minutes, player.rating)
-    return compute_attack_importance(player.goals, player.assists, team_totals.goal_contribution_total)
+    return None
 
 
 def resolve_api_importance_weight(
     player_name: str,
     position: str,
-    team_stats: list[HistoricalPlayerStats],
-    team_totals: TeamOutputTotals,
     understat_players: list[UnderstatPlayerStats] | None = None,
     understat_totals: UnderstatTeamTotals | None = None,
+    asa_players: list[AsaPlayerStats] | None = None,
+    asa_totals: AsaTeamTotals | None = None,
 ) -> float:
     """Never returns None -- falls back to DEFAULT_API_IMPORTANCE_WEIGHT
     whenever there's no name match or not enough data to compute a real
-    number (new signing, unresolved team, empty roster fetch), same
-    degrade-gracefully contract as the rest of this app's API integrations.
+    number (new signing, unresolved team, empty roster fetch, or a league
+    with no stats source at all -- UCL/EURO/WC), same degrade-gracefully
+    contract as the rest of this app's integrations.
     """
     weight = _resolve_real_importance_weight(
-        player_name, position, team_stats, team_totals, understat_players, understat_totals
+        player_name, position, understat_players, understat_totals, asa_players, asa_totals
     )
     return weight if weight is not None else DEFAULT_API_IMPORTANCE_WEIGHT
 
 
 def resolve_team_importance_weights(
     squad: list,
-    team_stats: list[HistoricalPlayerStats],
-    team_totals: TeamOutputTotals,
     understat_players: list[UnderstatPlayerStats] | None = None,
     understat_totals: UnderstatTeamTotals | None = None,
+    asa_players: list[AsaPlayerStats] | None = None,
+    asa_totals: AsaTeamTotals | None = None,
 ) -> dict[str, float]:
     """A real importance_weight per squad member with actual stats coverage
     -- unlike resolve_api_importance_weight, players with no stats match are
@@ -189,7 +184,7 @@ def resolve_team_importance_weights(
     for player in squad:
         position = "defense" if player.position in ("Goalkeeper", "Defence") else "attack"
         weight = _resolve_real_importance_weight(
-            player.name, position, team_stats, team_totals, understat_players, understat_totals
+            player.name, position, understat_players, understat_totals, asa_players, asa_totals
         )
         if weight is not None:
             weights[player.name] = weight
@@ -199,30 +194,22 @@ def resolve_team_importance_weights(
 def resolve_team_historical_stats(team_name: str, league_code: str, season: int) -> tuple[str, list]:
     """Picks the best available per-player season-stats source for a team --
     Understat (goals/assists/xG/xA/npxG/shots/key passes/cards/appearances)
-    preferred for its 5 covered leagues (fresher, no season restriction --
-    see understat_client.py's module docstring); American Soccer Analysis
+    for its 5 covered leagues (fresher, no season restriction -- see
+    understat_client.py's module docstring); American Soccer Analysis
     (goals/assists/xG/xA/shots/key passes/points_added, keyless -- see
-    asa_client.py) for MLS specifically; API-Football (adds
-    saves/tackles/rating/nationality, but capped to
-    player_stats.AVAILABLE_SEASONS) as the fallback for every other league.
-
-    MLS deliberately never falls through to API-Football: the account this
-    app used is gone, not just temporarily suspended, so for MLS an empty
-    ASA result just means "no stats found" rather than also attempting a
-    call that cannot work. UCL/EURO/WC are unaffected -- they still fall
-    through to API-Football exactly as before.
+    asa_client.py) for MLS specifically. UCL/EURO/World Cup have no stats
+    source at all -- API-Football used to fill that gap but that account is
+    gone, not just suspended, so there's no fallback left to attempt.
 
     Returns (source, players) where source is "understat", "asa", or
-    "api_football" -- players may be empty either way; callers treat an
-    empty list as "no stats found" regardless of which source produced it,
-    same degrade-gracefully contract as every underlying fetch function.
+    "none" -- players may be empty either way; callers treat an empty list
+    as "no stats found" regardless of which source produced it, same
+    degrade-gracefully contract as every underlying fetch function.
     """
     if league_code in UNDERSTAT_LEAGUE_SLUG:
-        understat_players = fetch_team_season(team_name, league_code, season)
-        if understat_players:
-            return "understat", understat_players
+        return "understat", fetch_team_season(team_name, league_code, season)
 
     if league_code == "MLS":
         return "asa", fetch_asa_team_season(team_name, season)
 
-    return "api_football", fetch_team_player_stats(team_name, league_code, season)
+    return "none", []

@@ -90,12 +90,9 @@ def refresh_league(league: League) -> RefreshResult:
         if params is not None:
             result.snapshots_created = snapshot_upcoming_predictions(session, league, params)
 
-    try:
-        with session_scope() as session:
-            result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
-                session, league, season_year=dt.date.today().year
-            )
-    except injuries_module.MissingApiKey as exc:
-        result.injuries_error = str(exc)
+    with session_scope() as session:
+        result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
+            session, league, season_year=dt.date.today().year
+        )
 
     return result

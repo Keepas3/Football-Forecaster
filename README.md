@@ -52,13 +52,14 @@ historical results, adjusted for current injuries and team form.
 - **ESPN's public site API** (undocumented, no key required): fixtures,
   results, squads, and multi-season historical results for MLS, which
   football-data.org does not cover at all.
-- **API-Football**: best-effort injury data and historical per-player stats
-  (goals, assists, cards, rating). Its free plan only allows seasons
-  2022 through 2024, so this never reflects the current season.
-- **Understat** (undocumented, no key required): current-season expected
-  goals and expected assists per player, for the five European leagues it
-  tracks. Used both on the Players page and to size injury adjustments
-  more accurately than raw goals/assists alone.
+- **Understat** (undocumented, no key required): historical and current-
+  season goals/assists/xG/xA/shots/key passes/cards for the five European
+  leagues it tracks, back to 2014. Used on the Players/Team Detail pages
+  and to size injury adjustments more accurately than raw goals/assists
+  alone.
+- **American Soccer Analysis** (documented, no key required): the same
+  role as Understat, for MLS specifically -- goals/assists/xG/xA/shots/key
+  passes/points added, back to 2013.
 - **Anthropic (Claude)**: parses freeform chat notes into structured
   injury or form entries. Optional; the rest of the app works without it.
 
@@ -72,15 +73,15 @@ cp .env.example .env
 ```
 
 Fill in `.env` with API keys. All are optional for the historical-data-only
-workflow below; `FOOTBALL_DATA_ORG_API_KEY` is required for live fixtures,
-injuries, and chat notes on most leagues:
+workflow below; `FOOTBALL_DATA_ORG_API_KEY` is required for live fixtures
+and chat notes on most leagues:
 
 - `FOOTBALL_DATA_ORG_API_KEY`: free registration at https://www.football-data.org/client/register
-- `API_FOOTBALL_KEY`: optional, free tier at https://rapidapi.com/api-sports/api/api-football (weak/partial injury coverage; see "Known limitations" below)
 - `ANTHROPIC_API_KEY`: required for the dashboard's "Notes" chat tab, get one at https://console.anthropic.com/settings/keys
 
-MLS needs neither `FOOTBALL_DATA_ORG_API_KEY` nor `API_FOOTBALL_KEY` for its
-live data; it uses ESPN's public API, which requires no key at all.
+MLS needs neither key for its live data; it uses ESPN's public API, which
+requires no key at all. Understat and American Soccer Analysis (player
+stats) are also both keyless.
 
 If you're upgrading an existing database, run any migration scripts you
 haven't run yet (each is safe to re-run): `uv run python scripts/migrate_chat_notes.py`,
@@ -246,13 +247,14 @@ uv run pytest
 
 - **Team-name matching** across the CSV and API sources is ongoing manual
   upkeep (see `config/team_aliases.yaml` above), not a one-time fix.
-- **API-sourced injury data is effectively unavailable on the free
-  tiers.** API-Football's free plan blocks its `/injuries` endpoint for
-  the current season entirely (it only allows 2022 through 2024), so live
-  injuries never actually come through that path in practice.
-  `config/injuries.yaml` (manual entry) and the AI chat notes tab are the
-  real sources of current injury data; both always override anything the
-  API might otherwise supply.
+- **Automatic injury detection only exists for MLS** (via ESPN's roster
+  data). Every other league has no automatic injury source at all --
+  football-data.org has no injuries endpoint, and the API-Football
+  integration this app used to have for the other leagues was removed once
+  that account became permanently unusable, not just temporarily
+  suspended. `config/injuries.yaml` (manual entry) and the AI chat notes
+  tab are the real sources of injury data for those leagues; both always
+  override anything an automatic source might otherwise supply.
 - **The injury adjustment's magnitude is a tuned heuristic**
   (`model/injury_adjustment.py`), not empirically validated. There isn't
   enough free injury data to backtest it properly.
@@ -269,19 +271,19 @@ uv run pytest
   dashboard falls back to a placeholder icon rather than erroring.
   Historical-only teams never picked up in a live sync stay
   placeholder-only.
-- **Free-tier API rate limits** (football-data.org: 10 requests/minute;
-  API-Football: 10 requests/minute and 100 requests/day) are respected via
-  on-disk caching in `data/cache/`. Don't delete that directory and
-  immediately re-run refreshes in a loop. Player-stats lookups are cached
-  30 days, since a past season never changes, so browsing the same team
-  repeatedly costs nothing after the first look. ESPN and Understat have
-  no published rate limit, but are still called through a self-imposed
-  courtesy limiter and disk cache, since both are undocumented, unofficial
-  endpoints that could change or start blocking heavy use without notice.
-- **Historical player stats never cover the current season.**
-  API-Football's free plan blocks `/players` access to it entirely
-  (verified: it only allows 2022 through 2024). `ingest/player_stats.py::AVAILABLE_SEASONS`
-  is that list; extend it if you upgrade the plan.
+- **football-data.org's free-tier rate limit** (10 requests/minute) is
+  respected via on-disk caching in `data/cache/`. Don't delete that
+  directory and immediately re-run refreshes in a loop. Understat and
+  American Soccer Analysis have no published rate limit, but are still
+  called through a self-imposed courtesy limiter and disk cache, since
+  both are undocumented/unofficial-ish endpoints that could change or
+  start blocking heavy use without notice.
+- **Historical player stats only cover 5 European leagues and MLS**
+  (Understat and American Soccer Analysis respectively -- both genuinely
+  cover the current season too, unlike a typical free-tier stats API).
+  UCL/EURO/World Cup have no per-player stats source at all: they pull
+  players from dozens of different domestic leagues each, and no free API
+  with that cross-league scope was found.
 - **The current in-progress season needs periodic re-fetching to stay
   current.** For CSV-backed leagues, football-data.co.uk updates the last
   season in each league's `seasons` list continuously as real games are

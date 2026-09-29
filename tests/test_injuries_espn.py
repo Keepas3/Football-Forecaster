@@ -5,7 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
-from soccer_predictor.ingest import espn_client, injuries, player_stats, understat_client
+from soccer_predictor.ingest import asa_client, espn_client, injuries
+from soccer_predictor.ingest.asa_client import AsaPlayerStats
 from soccer_predictor.ingest.player_importance import DEFAULT_API_IMPORTANCE_WEIGHT
 from soccer_predictor.storage.models import Base
 from soccer_predictor.storage.repository import get_or_create_team, injuries_for_team, update_espn_team_id
@@ -27,9 +28,8 @@ def session():
 
 
 @pytest.fixture(autouse=True)
-def no_player_stats_or_understat_by_default(monkeypatch):
-    monkeypatch.setattr(player_stats, "fetch_team_player_stats", lambda *a, **k: [])
-    monkeypatch.setattr(understat_client, "fetch_team_season", lambda *a, **k: [])
+def no_asa_by_default(monkeypatch):
+    monkeypatch.setattr(asa_client, "fetch_team_season", lambda *a, **k: [])
 
 
 def _crew_injury(session):
@@ -74,28 +74,24 @@ def test_skips_team_without_espn_id(session, monkeypatch):
     assert skipped == 1
 
 
-def test_importance_weight_computed_from_real_stats_when_available(session, monkeypatch):
-    from soccer_predictor.ingest.player_stats import HistoricalPlayerStats
-
+def test_importance_weight_computed_from_real_asa_stats_when_available(session, monkeypatch):
     entry = espn_client.EspnInjuryEntry(player_name="Bukayo Saka", position_bucket="attack", note="Hamstring")
     monkeypatch.setattr(espn_client, "fetch_team_roster", lambda *a, **k: ([], [entry]))
     monkeypatch.setattr(
-        player_stats,
-        "fetch_team_player_stats",
+        asa_client,
+        "fetch_team_season",
         lambda *a, **k: [
-            HistoricalPlayerStats(
+            AsaPlayerStats(
                 name="Bukayo Saka",
-                position="Attacker",
-                nationality=None,
-                appearances=30,
-                minutes=2700,
+                position="W",
+                minutes=2000,
                 goals=15,
                 assists=10,
-                saves=None,
-                tackles=None,
-                yellow_cards=None,
-                red_cards=None,
-                rating=7.5,
+                xg=12.0,
+                xa=8.0,
+                shots=60,
+                key_passes=30,
+                points_added=3.0,
             )
         ],
     )
@@ -114,3 +110,11 @@ def test_importance_weight_falls_back_to_default_when_no_stats(session, monkeypa
     session.commit()
 
     assert _crew_injury(session).importance_weight == DEFAULT_API_IMPORTANCE_WEIGHT
+
+
+def test_non_espn_league_is_a_no_op(session):
+    non_espn_league = League(code="EPL", name="English Premier League", seasons=["2526"], csv_code="E0")
+
+    synced, skipped = injuries.sync_injuries_to_db(session, non_espn_league, 2026)
+
+    assert (synced, skipped) == (0, 0)

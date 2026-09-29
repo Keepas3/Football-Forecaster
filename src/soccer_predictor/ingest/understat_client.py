@@ -1,6 +1,8 @@
-"""Best-effort scrape of Understat (understat.com) for Expected Goals (xG)/
-Expected Assists (xA) -- a bonus signal for ingest/player_importance.py, on
-top of API-Football's own goals/assists (ingest/player_stats.py).
+"""Best-effort scrape of Understat (understat.com) for goals/assists/
+Expected Goals (xG)/Expected Assists (xA)/shots/key passes/cards, for the 5
+European domestic leagues it tracks -- a per-player stats source for
+ingest/player_importance.py and the dashboard's "Player Stats (Historical)"
+sections (see ingest/asa_client.py for the MLS equivalent).
 
 No official API exists, so this hits Understat's own internal AJAX endpoint
 (`main/getPlayersStats/`, found by inspecting its league page's own
@@ -18,12 +20,9 @@ embedded-JSON approach (naive unicode_escape decoding mangling accented
 player names) since this is real JSON via `response.json()`, not a hand
 -decoded string.
 
-Understat's real edge over API-Football's free tier: no season restriction.
-API-Football's /players and /injuries endpoints refuse anything outside
-2022-2024 on the free plan (see player_stats.py's AVAILABLE_SEASONS); a live
-check confirmed Understat happily serves the in-progress current season, a
-genuinely fresher "how good is this player right now" signal, not just a
-less-noisy one.
+Confirmed live (2026-09): Understat serves the in-progress current season
+as well as real historical data back to 2014 (see
+UNDERSTAT_AVAILABLE_SEASONS below) -- no season restriction of any kind.
 """
 
 from __future__ import annotations
@@ -43,12 +42,11 @@ from soccer_predictor.config import DATA_DIR
 BASE_URL = "https://understat.com"
 CACHE_DIR = DATA_DIR / "cache" / "understat"
 
-# Shorter than player_stats.py's 30-day cache -- the whole point of this
-# source is that it reflects the CURRENT season, which changes match to
-# match, not a frozen past season.
+# Short -- the whole point of this source is that it reflects the CURRENT
+# season, which changes match to match, not a frozen past season.
 CACHE_TTL_SECONDS = 24 * 3600
 
-TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as player_stats.py's own team matching
+TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as this app's other team-name matching (e.g. asa_client.py)
 
 # Understat's own league identifiers, exactly as its league-page <select
 # name="league"> option values (verified live 2026-09 against
@@ -67,7 +65,7 @@ UNDERSTAT_LEAGUE_SLUG = {
 
 # Understat's real floor, confirmed live (2026-09): season 2014 returns real
 # players, 2013 returns none. Generated rather than hand-typed since this
-# grows every season, unlike player_stats.py's frozen API-Football window.
+# grows every season automatically.
 UNDERSTAT_AVAILABLE_SEASONS = list(range(2014, dt.date.today().year + 1))
 
 
@@ -98,8 +96,7 @@ def _cache_path(league_slug: str, season: int) -> Path:
 def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
     """Raw player rows for every team in `league_slug`/`season` -- one POST
     covers the whole league, so team resolution below is a local fuzzy
-    match, the same fetch-once-match-locally approach player_stats.py's
-    `_find_team_id` already uses for API-Football.
+    match, the same fetch-once-match-locally approach asa_client.py uses.
     """
     cache_file = _cache_path(league_slug, season)
     if cache_file.exists():
@@ -154,7 +151,7 @@ def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list
     convention, matching League.api_season_year()'s). Empty list on any
     failure (unmapped league, network error, site format change, no
     matching team) -- degrades to "no stats" rather than raising, same
-    contract as ingest/player_stats.py.
+    contract as every other ingest client in this app.
     """
     league_slug = UNDERSTAT_LEAGUE_SLUG.get(league_code)
     if league_slug is None:
