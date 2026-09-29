@@ -105,6 +105,26 @@ def test_trainable_true_gives_supports_predictions_without_csv_code():
     assert league.supports_predictions is True
 
 
+def test_real_leagues_yaml_wc_is_trainable_archive_with_historical_seasons():
+    import soccer_predictor.config as config
+
+    league = config.load_leagues()["WC"]
+    assert league.trainable is True
+    assert league.data_source == "archive_worldcup"
+    assert "1966" in league.seasons
+    assert league.supports_predictions is True
+
+
+def test_real_leagues_yaml_euro_is_trainable_archive_with_historical_seasons():
+    import soccer_predictor.config as config
+
+    league = config.load_leagues()["EURO"]
+    assert league.trainable is True
+    assert league.data_source == "archive_euro"
+    assert "1996" in league.seasons
+    assert league.supports_predictions is True
+
+
 def test_load_leagues_parses_trainable_flag(tmp_path, monkeypatch):
     import soccer_predictor.config as config
 

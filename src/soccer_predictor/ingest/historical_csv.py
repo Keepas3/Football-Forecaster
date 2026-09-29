@@ -13,7 +13,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from soccer_predictor.ingest.team_mapper import UnresolvedTeamName, resolve
-from soccer_predictor.storage.repository import upsert_match
+from soccer_predictor.storage.repository import replace_historical_tournament_goals, upsert_match
 
 REQUIRED_COLUMNS = ["Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]
 
@@ -64,3 +64,28 @@ def ingest_into_db(
         )
         ingested += 1
     return ingested, skipped
+
+
+def ingest_goals_into_db(
+    session: Session, league_code: str, season: str, goal_rows: list[dict], source: str
+) -> tuple[int, int]:
+    """Resolves each goal's scoring player's team name and replaces
+    (league_code, season)'s stored HistoricalTournamentGoal rows. Shared by
+    ingest/worldcup_archive.py and ingest/euro_archive.py -- both produce
+    the same {team_name, player_name, minute, match_date, own_goal, penalty}
+    dict shape, keyed the same way `df` rows are for ingest_into_db above
+    (team_mapper.resolve(source="csv", ...), so a team must already have
+    been seeded via team_mapper.seed_teams_from_names -- same requirement
+    as ingest_into_db). Returns (ingested, skipped).
+    """
+    resolved = []
+    skipped = 0
+    for row in goal_rows:
+        try:
+            team_id = resolve(session, row["team_name"], source="csv", league_code=league_code)
+        except UnresolvedTeamName:
+            skipped += 1
+            continue
+        resolved.append({**row, "team_id": team_id})
+    replace_historical_tournament_goals(session, league_code, season, resolved, source)
+    return len(resolved), skipped

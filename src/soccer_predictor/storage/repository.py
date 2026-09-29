@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from soccer_predictor.storage.models import (
     Fixture,
+    HistoricalTournamentGoal,
     Injury,
     Match,
     PredictionRecord,
@@ -177,6 +178,58 @@ def upsert_match(
             away_goals=away_goals,
             source=source,
         )
+    )
+
+
+def replace_historical_tournament_goals(
+    session: Session, league_code: str, season: str, goals: list[dict], source: str
+) -> None:
+    """Replaces all HistoricalTournamentGoal rows for (league_code, season)
+    with `goals` -- same "delete existing, insert fresh" idiom as
+    replace_injuries, appropriate here since a re-run of the archive
+    ingest scripts (see scripts/fetch_historical_data.py) means the parser
+    changed, not that the underlying (unchanging) tournament result did.
+
+    Each dict in `goals` needs team_id (already resolved by the caller --
+    see ingest/historical_csv.py::ingest_goals_into_db), player_name,
+    minute, match_date, own_goal, penalty.
+    """
+    existing = session.scalars(
+        select(HistoricalTournamentGoal).where(
+            HistoricalTournamentGoal.league_code == league_code,
+            HistoricalTournamentGoal.season == season,
+        )
+    ).all()
+    for row in existing:
+        session.delete(row)
+    session.flush()
+    for entry in goals:
+        session.add(
+            HistoricalTournamentGoal(
+                league_code=league_code,
+                season=season,
+                team_id=entry["team_id"],
+                player_name=entry["player_name"],
+                minute=entry.get("minute"),
+                match_date=entry.get("match_date"),
+                own_goal=bool(entry.get("own_goal", False)),
+                penalty=bool(entry.get("penalty", False)),
+                source=source,
+            )
+        )
+
+
+def goals_for_team_season(
+    session: Session, team_id: int, league_code: str, season: str
+) -> list[HistoricalTournamentGoal]:
+    return list(
+        session.scalars(
+            select(HistoricalTournamentGoal).where(
+                HistoricalTournamentGoal.team_id == team_id,
+                HistoricalTournamentGoal.league_code == league_code,
+                HistoricalTournamentGoal.season == season,
+            )
+        ).all()
     )
 
 

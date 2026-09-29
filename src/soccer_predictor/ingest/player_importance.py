@@ -18,21 +18,27 @@ weight for those leagues falls back to DEFAULT_API_IMPORTANCE_WEIGHT.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz, process
+from sqlalchemy import select
 
 from soccer_predictor.ingest.asa_client import AsaPlayerStats
+from soccer_predictor.ingest.asa_client import fetch_all_teams_totals as fetch_asa_all_teams_totals
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.understat_client import (
     UNDERSTAT_LEAGUE_SLUG,
     UnderstatPlayerStats,
     fetch_team_season,
 )
+from soccer_predictor.ingest.understat_client import fetch_all_teams_totals as fetch_understat_all_teams_totals
 from soccer_predictor.model.player_importance import (
     compute_attack_importance,
     compute_defense_importance,
 )
+from soccer_predictor.storage.models import HistoricalTournamentGoal, Team
+from soccer_predictor.storage.repository import goals_for_team_season
 
 DEFAULT_API_IMPORTANCE_WEIGHT = 0.5
 
@@ -65,6 +71,81 @@ def aggregate_asa_team_output(players: list[AsaPlayerStats]) -> AsaTeamTotals:
     total = sum((p.xg or 0) + (p.xa or 0) * 0.7 for p in players)
     max_minutes = max((p.minutes or 0 for p in players), default=0)
     return AsaTeamTotals(xg_contribution_total=total, max_minutes=max_minutes)
+
+
+# Same tolerance as understat_client.py/asa_client.py's own team-name matching.
+CURRENT_FORM_TEAM_NAME_FUZZY_THRESHOLD = 75
+# A 1-2 match sample is too noisy to trust for a "how are they playing
+# lately" signal -- below this, resolve_current_attack_strength returns
+# None (no nudge) rather than reacting to small-sample noise.
+MIN_MATCHES_FOR_CURRENT_FORM = 3
+
+
+def _estimate_matches_played(max_minutes: int) -> int:
+    """`max_minutes` (the roster's most-used player's minutes) is the
+    closest "how many matches has this team played this season" proxy
+    available from either source without a new stat -- floored at 1 so an
+    early-season team with, say, 80 minutes never divides by zero.
+    """
+    return max(1, round(max_minutes / 90))
+
+
+def resolve_current_attack_strength(team_name: str, league_code: str) -> float | None:
+    """How `team_name`'s current-season attacking output (goals+xG-weighted
+    assists, per match) compares to its own league's current average --
+    values are centered on 1.0, the same convention dixon_coles.py's own
+    mean-normalized `attack` parameter already uses, so this is directly
+    blendable with a fitted rating (see model/current_form_adjustment.py).
+
+    Attack-only, deliberately: neither Understat nor ASA's player data
+    carries any defensive signal (see this module's docstring) -- there is
+    no equivalent "current defensive strength" this can compute.
+
+    Returns None (never raises) when: the league has no coverage (UCL/WC/
+    EURO -- see UNDERSTAT_LEAGUE_SLUG/"MLS"), the fetch fails or comes back
+    empty, `team_name` can't be matched, fewer than 2 teams in the league
+    have enough matches played to form a meaningful baseline, or `team_name`
+    itself is below MIN_MATCHES_FOR_CURRENT_FORM (too early in the season
+    for its own current rate to mean much).
+    """
+    if league_code in UNDERSTAT_LEAGUE_SLUG:
+        teams_totals = fetch_understat_all_teams_totals(league_code, dt.date.today().year)
+        aggregate = aggregate_understat_team_output
+    elif league_code == "MLS":
+        teams_totals = fetch_asa_all_teams_totals(dt.date.today().year)
+        aggregate = aggregate_asa_team_output
+    else:
+        return None
+
+    if not teams_totals:
+        return None
+
+    # Match against every team regardless of sample size first -- an
+    # early-season team must still resolve to itself correctly, even
+    # though its own rate won't end up usable below.
+    match = process.extractOne(team_name, list(teams_totals), scorer=fuzz.WRatio)
+    if match is None:
+        return None
+    matched_title, score, _ = match
+    if score < CURRENT_FORM_TEAM_NAME_FUZZY_THRESHOLD:
+        return None
+
+    rates: dict[str, float] = {}
+    for title, players in teams_totals.items():
+        totals = aggregate(players)
+        matches_played = _estimate_matches_played(totals.max_minutes)
+        if matches_played < MIN_MATCHES_FOR_CURRENT_FORM:
+            continue
+        rates[title] = totals.xg_contribution_total / matches_played
+
+    if matched_title not in rates or len(rates) < 2:
+        return None
+
+    league_mean_rate = sum(rates.values()) / len(rates)
+    if league_mean_rate <= 0:
+        return None
+
+    return rates[matched_title] / league_mean_rate
 
 
 def find_understat_player(
@@ -101,6 +182,23 @@ def find_asa_player(player_name: str, asa_players: list[AsaPlayerStats]) -> AsaP
     if score < PLAYER_NAME_FUZZY_THRESHOLD:
         return None
     return asa_players[index]
+
+
+def find_archive_player(player_name: str, archive_players: list["ArchivePlayerStats"]) -> "ArchivePlayerStats | None":
+    """Fuzzy-matches `player_name` against a team's World Cup/Euro archive
+    goal-scorer summary. Public: used by dashboard/views/players.py, same
+    pattern as find_understat_player/find_asa_player.
+    """
+    if not archive_players:
+        return None
+    names = [p.name for p in archive_players]
+    match = process.extractOne(player_name, names, scorer=fuzz.WRatio)
+    if match is None:
+        return None
+    _, score, index = match
+    if score < PLAYER_NAME_FUZZY_THRESHOLD:
+        return None
+    return archive_players[index]
 
 
 def _resolve_real_importance_weight(
@@ -219,25 +317,68 @@ def resolve_team_goals_and_assists(
     return result
 
 
-def resolve_team_historical_stats(team_name: str, league_code: str, season: int) -> tuple[str, list]:
+@dataclass
+class ArchivePlayerStats:
+    """Summarized World Cup/Euro archive goal-scorer data for one player on
+    one team/season -- deliberately thinner than UnderstatPlayerStats/
+    AsaPlayerStats since neither archive source has xG/assists/minutes at
+    all (see ingest/worldcup_archive.py, ingest/euro_archive.py)."""
+
+    name: str
+    team: str
+    goals: int
+    own_goals: int
+
+
+def _summarize_archive_goals(
+    goal_rows: list[HistoricalTournamentGoal], team_name: str
+) -> list[ArchivePlayerStats]:
+    totals: dict[str, list[int]] = {}
+    for row in goal_rows:
+        entry = totals.setdefault(row.player_name, [0, 0])
+        if row.own_goal:
+            entry[1] += 1
+        else:
+            entry[0] += 1
+    return [
+        ArchivePlayerStats(name=name, team=team_name, goals=goals, own_goals=own_goals)
+        for name, (goals, own_goals) in totals.items()
+    ]
+
+
+def resolve_team_historical_stats(
+    team_name: str, league_code: str, season, session=None
+) -> tuple[str, list]:
     """Picks the best available per-player season-stats source for a team --
     Understat (goals/assists/xG/xA/npxG/shots/key passes/cards/appearances)
     for its 5 covered leagues (fresher, no season restriction -- see
     understat_client.py's module docstring); American Soccer Analysis
     (goals/assists/xG/xA/shots/key passes/points_added, keyless -- see
-    asa_client.py) for MLS specifically. UCL/EURO/World Cup have no stats
-    source at all -- API-Football used to fill that gap but that account is
-    gone, not just suspended, so there's no fallback left to attempt.
+    asa_client.py) for MLS specifically; the World Cup/Euro static archives
+    (goals/own goals only -- see ingest/worldcup_archive.py,
+    ingest/euro_archive.py) for WC/EURO, DB-backed rather than a live fetch,
+    hence the `session` param (unused by the other two branches). UCL has no
+    stats source at all -- API-Football used to fill that gap for it but
+    that account is gone, not just suspended, so there's no fallback left.
 
-    Returns (source, players) where source is "understat", "asa", or
-    "none" -- players may be empty either way; callers treat an empty list
-    as "no stats found" regardless of which source produced it, same
-    degrade-gracefully contract as every underlying fetch function.
+    Returns (source, players) where source is "understat", "asa",
+    "archive", or "none" -- players may be empty either way; callers treat
+    an empty list as "no stats found" regardless of which source produced
+    it, same degrade-gracefully contract as every underlying fetch function.
     """
     if league_code in UNDERSTAT_LEAGUE_SLUG:
         return "understat", fetch_team_season(team_name, league_code, season)
 
     if league_code == "MLS":
         return "asa", fetch_asa_team_season(team_name, season)
+
+    if league_code in ("WC", "EURO") and session is not None:
+        team = session.scalar(
+            select(Team).where(Team.canonical_name == team_name, Team.league_code == league_code)
+        )
+        if team is None:
+            return "archive", []
+        goal_rows = goals_for_team_season(session, team.id, league_code, str(season))
+        return "archive", _summarize_archive_goals(goal_rows, team_name)
 
     return "none", []

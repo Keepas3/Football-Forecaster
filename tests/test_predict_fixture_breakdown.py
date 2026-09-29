@@ -38,7 +38,12 @@ def _params(home_id: int, away_id: int) -> DixonColesParams:
     )
 
 
-def test_breakdown_matches_manually_computed_lambdas(session):
+def test_breakdown_matches_manually_computed_lambdas(session, monkeypatch):
+    # No real coverage/signal for this fixture -- mocked rather than hitting
+    # Understat for real, and to keep this test's lambdas deterministic.
+    monkeypatch.setattr(
+        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
+    )
     home = get_or_create_team(session, "Arsenal", "EPL")
     away = get_or_create_team(session, "Chelsea", "EPL")
     session.commit()
@@ -64,9 +69,14 @@ def test_breakdown_matches_manually_computed_lambdas(session):
     assert b.n_matches == params.n_matches
     assert b.fitted_at == params.fitted_at
     assert b.xi == params.xi
+    assert b.home_xg_relative_strength is None
+    assert b.away_xg_relative_strength is None
 
 
-def test_breakdown_reflects_injury_adjustment(session):
+def test_breakdown_reflects_injury_adjustment(session, monkeypatch):
+    monkeypatch.setattr(
+        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
+    )
     home = get_or_create_team(session, "Arsenal", "EPL")
     away = get_or_create_team(session, "Chelsea", "EPL")
     session.commit()
@@ -92,4 +102,28 @@ def test_breakdown_reflects_injury_adjustment(session):
     # on record -- and lambda_home must reflect that lower value too.
     assert b.base_home_attack == pytest.approx(params.attack[home.id])
     assert b.home_attack < b.base_home_attack
+    assert b.lambda_home == pytest.approx(b.home_attack * b.away_defense * b.home_advantage)
+
+
+def test_breakdown_reflects_current_form_adjustment(session, monkeypatch):
+    # Home team creating 20% more than their league's current average;
+    # away team not covered by any current-stats source at all.
+    def fake_resolve(team_name, league_code):
+        return 1.2 if team_name == "Arsenal" else None
+
+    monkeypatch.setattr(
+        "soccer_predictor.prediction.service.resolve_current_attack_strength", fake_resolve
+    )
+    home = get_or_create_team(session, "Arsenal", "EPL")
+    away = get_or_create_team(session, "Chelsea", "EPL")
+    session.commit()
+    params = _params(home.id, away.id)
+
+    prediction = predict_fixture(session, params, home.id, away.id, "Arsenal", "Chelsea")
+    b = prediction.breakdown
+
+    assert b.home_xg_relative_strength == 1.2
+    assert b.away_xg_relative_strength is None
+    assert b.home_attack > b.base_home_attack
+    assert b.away_attack == pytest.approx(b.base_away_attack)
     assert b.lambda_home == pytest.approx(b.home_attack * b.away_defense * b.home_advantage)

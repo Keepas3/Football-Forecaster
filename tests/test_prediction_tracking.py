@@ -49,7 +49,10 @@ def _params(home_id: int, away_id: int, home_attack=1.4, home_defense=1.0, away_
     )
 
 
-def test_snapshot_creates_one_record_per_upcoming_fixture(session):
+def test_snapshot_creates_one_record_per_upcoming_fixture(session, monkeypatch):
+    monkeypatch.setattr(
+        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
+    )
     arsenal = get_or_create_team(session, "Arsenal", "EPL")
     villa = get_or_create_team(session, "Aston Villa", "EPL")
     session.commit()
@@ -73,7 +76,10 @@ def test_snapshot_creates_one_record_per_upcoming_fixture(session):
     assert isinstance(record.predicted_away_goals, int)
 
 
-def test_snapshot_is_idempotent_and_never_overwrites(session):
+def test_snapshot_is_idempotent_and_never_overwrites(session, monkeypatch):
+    monkeypatch.setattr(
+        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
+    )
     arsenal = get_or_create_team(session, "Arsenal", "EPL")
     villa = get_or_create_team(session, "Aston Villa", "EPL")
     session.commit()

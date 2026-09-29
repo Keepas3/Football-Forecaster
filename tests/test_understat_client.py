@@ -208,6 +208,55 @@ def test_fetch_league_players_returns_empty_when_success_false(tmp_path, monkeyp
     assert understat_client._fetch_league_players("EPL", 2026) == []
 
 
+def test_fetch_all_teams_totals_groups_every_team(monkeypatch):
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: LEAGUE_ROWS)
+
+    result = understat_client.fetch_all_teams_totals("EPL", 2026)
+
+    assert set(result) == {"Arsenal", "Manchester City"}
+    arsenal_names = {p.name for p in result["Arsenal"]}
+    assert arsenal_names == {"Bukayo Saka", "Backup Winger"}
+    assert {p.name for p in result["Manchester City"]} == {"Erling Haaland"}
+
+
+def test_fetch_all_teams_totals_includes_mid_season_transfers_in_both_real_teams(monkeypatch):
+    rows = [
+        _row("Erling Haaland", "Manchester City", goals=25),
+        _row("Enzo Fernandez", "Chelsea,Manchester City", goals=1),
+        _row("Someone Else", "Chelsea", goals=8),
+    ]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+
+    result = understat_client.fetch_all_teams_totals("EPL", 2026)
+
+    assert {p.name for p in result["Manchester City"]} == {"Erling Haaland", "Enzo Fernandez"}
+    assert {p.name for p in result["Chelsea"]} == {"Enzo Fernandez", "Someone Else"}
+
+
+def test_fetch_all_teams_totals_unmapped_league_returns_empty_without_fetching(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("should never fetch for an unmapped league")
+
+    monkeypatch.setattr(understat_client, "_fetch_league_players", fail)
+
+    assert understat_client.fetch_all_teams_totals("UCL", 2026) == {}
+
+
+def test_fetch_all_teams_totals_returns_empty_on_empty_league_response(monkeypatch):
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: [])
+
+    assert understat_client.fetch_all_teams_totals("EPL", 2026) == {}
+
+
+def test_fetch_all_teams_totals_degrades_on_request_exception(monkeypatch):
+    def raise_request_error(*args, **kwargs):
+        raise requests.RequestException("network error")
+
+    monkeypatch.setattr(understat_client, "_fetch_league_players", raise_request_error)
+
+    assert understat_client.fetch_all_teams_totals("EPL", 2026) == {}
+
+
 def test_understat_available_seasons_starts_at_2014_and_includes_current_year():
     import datetime as dt
 

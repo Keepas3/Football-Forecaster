@@ -4,9 +4,14 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from soccer_predictor.ingest.team_mapper import UnresolvedTeamName, resolve
+from soccer_predictor.ingest.team_mapper import UnresolvedTeamName, resolve, seed_teams_from_names
 from soccer_predictor.storage.models import Base
-from soccer_predictor.storage.repository import get_or_create_team, upsert_team_alias
+from soccer_predictor.storage.repository import (
+    all_alias_texts,
+    get_or_create_team,
+    teams_for_league,
+    upsert_team_alias,
+)
 
 
 @pytest.fixture
@@ -63,3 +68,36 @@ def test_fuzzy_match_does_not_cross_leagues(session):
     session.commit()
 
     assert resolve(session, "Man Untied", "csv", league_code="EPL") == man_utd.id
+
+
+def test_seed_teams_from_names_creates_a_team_per_name(session):
+    count = seed_teams_from_names(session, "WC", {"England", "France", "Brazil"})
+
+    assert count == 3
+    names = set(teams_for_league(session, "WC").values())
+    assert names == {"England", "France", "Brazil"}
+
+
+def test_seed_teams_from_names_bootstraps_resolve_with_no_prior_aliases(session):
+    # resolve()'s fuzzy fallback can never seed a brand-new league from
+    # nothing (it needs at least one existing alias to fuzzy-match
+    # against) -- this is the real reason seed_teams_from_names exists.
+    seed_teams_from_names(session, "WC", {"England"})
+
+    team_id = resolve(session, "England", "csv", league_code="WC")
+    england = get_or_create_team(session, "England", "WC")
+    assert team_id == england.id
+
+
+def test_seed_teams_from_names_registers_a_csv_alias(session):
+    seed_teams_from_names(session, "WC", {"Brazil"})
+
+    aliases = dict(all_alias_texts(session, "csv", "WC"))
+    assert "Brazil" in aliases
+
+
+def test_seed_teams_from_names_is_idempotent(session):
+    seed_teams_from_names(session, "WC", {"England"})
+    seed_teams_from_names(session, "WC", {"England"})
+
+    assert len(teams_for_league(session, "WC")) == 1

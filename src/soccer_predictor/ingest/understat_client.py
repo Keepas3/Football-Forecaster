@@ -184,3 +184,34 @@ def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list
         ]
     except (requests.RequestException, ValueError, KeyError):
         return []
+
+
+def fetch_all_teams_totals(league_code: str, season: int) -> dict[str, list[UnderstatPlayerStats]]:
+    """Every Understat-tracked team's full player list for `league_code`/
+    `season`, keyed by Understat's own `team_title` -- lets a caller build a
+    league-wide baseline (see
+    ingest/player_importance.py::resolve_current_attack_strength) from ONE
+    already-cached fetch instead of N separate fuzzy-matched
+    fetch_team_season calls. Same comma-title-exclusion/mid-season-transfer
+    handling as fetch_team_season, just grouping every real team's players
+    in one pass instead of filtering for a single team. Empty dict on any
+    failure, same contract as fetch_team_season.
+    """
+    league_slug = UNDERSTAT_LEAGUE_SLUG.get(league_code)
+    if league_slug is None:
+        return {}
+
+    try:
+        raw_players = _fetch_league_players(league_slug, season)
+        if not raw_players:
+            return {}
+
+        pure_team_titles = {row["team_title"] for row in raw_players if "," not in row["team_title"]}
+        result: dict[str, list[UnderstatPlayerStats]] = {title: [] for title in pure_team_titles}
+        for row in raw_players:
+            for title in row["team_title"].split(","):
+                if title in result:
+                    result[title].append(_parse_player(row))
+        return result
+    except (requests.RequestException, ValueError, KeyError):
+        return {}

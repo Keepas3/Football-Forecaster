@@ -10,16 +10,17 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from scipy.stats import poisson as poisson_dist
 
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
+from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.ingest.squad import fetch_squad_for_team
+from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.dixon_coles import tau as dixon_coles_tau
 from soccer_predictor.model.markets import MatchPrediction
-from soccer_predictor.model.scoreline_matrix import build_matrix
+from soccer_predictor.model.scoreline_matrix import DEFAULT_DISPERSION, build_matrix, marginal_pmf
 from soccer_predictor.model.standings import TeamStanding
 from soccer_predictor.model.team_facts import HeadToHeadRecord, TeamFacts
 
@@ -39,6 +40,26 @@ def season_not_yet_scheduled(league: League, season: str, today: dt.date | None 
         return False
     today = today if today is not None else dt.date.today()
     return int(season) > today.year
+
+
+def season_already_concluded(league: League, season: str, today: dt.date | None = None) -> bool:
+    """True for a single_year (tournament-style) league's season that's
+    already fully in the past -- e.g. browsing World Cup 1966 or Euro 1996
+    -- where there's obviously nothing "upcoming" to load, so telling the
+    user to run `refresh_live_data.py` (which only ever syncs the
+    current/next tournament) would be actionable-looking but pointless.
+    Domestic leagues (season_display="range") always have a continuously-
+    running current season, so this never applies to them; the
+    current/in-progress tournament year also doesn't count as concluded
+    even with no fixtures in the next 14 days, since more could still be
+    added as the tournament proceeds.
+
+    `today` defaults to the real current date; overridable for tests.
+    """
+    if league.season_display != "single_year":
+        return False
+    today = today if today is not None else dt.date.today()
+    return int(season) < today.year
 
 
 def league_option_label(league: League) -> str:
@@ -228,6 +249,7 @@ def style_standings(df: pd.DataFrame):
 LEADERBOARD_DISPLAY_COLUMNS = (
     "Team",
     "Attack",
+    "Attack (from results only)",
     "Defense (goals-conceded multiplier, lower is better)",
     "Net strength",
 )
@@ -237,17 +259,33 @@ def leaderboard_dataframe(params: DixonColesParams, team_names: dict[int, str]) 
     """Includes a `team_id` column for callers that need to map a selected
     row back to a team (e.g. clickable rankings) -- pass
     `column_order=LEADERBOARD_DISPLAY_COLUMNS` to st.dataframe to hide it.
+
+    "Attack" is current-form-adjusted (same
+    ingest.player_importance.resolve_current_attack_strength /
+    model.current_form_adjustment.adjust_for_current_attack_form used per-
+    fixture in prediction.service.predict_fixture, applied here per team
+    instead) -- identical to "Attack (from results only)" for any team with
+    no current-season stats coverage (UCL, WC, EURO) or no real signal
+    (early season, fetch failure). Net strength is sorted on the adjusted
+    value, so the ranking itself reflects the current-form signal too, not
+    just each fixture's own prediction.
     """
-    rows = [
-        {
-            "team_id": team_id,
-            "Team": team_names.get(team_id, f"team#{team_id}"),
-            "Attack": params.attack[team_id],
-            "Defense (goals-conceded multiplier, lower is better)": params.defense[team_id],
-            "Net strength": params.attack[team_id] - params.defense[team_id],
-        }
-        for team_id in params.attack
-    ]
+    rows = []
+    for team_id in params.attack:
+        base_attack = params.attack[team_id]
+        team_name = team_names.get(team_id, f"team#{team_id}")
+        relative_xg_strength = resolve_current_attack_strength(team_name, params.league_code)
+        adjusted_attack = adjust_for_current_attack_form(base_attack, relative_xg_strength)
+        rows.append(
+            {
+                "team_id": team_id,
+                "Team": team_name,
+                "Attack": adjusted_attack,
+                "Attack (from results only)": base_attack,
+                "Defense (goals-conceded multiplier, lower is better)": params.defense[team_id],
+                "Net strength": adjusted_attack - params.defense[team_id],
+            }
+        )
     return pd.DataFrame(rows).sort_values("Net strength", ascending=False).reset_index(drop=True)
 
 
@@ -644,6 +682,16 @@ def render_prediction_breakdown(
             "not a flat guess - see Team Detail's Injuries section for each flagged player's "
             "computed weight."
         )
+        if b.home_xg_relative_strength is not None or b.away_xg_relative_strength is not None:
+            st.write(
+                "Attack is also nudged (up to ±15%) by each team's own CURRENT-season attacking "
+                "output (goals + xG-weighted assists from Understat/American Soccer Analysis, "
+                "relative to their league's current average) - a team creating more/better chances "
+                "than their long-run historical rating implies gets a small boost, an "
+                "underperforming one gets a small cut. Attack-only: neither source has a "
+                "defensive stat to adjust defense with. Not shown/applied for a league with no "
+                "current-season stats coverage (e.g. UCL)."
+            )
         _render_squad_reference(session, league, home_team_id, home_name, away_team_id, away_name)
 
         st.markdown("**1. Team strength going into this match**")
@@ -655,7 +703,7 @@ def render_prediction_breakdown(
             with col:
                 st.markdown(f"**{name}**")
                 if attack != base_attack:
-                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries/form)")
+                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries/form/current stats)")
                 else:
                     col.write(f"Attack: **{attack:.3f}**")
                 if defense != base_defense:
@@ -677,12 +725,16 @@ def render_prediction_breakdown(
         st.latex(r"\lambda_{away} = \text{attack}_{away} \times \text{defense}_{home}")
         st.write(f"= {b.away_attack:.3f} × {b.home_defense:.3f} = **{b.lambda_away:.3f} expected goals**")
 
-        st.markdown("**3. Poisson probability for each possible scoreline**")
+        st.markdown("**3. Goal probability for each possible scoreline**")
         st.latex(r"P(\text{goals} = k) = \frac{e^{-\lambda}\,\lambda^{k}}{k!}")
         st.write(
-            "Applied independently to home goals (using λ_home) and away goals (using λ_away), "
-            "then multiplied together for the joint probability of every home-away combination "
-            "(0-0, 1-0, 0-1, 1-1, 2-0, ...)."
+            "The Poisson formula above is the starting shape, but a plain Poisson pins the "
+            "variance equal to the mean (λ) - real scorelines are more spread out than that, so "
+            "genuine blowouts (5-0, etc.) come out rarer than they really are. This app widens "
+            f"the tail with a negative binomial instead (same mean λ, more variance; dispersion = "
+            f"{DEFAULT_DISPERSION:g} - lower would mean an even fatter tail), applied independently "
+            "to home goals (using λ_home) and away goals (using λ_away), then multiplied together "
+            "for the joint probability of every home-away combination (0-0, 1-0, 0-1, 1-1, 2-0, ...)."
         )
 
         st.markdown("**4. Dixon-Coles low-score correction (τ)**")
@@ -702,13 +754,19 @@ def render_prediction_breakdown(
 
         st.markdown("**5. Worked example: the model's single most likely scoreline**")
         h, a, _ = prediction.top_scorelines[0]
-        p_h = float(poisson_dist.pmf(h, b.lambda_home))
-        p_a = float(poisson_dist.pmf(a, b.lambda_away))
+        p_h = float(marginal_pmf(np.array([h]), b.lambda_home, DEFAULT_DISPERSION)[0])
+        p_a = float(marginal_pmf(np.array([a]), b.lambda_away, DEFAULT_DISPERSION)[0])
         tau_val = float(dixon_coles_tau(np.array([h]), np.array([a]), b.rho)[0])
         raw_joint = p_h * p_a * tau_val
         matrix = build_matrix(b.lambda_home, b.lambda_away, b.rho)
-        st.write(f"P({home_name} scores {h}) = e^(−{b.lambda_home:.3f}) × {b.lambda_home:.3f}^{h} / {h}! = **{p_h:.4f}**")
-        st.write(f"P({away_name} scores {a}) = e^(−{b.lambda_away:.3f}) × {b.lambda_away:.3f}^{a} / {a}! = **{p_a:.4f}**")
+        st.write(
+            f"P({home_name} scores {h}) = negative-binomial(k={h}, mean=λ_home={b.lambda_home:.3f}, "
+            f"dispersion={DEFAULT_DISPERSION:g}) = **{p_h:.4f}**"
+        )
+        st.write(
+            f"P({away_name} scores {a}) = negative-binomial(k={a}, mean=λ_away={b.lambda_away:.3f}, "
+            f"dispersion={DEFAULT_DISPERSION:g}) = **{p_a:.4f}**"
+        )
         st.write(f"τ({h}-{a}, ρ={b.rho:.3f}) = **{tau_val:.3f}**")
         st.write(f"Joint (before normalizing) = {p_h:.4f} × {p_a:.4f} × {tau_val:.3f} = {raw_joint:.5f}")
         st.write(

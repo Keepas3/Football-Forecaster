@@ -20,6 +20,7 @@ from soccer_predictor.ingest import understat_client
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
+    find_archive_player,
     find_asa_player,
     find_understat_player,
     resolve_team_historical_stats,
@@ -29,11 +30,15 @@ from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import team_crests_for_league
 
 
-def _season_label(season: int) -> str:
+def _season_label(season, single_year: bool = False) -> str:
     # 2024 -> "2024/25" -- duplicated from team_detail.py's own private
     # one-liner rather than shared, consistent with this codebase's existing
     # tolerance for small view-local formatting helpers (home.py has its
     # own separately-defined _season_label too, with a different signature).
+    # single_year=True (World Cup/Euro -- the season code IS the year, see
+    # League.season_display) just returns the plain year unchanged.
+    if single_year:
+        return str(season)
     return f"{season}/{str(season + 1)[2:]}"
 
 
@@ -168,9 +173,10 @@ def render() -> None:
         st.caption(f"{current_season_row.minutes} minutes played this season ({current_season_source}).")
 
     st.markdown("**Player Stats (Historical)**")
-    if league.code not in understat_client.UNDERSTAT_LEAGUE_SLUG and league.code != "MLS":
-        # No stats source at all for this competition -- see
-        # team_detail.py's matching branch for why.
+    is_archive_league = league.code in ("WC", "EURO")
+    if league.code not in understat_client.UNDERSTAT_LEAGUE_SLUG and league.code != "MLS" and not is_archive_league:
+        # No stats source at all for this competition (currently just UCL)
+        # -- see team_detail.py's matching branch for why.
         st.caption("No historical player-stats source is available for this competition.")
         return
 
@@ -179,14 +185,22 @@ def render() -> None:
     # reasoning as Team Detail's own historical stats section.
     stats_shown_key = f"players_show_historical_{league.code}_{selection.team_id}_{player.name}"
     stats_shown = st.session_state.get(stats_shown_key, False)
-    season_options = (
-        understat_client.UNDERSTAT_AVAILABLE_SEASONS
-        if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG
-        else ASA_AVAILABLE_SEASONS
-    )
+    if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG:
+        season_options = understat_client.UNDERSTAT_AVAILABLE_SEASONS
+    elif league.code == "MLS":
+        season_options = ASA_AVAILABLE_SEASONS
+    else:
+        # WC/EURO: real tournament years, not a live source's own
+        # available-seasons range.
+        season_options = league.seasons
 
     if not stats_shown:
-        st.caption("Sourced from Understat or American Soccer Analysis (keyless, any season).")
+        source_caption = (
+            "Sourced from a static historical archive (goals only)."
+            if is_archive_league
+            else "Sourced from Understat or American Soccer Analysis (keyless, any season)."
+        )
+        st.caption(source_caption)
         if st.button("Load player stats", key=f"players_load_stats_btn_{selection.team_id}_{player.name}"):
             st.session_state[stats_shown_key] = True
             stats_shown = True
@@ -199,22 +213,33 @@ def render() -> None:
         season = season_col.selectbox(
             "Season",
             options=list(reversed(season_options)),
-            format_func=_season_label,
+            format_func=lambda s: _season_label(s, single_year=is_archive_league),
             key="players_stats_season",
         )
-        source, team_historical_players = resolve_team_historical_stats(selection.team_name, league.code, season)
+        with session_scope() as session:
+            source, team_historical_players = resolve_team_historical_stats(
+                selection.team_name, league.code, season, session=session
+            )
 
         if source == "understat":
             historical_row = find_understat_player(player.name, team_historical_players)
-        else:
+        elif source == "asa":
             historical_row = find_asa_player(player.name, team_historical_players)
+        else:  # source == "archive"
+            historical_row = find_archive_player(player.name, team_historical_players)
 
         if historical_row is None:
-            source_name = "American Soccer Analysis" if source == "asa" else "Understat"
-            st.info(
-                f"No stats found for this player/season ({_season_label(season)}) from "
-                f"{source_name}."
+            source_name = {"asa": "American Soccer Analysis", "archive": "the historical archive"}.get(
+                source, "Understat"
             )
+            st.info(
+                f"No stats found for this player/season "
+                f"({_season_label(season, single_year=is_archive_league)}) from {source_name}."
+            )
+        elif source == "archive":
+            stat_cols = st.columns(2)
+            stat_cols[0].metric("Goals", historical_row.goals)
+            stat_cols[1].metric("Own goals", historical_row.own_goals)
         elif source == "understat":
             st.caption("Understat - no saves/tackles/rating (goalkeeper stats) available.")
             stat_cols = st.columns(4)

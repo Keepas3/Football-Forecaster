@@ -104,6 +104,27 @@ def seed_teams_from_espn(session: Session, league: League) -> int:
     return count
 
 
+def seed_teams_from_names(session: Session, league_code: str, team_names: set[str]) -> int:
+    """Populates teams/aliases for a league whose team names come straight
+    from a static archive source (World Cup/Euro historical data -- see
+    ingest/worldcup_archive.py, ingest/euro_archive.py) rather than
+    config/team_aliases.yaml or a live API's own team-list endpoint.
+
+    Each name becomes both its canonical_name and its "csv" alias, matching
+    historical_csv.py's own alias source convention -- resolve(source="csv",
+    ...) then exact-matches immediately once this has run. This bootstrap
+    step is required: resolve()'s fuzzy fallback needs at least one existing
+    alias to fuzzy-match against, so it can never seed a brand-new league
+    from nothing on its own (see resolve()'s own docstring).
+    """
+    count = 0
+    for name in sorted(team_names):
+        team = get_or_create_team(session, name, league_code)
+        upsert_team_alias(session, team, name, source="csv")
+        count += 1
+    return count
+
+
 class UnresolvedTeamName(Exception):
     def __init__(self, name: str, source: str, best_match: str | None, score: float | None):
         self.name = name

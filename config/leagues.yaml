@@ -82,10 +82,19 @@ leagues:
   - code: WC
     name: FIFA World Cup
     api_competition_id: 2000
-    # Held every 4 years -- 2022 already finished; 2026 has no zones since
-    # the group/knockout qualification math varies by tournament format
-    # (48 teams from 2026 onward, top-2-per-group plus best third-placed).
-    seasons: ["2022", "2026", "2030"]
+    # Historical match + goal-scorer data (1930-2022) comes from a static
+    # archive (see ingest/worldcup_archive.py -- jfjelstul/worldcup,
+    # CC-BY-SA 4.0), not football-data.org: confirmed live that
+    # football-data.org's free tier 403s on every historical WC season,
+    # even the most recently concluded one. "2026"/"2030" (the
+    # current/next tournament, no archive data yet) still go through the
+    # existing football-data.org live-fixture path unchanged -- 2026 has no
+    # zones since the group/knockout qualification math varies by
+    # tournament format (48 teams from 2026 onward, top-2-per-group plus
+    # best third-placed).
+    data_source: archive_worldcup
+    trainable: true
+    seasons: ["1930", "1934", "1938", "1950", "1954", "1958", "1962", "1966", "1970", "1974", "1978", "1982", "1986", "1990", "1994", "1998", "2002", "2006", "2010", "2014", "2018", "2022", "2026", "2030"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"
@@ -105,7 +114,16 @@ leagues:
   - code: EURO
     name: European Championship
     api_competition_id: 2018
-    seasons: ["2024", "2028"]
+    # Historical match data (1960-2024) comes from a static archive (see
+    # ingest/euro_archive.py -- openfootball/euro, CC0), same reasoning as
+    # WC above. Goal-scorer detail from this source is genuinely
+    # inconsistent tournament to tournament (confirmed live) -- shown where
+    # it exists, nothing fabricated where it doesn't. "2028" (the next
+    # tournament) still goes through the existing football-data.org
+    # live-fixture path unchanged.
+    data_source: archive_euro
+    trainable: true
+    seasons: ["1960", "1964", "1968", "1972", "1976", "1980", "1984", "1988", "1992", "1996", "2000", "2004", "2008", "2012", "2016", "2020", "2024", "2028"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"

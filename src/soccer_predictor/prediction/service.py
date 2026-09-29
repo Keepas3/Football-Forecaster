@@ -14,6 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import load_manual_injuries
+from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
+from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.form_adjustment import FormNoteEntry, adjust_for_form
 from soccer_predictor.model.injury_adjustment import InjuryEntry, adjust_strength
@@ -127,6 +129,11 @@ def predict_fixture(
     away_attack, away_defense = adjust_strength(base_away_attack, base_away_defense, away_injuries)
     away_attack, away_defense = adjust_for_form(away_attack, away_defense, away_form)
 
+    home_xg_relative_strength = resolve_current_attack_strength(home_team_name, params.league_code)
+    away_xg_relative_strength = resolve_current_attack_strength(away_team_name, params.league_code)
+    home_attack = adjust_for_current_attack_form(home_attack, home_xg_relative_strength)
+    away_attack = adjust_for_current_attack_form(away_attack, away_xg_relative_strength)
+
     lambda_home = home_attack * away_defense * params.home_advantage
     lambda_away = away_attack * home_defense
 
@@ -148,5 +155,7 @@ def predict_fixture(
         n_matches=params.n_matches,
         fitted_at=params.fitted_at,
         xi=params.xi,
+        home_xg_relative_strength=home_xg_relative_strength,
+        away_xg_relative_strength=away_xg_relative_strength,
     )
     return prediction

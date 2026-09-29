@@ -149,20 +149,59 @@ def fetch_team_season(our_team_name: str, season: int) -> list[AsaPlayerStats]:
             bio = players_by_id.get(row.get("player_id"))
             if bio is None:
                 continue
-            results.append(
-                AsaPlayerStats(
-                    name=bio["player_name"],
-                    position=row.get("general_position") or bio.get("primary_general_position"),
-                    minutes=int(row.get("minutes_played") or 0),
-                    goals=int(row.get("goals") or 0),
-                    assists=int(row.get("primary_assists") or 0),
-                    xg=float(row.get("xgoals") or 0),
-                    xa=float(row.get("xassists") or 0),
-                    shots=int(row.get("shots") or 0),
-                    key_passes=int(row.get("key_passes") or 0),
-                    points_added=float(row.get("points_added") or 0),
-                )
-            )
+            results.append(_parse_stat_row(row, bio))
         return results
     except (requests.RequestException, ValueError, KeyError):
         return []
+
+
+def _parse_stat_row(row: dict, bio: dict) -> AsaPlayerStats:
+    return AsaPlayerStats(
+        name=bio["player_name"],
+        position=row.get("general_position") or bio.get("primary_general_position"),
+        minutes=int(row.get("minutes_played") or 0),
+        goals=int(row.get("goals") or 0),
+        assists=int(row.get("primary_assists") or 0),
+        xg=float(row.get("xgoals") or 0),
+        xa=float(row.get("xassists") or 0),
+        shots=int(row.get("shots") or 0),
+        key_passes=int(row.get("key_passes") or 0),
+        points_added=float(row.get("points_added") or 0),
+    )
+
+
+def fetch_all_teams_totals(season: int) -> dict[str, list[AsaPlayerStats]]:
+    """Every ASA-tracked MLS team's players for `season`, keyed by ASA's own
+    `team_name` -- lets a caller build a league-wide baseline (see
+    ingest/player_importance.py::resolve_current_attack_strength). Unlike
+    Understat's league-wide endpoint, ASA's `/xgoals` stats are scoped
+    server-side per `team_id` -- there's no single whole-league call, so
+    this makes one request per MLS team (~29). Each is disk-cached 24h same
+    as fetch_team_season, so this is only ever slow on a cold cache; a
+    keyless API with no daily quota, unlike the old API-Football, so the
+    extra calls cost nothing but time. Empty dict on any failure.
+    """
+    try:
+        teams = _fetch_all_teams()
+        if not teams:
+            return {}
+        players_by_id = {p["player_id"]: p for p in _fetch_all_players()}
+
+        result: dict[str, list[AsaPlayerStats]] = {}
+        for team in teams:
+            team_id = team["team_id"]
+            stat_rows = _get_cached_json(
+                f"xgoals:{team_id}:{season}",
+                f"{BASE_URL}/mls/players/xgoals",
+                {"season_name": season, "team_id": team_id, "minimum_minutes": 1},
+            )
+            players = []
+            for row in stat_rows:
+                bio = players_by_id.get(row.get("player_id"))
+                if bio is None:
+                    continue
+                players.append(_parse_stat_row(row, bio))
+            result[team["team_name"]] = players
+        return result
+    except (requests.RequestException, ValueError, KeyError):
+        return {}

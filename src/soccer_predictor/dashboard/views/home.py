@@ -26,6 +26,7 @@ from soccer_predictor.dashboard.components import (
     live_sync_requirement_note,
     render_head_to_head,
     render_prediction_breakdown,
+    season_already_concluded,
     season_not_yet_scheduled,
     standings_dataframe,
     style_fixture_predictions,
@@ -227,6 +228,8 @@ def render() -> None:
         if upcoming_fixtures_df.empty:
             if season_not_yet_scheduled(league, season):
                 st.info(f"{league.name} {season} hasn't been scheduled yet - check back closer to the tournament.")
+            elif season_already_concluded(league, season):
+                st.caption(f"{league.name} {season} has already concluded - no upcoming matches.")
             else:
                 st.info(
                     f"No upcoming Matches loaded for {league.name}. Run "

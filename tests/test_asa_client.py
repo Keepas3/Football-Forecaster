@@ -183,6 +183,59 @@ def test_asa_available_seasons_starts_at_2013_and_includes_current_year():
     assert dt.date.today().year in seasons
 
 
+def test_fetch_all_teams_totals_makes_one_xgoals_call_per_team(monkeypatch):
+    calls = []
+    atl_rows = XGOALS_ROWS
+    lafc_rows = [
+        {
+            "player_id": "p1",
+            "team_id": "LAFC1",
+            "minutes_played": 1000,
+            "shots": 30,
+            "goals": 10,
+            "xgoals": 8.0,
+            "key_passes": 5,
+            "primary_assists": 2,
+            "xassists": 1.5,
+            "points_added": 1.0,
+        }
+    ]
+
+    def fake_get_cached_json(cache_key, url, params):
+        if url.endswith("/mls/teams"):
+            return TEAMS
+        if url.endswith("/mls/players"):
+            return PLAYERS
+        if url.endswith("/mls/players/xgoals"):
+            calls.append(params["team_id"])
+            return atl_rows if params["team_id"] == "ATL1" else lafc_rows
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(asa_client, "_get_cached_json", fake_get_cached_json)
+
+    result = asa_client.fetch_all_teams_totals(2026)
+
+    assert set(result) == {"Atlanta United FC", "Los Angeles FC"}
+    assert {p.name for p in result["Atlanta United FC"]} == {"Star Striker", "Backup Forward"}
+    assert {p.name for p in result["Los Angeles FC"]} == {"Star Striker"}
+    assert sorted(calls) == ["ATL1", "LAFC1"]
+
+
+def test_fetch_all_teams_totals_no_teams_returns_empty(monkeypatch):
+    _stub_fetches(monkeypatch, teams=[])
+
+    assert asa_client.fetch_all_teams_totals(2026) == {}
+
+
+def test_fetch_all_teams_totals_network_error_returns_empty(monkeypatch):
+    def raise_error(*a, **k):
+        raise requests.RequestException("network down")
+
+    monkeypatch.setattr(asa_client, "_fetch_all_teams", raise_error)
+
+    assert asa_client.fetch_all_teams_totals(2026) == {}
+
+
 def test_fetch_team_season_network_error_returns_empty(monkeypatch):
     def raise_error(*a, **k):
         raise requests.RequestException("network down")

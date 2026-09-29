@@ -10,6 +10,7 @@ from soccer_predictor.dashboard.components import (
     _predicted_outcome_styles,
     fixture_columns_with_kickoff_first,
     format_kickoff,
+    season_already_concluded,
     season_not_yet_scheduled,
     style_fixture_predictions,
 )
@@ -178,3 +179,18 @@ def test_season_not_yet_scheduled_false_for_range_display_leagues():
     # this must never apply to season_display="range" leagues, even for a
     # nominally "future" season code like next year's.
     assert season_not_yet_scheduled(_EPL, "2627", today=dt.date(2026, 9, 27)) is False
+
+
+def test_season_already_concluded_true_for_past_tournament_year():
+    assert season_already_concluded(_EURO, "1996", today=dt.date(2026, 9, 27)) is True
+
+
+def test_season_already_concluded_false_for_current_or_future_tournament_year():
+    # The in-progress tournament year isn't "concluded" even with nothing
+    # upcoming in the next 14 days -- more fixtures could still be added.
+    assert season_already_concluded(_EURO, "2024", today=dt.date(2024, 1, 1)) is False
+    assert season_already_concluded(_EURO, "2028", today=dt.date(2026, 9, 27)) is False
+
+
+def test_season_already_concluded_false_for_range_display_leagues():
+    assert season_already_concluded(_EPL, "1516", today=dt.date(2026, 9, 27)) is False

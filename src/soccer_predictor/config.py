@@ -63,18 +63,25 @@ class League:
     # football-data.org (api_competition_id). "espn": from ESPN's public,
     # keyless site.api.espn.com endpoints instead (ingest/espn_client.py) --
     # used for leagues football-data.org doesn't cover at all, e.g. MLS.
+    # "archive_worldcup"/"archive_euro": HISTORICAL match/goal data comes
+    # from a static archive (ingest/worldcup_archive.py,
+    # ingest/euro_archive.py) instead -- football-data.org's free tier 403s
+    # on every past WC/EURO season. These two still keep api_competition_id
+    # set and go through the normal football-data.org path for their
+    # current/next (not-yet-archived) tournament's live fixtures.
     data_source: str = "football_data_org"
     # Only meaningful when data_source == "espn" -- ESPN's own league slug,
     # e.g. "usa.1" for MLS (verified live against site.api.espn.com; no
     # documented, stable list of these exists).
     espn_league_slug: str | None = None
     # Explicit opt-in for a league with a real historical-match source that
-    # ISN'T a football-data.co.uk CSV (e.g. MLS via ESPN) -- see
-    # supports_predictions. Defaults to False so every existing league's
-    # behavior is unchanged unless a league's config explicitly sets this;
-    # UEFA Champions League/Euros/World Cup deliberately leave it False even
-    # though they also have a non-CSV live-API match history, since a
-    # trained model was never wanted for them.
+    # ISN'T a football-data.co.uk CSV (e.g. MLS via ESPN, World Cup/Euro via
+    # their static archives -- see data_source) -- see supports_predictions.
+    # Defaults to False so every existing league's behavior is unchanged
+    # unless a league's config explicitly sets this. UEFA Champions League
+    # deliberately leaves it False -- confirmed no real per-match history
+    # exists for its current 36-team league-phase format (see its own
+    # config/leagues.yaml comment), unlike WC/EURO/MLS.
     trainable: bool = False
 
     @property

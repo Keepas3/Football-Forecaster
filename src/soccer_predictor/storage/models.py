@@ -160,6 +160,36 @@ class FittedParams(Base):
     time_window_desc: Mapped[str] = mapped_column(String, default="")
 
 
+class HistoricalTournamentGoal(Base):
+    """One goal from a static tournament archive (World Cup via
+    ingest/worldcup_archive.py, Euro via ingest/euro_archive.py) -- goals
+    only, not full appearances/lineups, since goals are what the dashboard's
+    star-badge/top-scorer display already surfaces first (see
+    dashboard/components.py::compute_top_scorer_and_assister) and neither
+    archive source has reliable assist data anyway.
+
+    Unlike Match/Fixture, re-ingesting a (league_code, season) fully
+    replaces its rows (see storage/repository.py::replace_historical_tournament_goals)
+    rather than upserting row-by-row -- these archives never change once
+    downloaded, so a re-run only ever means "the parser logic changed."
+    """
+
+    __tablename__ = "historical_tournament_goals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    league_code: Mapped[str] = mapped_column(String, index=True)
+    season: Mapped[str] = mapped_column(String, index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), index=True)
+    player_name: Mapped[str] = mapped_column(String)
+    # Regulation minute only (stoppage-time added-on ignored) -- None when
+    # the source didn't record one for this goal.
+    minute: Mapped[int | None] = mapped_column(nullable=True, default=None)
+    match_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, default=None)
+    own_goal: Mapped[bool] = mapped_column(default=False)
+    penalty: Mapped[bool] = mapped_column(default=False)
+    source: Mapped[str] = mapped_column(String)  # "worldcup_archive" | "euro_archive"
+
+
 class PredictionRecord(Base):
     """A prediction locked in the first time a fixture was seen as upcoming
     with a trained model available -- never overwritten, even if the model

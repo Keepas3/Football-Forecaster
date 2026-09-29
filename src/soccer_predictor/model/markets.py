@@ -36,6 +36,15 @@ class PredictionBreakdown:
     n_matches: int  # matches used in the league-wide fit (every team, not just these two)
     fitted_at: str  # ISO timestamp of that fit
     xi: float  # time-decay rate -- higher means older results count for less
+    # Each team's current-season attacking output (goals + xG-weighted
+    # assists) relative to their league's current average, via
+    # ingest/player_importance.py::resolve_current_attack_strength -- 1.0
+    # means "right at the league average," None means no coverage/no
+    # signal (see model/current_form_adjustment.py). This is what's
+    # already folded into *_attack above; kept here too so the dashboard
+    # can name the adjustment explicitly rather than leaving it opaque.
+    home_xg_relative_strength: float | None = None
+    away_xg_relative_strength: float | None = None
 
 
 @dataclass

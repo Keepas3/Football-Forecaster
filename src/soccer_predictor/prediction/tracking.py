@@ -42,8 +42,13 @@ SNAPSHOT_WINDOW_DAYS = 365
 
 def snapshot_upcoming_predictions(session: Session, league: League, params: DixonColesParams) -> int:
     """Locks in a prediction for every fixture in `league` that doesn't
-    already have one. Returns how many new snapshots were created. Cheap --
-    predict_fixture is pure local computation, no external API calls.
+    already have one. Returns how many new snapshots were created.
+    predict_fixture may fetch current-season stats (Understat/American
+    Soccer Analysis, see model/current_form_adjustment.py) for leagues
+    those cover -- disk-cached 24h, so only the first fixture per league
+    in a given run costs a real fetch; every other lookup in this loop
+    hits the same warm cache. Degrades to no adjustment (never raises) if
+    that fetch fails, same contract as every other adjustment here.
     """
     team_names = teams_for_league(session, league.code)
     today = dt.date.today()

@@ -30,6 +30,7 @@ from soccer_predictor.dashboard.components import (
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
+    resolve_current_attack_strength,
     resolve_team_goals_and_assists,
     resolve_team_historical_stats,
 )
@@ -39,6 +40,7 @@ from soccer_predictor.ingest.understat_client import (
     UNDERSTAT_LEAGUE_SLUG,
     fetch_team_season,
 )
+from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
 from soccer_predictor.model.injury_adjustment import adjust_strength
 from soccer_predictor.model.team_facts import compute_head_to_head, compute_team_facts
 from soccer_predictor.prediction.service import (
@@ -68,8 +70,12 @@ _POSITION_ORDER = {
 }
 
 
-def _season_label(season: int) -> str:
-    # 2024 -> "2024/25"
+def _season_label(season, single_year: bool = False) -> str:
+    # 2024 -> "2024/25" -- but for a single_year league (e.g. World Cup,
+    # Euro: the season code IS the year, see League.season_display), just
+    # the plain year, unchanged: "1966" -> "1966", not "1966/67".
+    if single_year:
+        return str(season)
     return f"{season}/{str(season + 1)[2:]}"
 
 
@@ -191,10 +197,13 @@ def render() -> None:
                 f"`uv run python scripts/run_training.py {team_league_code}` first."
             )
     else:
-        st.write(
-            f"Attack **{params.attack[team_id]:.2f}** · "
-            f"Defense **{params.defense[team_id]:.2f}** (lower is better)"
-        )
+        relative_xg_strength = resolve_current_attack_strength(team_canonical_name, team_league_code)
+        current_attack = adjust_for_current_attack_form(params.attack[team_id], relative_xg_strength)
+        if current_attack != params.attack[team_id]:
+            attack_display = f"{params.attack[team_id]:.2f} → **{current_attack:.2f}** (current-form adjusted)"
+        else:
+            attack_display = f"**{current_attack:.2f}**"
+        st.write(f"Attack {attack_display} · Defense **{params.defense[team_id]:.2f}** (lower is better)")
         render_team_rating_breakdown(params, team_id, team_canonical_name, recent_df)
 
     st.subheader("Upcoming schedule")
@@ -379,13 +388,15 @@ def render() -> None:
                 st.dataframe(filtered_rows, use_container_width=True, hide_index=True, height=squad_height)
 
     st.subheader("Player Stats (Historical)")
+    is_archive_league = team_league_code in ("WC", "EURO")
     if league is None:
         st.caption("Stats unavailable.")
-    elif team_league_code not in UNDERSTAT_LEAGUE_SLUG and team_league_code != "MLS":
-        # No stats source at all for this competition -- Understat only
-        # covers 5 domestic leagues, American Soccer Analysis only MLS.
-        # API-Football used to fill this gap for UCL/EURO/WC but that
-        # account is gone, not just suspended -- nothing left to try.
+    elif team_league_code not in UNDERSTAT_LEAGUE_SLUG and team_league_code != "MLS" and not is_archive_league:
+        # No stats source at all for this competition (currently just UCL)
+        # -- Understat only covers 5 domestic leagues, American Soccer
+        # Analysis only MLS, the World Cup/Euro archives only those two.
+        # API-Football used to fill this gap but that account is gone, not
+        # just suspended -- nothing left to try.
         st.caption("No historical player-stats source is available for this competition.")
     else:
         # Gated behind an explicit click -- keyless, but still a real fetch
@@ -394,10 +405,22 @@ def render() -> None:
         # team doesn't inherit "already loaded" from the last one.
         stats_shown_key = f"show_historical_stats_{team_id}"
         stats_shown = st.session_state.get(stats_shown_key, False)
-        season_options = UNDERSTAT_AVAILABLE_SEASONS if team_league_code in UNDERSTAT_LEAGUE_SLUG else ASA_AVAILABLE_SEASONS
+        if team_league_code in UNDERSTAT_LEAGUE_SLUG:
+            season_options = UNDERSTAT_AVAILABLE_SEASONS
+        elif team_league_code == "MLS":
+            season_options = ASA_AVAILABLE_SEASONS
+        else:
+            # WC/EURO: real tournament years, not a live source's own
+            # available-seasons range.
+            season_options = league.seasons
 
         if not stats_shown:
-            st.caption("Sourced from Understat or American Soccer Analysis (keyless, any season).")
+            source_caption = (
+                "Sourced from a static historical archive (goals only)."
+                if is_archive_league
+                else "Sourced from Understat or American Soccer Analysis (keyless, any season)."
+            )
+            st.caption(source_caption)
             if st.button("Load player stats", key=f"load_stats_btn_{team_id}"):
                 st.session_state[stats_shown_key] = True
                 stats_shown = True
@@ -410,18 +433,30 @@ def render() -> None:
             season = season_col.selectbox(
                 "Season",
                 options=list(reversed(season_options)),
-                format_func=_season_label,
+                format_func=lambda s: _season_label(s, single_year=is_archive_league),
                 key="team_detail_stats_season",
             )
-            source, historical_players = resolve_team_historical_stats(team_canonical_name, team_league_code, season)
+            with session_scope() as session:
+                source, historical_players = resolve_team_historical_stats(
+                    team_canonical_name, team_league_code, season, session=session
+                )
 
             if not historical_players:
-                source_name = "American Soccer Analysis" if source == "asa" else "Understat"
-                st.info(
-                    f"No stats found for this team/season ({_season_label(season)}) from "
-                    f"{source_name} - this team may not be resolvable against its team list "
-                    "for that season."
+                source_name = {"asa": "American Soccer Analysis", "archive": "the historical archive"}.get(
+                    source, "Understat"
                 )
+                st.info(
+                    f"No stats found for this team/season "
+                    f"({_season_label(season, single_year=is_archive_league)}) from {source_name} - this "
+                    "team may not be resolvable against its team list for that season."
+                )
+            elif source == "archive":
+                stats_rows = [
+                    {"Name": p.name, "Goals": p.goals, "Own goals": p.own_goals}
+                    for p in sorted(historical_players, key=lambda p: (-p.goals, p.name))
+                ]
+                stats_height = 35 * (len(stats_rows) + 1) + 3
+                st.dataframe(stats_rows, use_container_width=True, hide_index=True, height=stats_height)
             elif source == "understat":
                 st.caption("Understat - current-season-capable, but no saves/tackles/rating (goalkeeper stats).")
                 render_star_players(historical_players)
