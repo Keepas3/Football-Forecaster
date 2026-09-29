@@ -151,14 +151,25 @@ def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list
         if not raw_players:
             return []
 
-        team_titles = list({row["team_title"] for row in raw_players})
-        match = process.extractOne(our_team_name, team_titles, scorer=fuzz.WRatio)
+        # Understat gives a player who transferred mid-season a combined
+        # team_title like "Chelsea,Manchester City" -- exclude those from
+        # the fuzzy-match candidates (a real club's title never has a
+        # comma), otherwise a short query like "Man City" can tie-score
+        # against "Chelsea,Manchester City" and get matched to that instead
+        # of the real "Manchester City" (confirmed live: this returned a
+        # single Chelsea-turned-City player instead of the real ~19-man
+        # squad). Row selection below still catches mid-season arrivals by
+        # checking each comma-separated part, not exact equality.
+        pure_team_titles = [t for t in {row["team_title"] for row in raw_players} if "," not in t]
+        match = process.extractOne(our_team_name, pure_team_titles, scorer=fuzz.WRatio)
         if match is None:
             return []
         matched_title, score, _ = match
         if score < TEAM_NAME_FUZZY_THRESHOLD:
             return []
 
-        return [_parse_player(row) for row in raw_players if row["team_title"] == matched_title]
+        return [
+            _parse_player(row) for row in raw_players if matched_title in row["team_title"].split(",")
+        ]
     except (requests.RequestException, ValueError, KeyError):
         return []

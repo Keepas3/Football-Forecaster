@@ -42,6 +42,27 @@ def test_fetch_team_season_fuzzy_matches_team_name(monkeypatch):
     assert {p.name for p in players} == {"Erling Haaland"}
 
 
+def test_fetch_team_season_includes_mid_season_transfers_not_just_pure_title(monkeypatch):
+    # Regression test: a player who transferred mid-season gets a combined
+    # Understat team_title like "Chelsea,Manchester City" -- confirmed live
+    # this used to make a short query like "Man City" tie-score against
+    # that combined title over the real "Manchester City", returning ONLY
+    # the transferred player instead of the whole real squad.
+    rows = [
+        _row("Erling Haaland", "Manchester City", goals=25, assists=3, xg=22.1, xa=2.4, minutes=2900),
+        _row("Phil Foden", "Manchester City", goals=10, assists=5, xg=9.0, xa=4.0, minutes=2500),
+        _row("Enzo Fernandez", "Chelsea,Manchester City", goals=1, assists=0, xg=0.5, xa=0.1, minutes=270),
+        _row("Someone Else", "Chelsea", goals=8, assists=2, xg=7.0, xa=1.5, minutes=2000),
+    ]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+
+    players = understat_client.fetch_team_season("Man City", "EPL", 2026)
+
+    names = {p.name for p in players}
+    assert names == {"Erling Haaland", "Phil Foden", "Enzo Fernandez"}
+    assert "Someone Else" not in names
+
+
 def test_fetch_team_season_parses_numeric_fields(monkeypatch):
     monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: LEAGUE_ROWS)
 
