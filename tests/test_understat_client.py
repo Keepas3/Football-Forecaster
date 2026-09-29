@@ -5,7 +5,23 @@ import requests
 from soccer_predictor.ingest import understat_client
 
 
-def _row(name, team, goals=0, assists=0, xg=0.0, xa=0.0, minutes=0, position="F"):
+def _row(
+    name,
+    team,
+    goals=0,
+    assists=0,
+    xg=0.0,
+    xa=0.0,
+    minutes=0,
+    position="F",
+    games=0,
+    shots=0,
+    key_passes=0,
+    yellow_cards=0,
+    red_cards=0,
+    npg=0,
+    npxg=0.0,
+):
     return {
         "player_name": name,
         "team_title": team,
@@ -15,6 +31,13 @@ def _row(name, team, goals=0, assists=0, xg=0.0, xa=0.0, minutes=0, position="F"
         "assists": str(assists),
         "xG": str(xg),
         "xA": str(xa),
+        "games": str(games),
+        "shots": str(shots),
+        "key_passes": str(key_passes),
+        "yellow_cards": str(yellow_cards),
+        "red_cards": str(red_cards),
+        "npg": str(npg),
+        "npxG": str(npxg),
     }
 
 
@@ -73,6 +96,38 @@ def test_fetch_team_season_parses_numeric_fields(monkeypatch):
     assert saka.xg == 10.5
     assert saka.xa == 6.2
     assert saka.minutes == 2200
+
+
+def test_fetch_team_season_parses_extended_fields(monkeypatch):
+    rows = [
+        _row(
+            "Erling Haaland",
+            "Manchester City",
+            goals=25,
+            assists=3,
+            xg=22.1,
+            xa=2.4,
+            minutes=2900,
+            games=30,
+            shots=90,
+            key_passes=10,
+            yellow_cards=2,
+            red_cards=0,
+            npg=22,
+            npxg=19.5,
+        )
+    ]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+
+    haaland = understat_client.fetch_team_season("Manchester City", "EPL", 2026)[0]
+
+    assert haaland.appearances == 30
+    assert haaland.shots == 90
+    assert haaland.key_passes == 10
+    assert haaland.yellow_cards == 2
+    assert haaland.red_cards == 0
+    assert haaland.non_penalty_goals == 22
+    assert haaland.non_penalty_xg == 19.5
 
 
 def test_fetch_team_season_unmapped_league_returns_empty_without_fetching(monkeypatch):

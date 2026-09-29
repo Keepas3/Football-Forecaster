@@ -196,12 +196,21 @@ def render() -> None:
                 "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
             )
         elif source == "understat":
-            st.caption("Understat - goals/assists/xG/xA/minutes only (no saves/tackles/cards/rating).")
+            st.caption("Understat - no saves/tackles/rating (goalkeeper stats) available.")
             stat_cols = st.columns(4)
-            stat_cols[0].metric("Goals", historical_row.goals)
-            stat_cols[1].metric("Assists", historical_row.assists)
-            stat_cols[2].metric("xG", f"{historical_row.xg:.2f}")
-            stat_cols[3].metric("xA", f"{historical_row.xa:.2f}")
+            stat_cols[0].metric("Appearances", historical_row.appearances)
+            stat_cols[1].metric("Goals", historical_row.goals)
+            stat_cols[2].metric("Assists", historical_row.assists)
+            stat_cols[3].metric("Shots", historical_row.shots)
+            detail_cols = st.columns(4)
+            detail_cols[0].metric("Key passes", historical_row.key_passes)
+            detail_cols[1].metric("xG", f"{historical_row.xg:.2f}")
+            detail_cols[2].metric("xA", f"{historical_row.xa:.2f}")
+            detail_cols[3].metric("npxG", f"{historical_row.non_penalty_xg:.2f}")
+            card_cols = st.columns(3)
+            card_cols[0].metric("Non-penalty goals", historical_row.non_penalty_goals)
+            card_cols[1].metric("Yellow cards", historical_row.yellow_cards)
+            card_cols[2].metric("Red cards", historical_row.red_cards)
             st.caption(f"{historical_row.minutes} minutes played in {_season_label(season)}.")
         else:
             st.caption(

@@ -179,10 +179,10 @@ def resolve_team_importance_weights(
 
 def resolve_team_historical_stats(team_name: str, league_code: str, season: int) -> tuple[str, list]:
     """Picks the best available per-player season-stats source for a team --
-    Understat (goals/assists/xG/xA/minutes/position) preferred for its 5
-    covered leagues (fresher, no season restriction -- see
-    understat_client.py's module docstring), falling back to API-Football
-    (adds saves/tackles/cards/rating/appearances/nationality, but capped to
+    Understat (goals/assists/xG/xA/npxG/shots/key passes/cards/appearances)
+    preferred for its 5 covered leagues (fresher, no season restriction --
+    see understat_client.py's module docstring), falling back to
+    API-Football (adds saves/tackles/rating/nationality, but capped to
     player_stats.AVAILABLE_SEASONS and currently degraded by an account
     suspension) when Understat has nothing for this team/season or doesn't
     cover the league at all.

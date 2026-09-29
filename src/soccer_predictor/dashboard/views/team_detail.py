@@ -429,20 +429,24 @@ def render() -> None:
                     "resolvable against its team list, for the 4 leagues Understat doesn't cover)."
                 )
             elif source == "understat":
-                st.caption(
-                    "Understat - current-season-capable, but only goals/assists/xG/xA/minutes "
-                    "(no saves/tackles/cards/rating)."
-                )
+                st.caption("Understat - current-season-capable, but no saves/tackles/rating (goalkeeper stats).")
                 render_star_players(historical_players)
                 stats_rows = [
                     {
                         "Name": p.name,
                         "Position": p.position,
+                        "Apps": p.appearances,
                         "Minutes": p.minutes,
                         "Goals": p.goals,
+                        "npG": p.non_penalty_goals,
                         "Assists": p.assists,
+                        "Shots": p.shots,
+                        "Key passes": p.key_passes,
                         "xG": round(p.xg, 2),
+                        "npxG": round(p.non_penalty_xg, 2),
                         "xA": round(p.xa, 2),
+                        "Yellow": p.yellow_cards,
+                        "Red": p.red_cards,
                     }
                     for p in sorted(historical_players, key=lambda p: p.name)
                 ]

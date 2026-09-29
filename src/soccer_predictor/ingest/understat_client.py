@@ -81,6 +81,13 @@ class UnderstatPlayerStats:
     assists: int
     xg: float
     xa: float
+    appearances: int = 0
+    shots: int = 0
+    key_passes: int = 0
+    yellow_cards: int = 0
+    red_cards: int = 0
+    non_penalty_goals: int = 0
+    non_penalty_xg: float = 0.0
 
 
 def _cache_path(league_slug: str, season: int) -> Path:
@@ -131,6 +138,13 @@ def _parse_player(row: dict) -> UnderstatPlayerStats:
         assists=int(row.get("assists") or 0),
         xg=float(row.get("xG") or 0),
         xa=float(row.get("xA") or 0),
+        appearances=int(row.get("games") or 0),
+        shots=int(row.get("shots") or 0),
+        key_passes=int(row.get("key_passes") or 0),
+        yellow_cards=int(row.get("yellow_cards") or 0),
+        red_cards=int(row.get("red_cards") or 0),
+        non_penalty_goals=int(row.get("npg") or 0),
+        non_penalty_xg=float(row.get("npxG") or 0),
     )
 
 
