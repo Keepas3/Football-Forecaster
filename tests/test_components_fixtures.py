@@ -72,9 +72,9 @@ def _row(predicted_home_goals, predicted_away_goals, p_home=0.4, p_draw=0.3, p_a
         {
             "Home": "Team A",
             "Away": "Team B",
-            "P(Home)": p_home,
-            "P(Draw)": p_draw,
-            "P(Away)": p_away,
+            "Home win %": p_home,
+            "Draw %": p_draw,
+            "Away win %": p_away,
             "_predicted_home_goals": predicted_home_goals,
             "_predicted_away_goals": predicted_away_goals,
         }
@@ -100,7 +100,7 @@ def test_predicted_outcome_styles_draw():
 
 
 def test_predicted_outcome_styles_follows_scoreline_not_aggregate_probabilities():
-    # The real bug this guards against: P(Home) > P(Draw) > P(Away) here
+    # The real bug this guards against: Home win % > Draw % > Away win % here
     # (a plausible Poisson output), but the single most likely exact
     # scoreline is a 1-1 draw -- coloring must follow the scoreline shown
     # in "Predicted score", not the aggregate 1X2 split, or the two columns
@@ -113,11 +113,11 @@ def test_predicted_outcome_styles_follows_scoreline_not_aggregate_probabilities(
 def test_style_fixture_predictions_returns_styler_with_correct_row_count():
     rows = [
         {
-            "Home": "A", "Away": "B", "P(Home)": 0.6, "P(Draw)": 0.2, "P(Away)": 0.2,
+            "Home": "A", "Away": "B", "Home win %": 0.6, "Draw %": 0.2, "Away win %": 0.2,
             "_predicted_home_goals": 2, "_predicted_away_goals": 0,
         },
         {
-            "Home": "C", "Away": "D", "P(Home)": 0.2, "P(Draw)": 0.2, "P(Away)": 0.6,
+            "Home": "C", "Away": "D", "Home win %": 0.2, "Draw %": 0.2, "Away win %": 0.6,
             "_predicted_home_goals": 0, "_predicted_away_goals": 2,
         },
     ]
@@ -128,7 +128,7 @@ def test_style_fixture_predictions_returns_styler_with_correct_row_count():
 def test_style_fixture_predictions_hides_internal_columns():
     rows = [
         {
-            "Home": "A", "Away": "B", "P(Home)": 0.6, "P(Draw)": 0.2, "P(Away)": 0.2,
+            "Home": "A", "Away": "B", "Home win %": 0.6, "Draw %": 0.2, "Away win %": 0.2,
             "_predicted_home_goals": 2, "_predicted_away_goals": 0,
         },
     ]
@@ -145,14 +145,14 @@ def test_style_fixture_predictions_hides_internal_columns():
 
 def test_fixture_columns_with_kickoff_first_excludes_hidden_keys():
     row = {
-        "Home": "A", "Away": "B", "Kickoff": "Oct 10", "P(Home)": 0.5,
+        "Home": "A", "Away": "B", "Kickoff": "Oct 10", "Home win %": 0.5,
         "_predicted_home_goals": 1, "_predicted_away_goals": 0,
     }
     columns = fixture_columns_with_kickoff_first(row)
     assert columns[0] == "Kickoff"
     assert "_predicted_home_goals" not in columns
     assert "_predicted_away_goals" not in columns
-    assert set(columns) == {"Kickoff", "Home", "Away", "P(Home)"}
+    assert set(columns) == {"Kickoff", "Home", "Away", "Home win %"}
 
 
 _EURO = League(
@@ -194,3 +194,21 @@ def test_season_already_concluded_false_for_current_or_future_tournament_year():
 
 def test_season_already_concluded_false_for_range_display_leagues():
     assert season_already_concluded(_EPL, "1516", today=dt.date(2026, 9, 27)) is False
+
+
+def test_fixture_prediction_row_uses_plain_english_percent_columns():
+    from soccer_predictor.dashboard.components import fixture_prediction_row
+    from soccer_predictor.model.markets import MatchPrediction
+
+    prediction = MatchPrediction(
+        home_win=0.4523, draw=0.2611, away_win=0.2866, over_2_5=0.5712, under_2_5=0.4288,
+        both_teams_to_score=0.5049, top_scorelines=[(1, 0, 0.12)],
+    )
+    row = fixture_prediction_row("Arsenal", "Chelsea", prediction)
+
+    assert row["Home win %"] == 45.2
+    assert row["Draw %"] == 26.1
+    assert row["Away win %"] == 28.7
+    assert row["Over 2.5 goals %"] == 57.1
+    assert row["Both teams score %"] == 50.5
+    assert not any(key.startswith("P(") for key in row)

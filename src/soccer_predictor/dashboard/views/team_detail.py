@@ -11,8 +11,10 @@ import streamlit as st
 from soccer_predictor.config import load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
+    HOME_WIN_COLUMN,
     compute_top_scorer_and_assister,
     fixture_columns_with_kickoff_first,
+    fixture_percent_column_config,
     fixture_prediction_row,
     format_kickoff,
     live_sync_requirement_note,
@@ -252,11 +254,12 @@ def render() -> None:
                 rows.append(fixture_row)
                 row_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
         column_order = fixture_columns_with_kickoff_first(rows[0])
-        has_predictions = "P(Home)" in rows[0]
+        has_predictions = HOME_WIN_COLUMN in rows[0]
         schedule_event = st.dataframe(
             style_fixture_predictions(rows) if has_predictions else rows,
             use_container_width=True,
             column_order=column_order,
+            column_config=fixture_percent_column_config(),
             on_select="rerun" if has_predictions else "ignore",
             selection_mode="single-row",
             key=f"team_detail_schedule_table_{team_id}",

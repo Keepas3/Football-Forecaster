@@ -16,10 +16,12 @@ import streamlit as st
 from soccer_predictor.config import League, load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
+    HOME_WIN_COLUMN,
     LIVE_MATCH_WINDOW,
     STANDINGS_DISPLAY_COLUMNS,
     ZONE_MARKER,
     fixture_columns_with_kickoff_first,
+    fixture_percent_column_config,
     fixture_prediction_row,
     format_kickoff,
     league_option_label,
@@ -299,13 +301,14 @@ def render() -> None:
 
             fixture_columns = fixture_columns_with_kickoff_first(fixture_rows[0])
             fixtures_height = 35 * (len(fixture_rows) + 1) + 3
-            has_predictions = "P(Home)" in fixture_rows[0]
+            has_predictions = HOME_WIN_COLUMN in fixture_rows[0]
             fixtures_event = st.dataframe(
                 style_fixture_predictions(fixture_rows) if has_predictions else fixture_rows,
                 use_container_width=True,
                 hide_index=True,
                 height=fixtures_height,
                 column_order=fixture_columns,
+                column_config=fixture_percent_column_config(),
                 on_select="rerun" if has_predictions else "ignore",
                 selection_mode="single-row",
                 key=f"upcoming_fixtures_table_{league.code}",

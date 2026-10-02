@@ -468,6 +468,31 @@ def leaderboard_dataframe(params: DixonColesParams, team_names: dict[int, str]) 
     return pd.DataFrame(rows).sort_values("Net strength", ascending=False).reset_index(drop=True)
 
 
+# Plain-English headers for the model's probabilities (shown as 0-100 values,
+# so the "%" in the header is the unit). Deliberately not "P(Home)"-style
+# notation -- that read as math jargon to casual readers -- and not bare
+# "Home"/"Away" either, which are already the team-name columns.
+HOME_WIN_COLUMN = "Home win %"
+DRAW_COLUMN = "Draw %"
+AWAY_WIN_COLUMN = "Away win %"
+OVER_2_5_COLUMN = "Over 2.5 goals %"
+BTTS_COLUMN = "Both teams score %"
+
+
+def fixture_percent_column_config() -> dict:
+    """column_config for the five percentage columns above -- without it, a
+    pandas Styler-backed st.dataframe renders them as e.g. "64.000000".
+    """
+    return {
+        name: st.column_config.NumberColumn(format="%.1f")
+        for name in (HOME_WIN_COLUMN, DRAW_COLUMN, AWAY_WIN_COLUMN, OVER_2_5_COLUMN, BTTS_COLUMN)
+    }
+
+
+def _as_percent(probability: float) -> float:
+    return round(probability * 100, 1)
+
+
 def fixture_prediction_row(
     home_name: str, away_name: str, prediction: MatchPrediction
 ) -> dict:
@@ -475,14 +500,14 @@ def fixture_prediction_row(
     return {
         "Home": home_name,
         "Away": away_name,
-        "P(Home)": round(prediction.home_win, 3),
-        "P(Draw)": round(prediction.draw, 3),
-        "P(Away)": round(prediction.away_win, 3),
+        HOME_WIN_COLUMN: _as_percent(prediction.home_win),
+        DRAW_COLUMN: _as_percent(prediction.draw),
+        AWAY_WIN_COLUMN: _as_percent(prediction.away_win),
         "Predicted score": f"{top_home}-{top_away}",
-        "P(Over 2.5)": round(prediction.over_2_5, 3),
-        "P(BTTS)": round(prediction.both_teams_to_score, 3),
+        OVER_2_5_COLUMN: _as_percent(prediction.over_2_5),
+        BTTS_COLUMN: _as_percent(prediction.both_teams_to_score),
         # Hidden (never in a display column_order): styling keys off these,
-        # not P(Home)/P(Draw)/P(Away) -- see _predicted_outcome_styles.
+        # not the win/draw percentage columns -- see _predicted_outcome_styles.
         "_predicted_home_goals": top_home,
         "_predicted_away_goals": top_away,
     }
@@ -496,7 +521,7 @@ _DRAW_STYLE = "color: #9e9e9e"  # grey
 def _predicted_outcome_styles(row: pd.Series) -> pd.Series:
     styles = pd.Series("", index=row.index)
     # Keyed off the same top scoreline shown in "Predicted score", not the
-    # aggregate P(Home)/P(Draw)/P(Away) split -- the two can legitimately
+    # aggregate home-win/draw/away-win split -- the two can legitimately
     # disagree in a Poisson model (a win's probability mass is spread across
     # many scorelines, e.g. 2-1/2-0/3-1, while a draw concentrates on just a
     # few, e.g. 0-0/1-1 -- so "most likely single score" and "most likely
