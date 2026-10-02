@@ -129,6 +129,23 @@ def format_kickoff(
     return formatted
 
 
+def render_live_scores_banner(live_matches: list, leagues: dict[str, League]) -> None:
+    """The Leagues page's top "LIVE NOW" banner, with REAL running scores --
+    see ingest/live_scores.py::fetch_all_live_matches, the only caller.
+    No-op if nothing's live right now (or the fetch failed/degraded to
+    empty) -- the caller falls back to the older kickoff-window guess in
+    that case, not this function's job to know about that.
+    """
+    if not live_matches:
+        return
+    lines = []
+    for m in live_matches:
+        league = leagues.get(m.league_code)
+        flag = f"{league.flag_emoji} " if league and league.flag_emoji else ""
+        lines.append(f"{flag}{m.home_name} {m.home_score}-{m.away_score} {m.away_name} ({m.clock_label})")
+    st.caption("🔴 **LIVE NOW** · " + "  ·  ".join(lines))
+
+
 def _relative_time(published_at: dt.datetime, now: dt.datetime | None = None) -> str:
     now = now if now is not None else dt.datetime.now(dt.UTC)
     seconds = (now - published_at).total_seconds()

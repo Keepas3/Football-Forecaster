@@ -13,7 +13,7 @@ import html
 import pandas as pd
 import streamlit as st
 
-from soccer_predictor.config import load_leagues
+from soccer_predictor.config import League, load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
     LIVE_MATCH_WINDOW,
@@ -25,6 +25,7 @@ from soccer_predictor.dashboard.components import (
     league_option_label,
     live_sync_requirement_note,
     render_head_to_head,
+    render_live_scores_banner,
     render_news_section,
     render_prediction_breakdown,
     season_already_concluded,
@@ -35,6 +36,7 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
 )
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
+from soccer_predictor.ingest.live_scores import fetch_all_live_matches
 from soccer_predictor.ingest.news import league_news_query
 from soccer_predictor.model.standings import compute_standings
 from soccer_predictor.model.team_facts import compute_head_to_head
@@ -118,6 +120,48 @@ def _render_standings_table(table_df: pd.DataFrame, table_key: str, search_key: 
         st.switch_page(navigation.team_detail_page(), query_params={"league": league_code, "team": str(team_id)})
 
 
+LIVE_BANNER_REFRESH_SECONDS = 40
+
+
+@st.fragment(run_every=LIVE_BANNER_REFRESH_SECONDS)
+def _render_live_banner(leagues: dict[str, League]) -> None:
+    """Global, independent of whichever league is selected below -- so a
+    live Premier League game still shows up here while browsing La Liga.
+    Reruns on its own every LIVE_BANNER_REFRESH_SECONDS (a Streamlit
+    fragment -- only this banner reruns, not the whole page/selection
+    state) so a live score visibly updates without a manual reload.
+
+    Tries real live scores first (ingest/live_scores.py -- a deliberate,
+    narrow exception to football-data.org's "never call this per page
+    render" rule: one short-TTL, disk-cached, global call shared across
+    every concurrent viewer). Falls back to the older kickoff-window guess
+    (team names only, no score) on any failure or when the real-score
+    fetch simply has nothing to report -- never silently disappears.
+    """
+    with session_scope() as session:
+        live_matches = fetch_all_live_matches(session, leagues)
+        if live_matches:
+            render_live_scores_banner(live_matches, leagues)
+            return
+
+        live_df = live_fixtures_across_leagues(
+            session, dt.datetime.now(dt.UTC).replace(tzinfo=None), LIVE_MATCH_WINDOW
+        )
+        if live_df.empty:
+            return
+        live_lines = []
+        for row in live_df.itertuples(index=False):
+            home_team = team_by_id(session, row.home_team_id)
+            away_team = team_by_id(session, row.away_team_id)
+            if home_team is None or away_team is None:
+                continue
+            row_league = leagues.get(row.league_code)
+            flag = f"{row_league.flag_emoji} " if row_league and row_league.flag_emoji else ""
+            live_lines.append(f"{flag}{home_team.canonical_name} vs {away_team.canonical_name}")
+        if live_lines:
+            st.caption("🔴 **LIVE NOW** · " + "  ·  ".join(live_lines))
+
+
 def render() -> None:
     st.title("⚽ Leagues")
 
@@ -183,24 +227,7 @@ def render() -> None:
         unsafe_allow_html=True,
     )
 
-    # Global, independent of the league selected above -- so a live Premier
-    # League game still shows up here while browsing La Liga.
-    with session_scope() as session:
-        live_df = live_fixtures_across_leagues(
-            session, dt.datetime.now(dt.UTC).replace(tzinfo=None), LIVE_MATCH_WINDOW
-        )
-        if not live_df.empty:
-            live_lines = []
-            for row in live_df.itertuples(index=False):
-                home_team = team_by_id(session, row.home_team_id)
-                away_team = team_by_id(session, row.away_team_id)
-                if home_team is None or away_team is None:
-                    continue
-                row_league = leagues.get(row.league_code)
-                flag = f"{row_league.flag_emoji} " if row_league and row_league.flag_emoji else ""
-                live_lines.append(f"{flag}{home_team.canonical_name} vs {away_team.canonical_name}")
-            if live_lines:
-                st.caption("🔴 **LIVE NOW** · " + "  ·  ".join(live_lines))
+    _render_live_banner(leagues)
 
     today = dt.date.today()
     with session_scope() as session:

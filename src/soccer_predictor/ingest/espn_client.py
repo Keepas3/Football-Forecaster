@@ -138,6 +138,12 @@ class EspnMatch:
     completed: bool
     home_score: int | None
     away_score: int | None
+    # ESPN's own status.type.state ("pre"/"in"/"post") -- "in" means
+    # genuinely live right now, distinct from completed=False, which is
+    # also true for a match that simply hasn't started yet. See
+    # ingest/live_scores.py, the only current consumer of these two fields.
+    state: str = "pre"
+    clock_label: str | None = None  # e.g. "63'", "HT", "45+2'" -- only meaningful when state == "in"
 
 
 @dataclass
@@ -199,10 +205,16 @@ def _parse_event(event: dict) -> EspnMatch | None:
         competitors = competition["competitors"]
         home = next(c for c in competitors if c["homeAway"] == "home")
         away = next(c for c in competitors if c["homeAway"] == "away")
-        completed = bool(competition["status"]["type"]["completed"])
+        status_type = competition["status"]["type"]
+        completed = bool(status_type["completed"])
+        state = status_type.get("state", "pre")
+        clock_label = competition["status"].get("displayClock") if state == "in" else None
         kickoff_utc = dt.datetime.fromisoformat(event["date"].replace("Z", "+00:00")).replace(tzinfo=None)
-        home_score = _parse_score(home) if completed else None
-        away_score = _parse_score(away) if completed else None
+        # Real score exists once the match has actually started (state !=
+        # "pre") -- not just once it's fully completed, so a genuinely live
+        # match's running score is captured too (see ingest/live_scores.py).
+        home_score = _parse_score(home) if state != "pre" else None
+        away_score = _parse_score(away) if state != "pre" else None
         return EspnMatch(
             espn_home_id=str(home["team"]["id"]),
             espn_away_id=str(away["team"]["id"]),
@@ -213,6 +225,8 @@ def _parse_event(event: dict) -> EspnMatch | None:
             completed=completed,
             home_score=home_score,
             away_score=away_score,
+            state=state,
+            clock_label=clock_label,
         )
     except (KeyError, IndexError, StopIteration, ValueError, TypeError):
         return None

@@ -16,12 +16,22 @@ def _event(
     completed=True,
     home_score="2",
     away_score="1",
+    state=None,
+    display_clock=None,
 ):
+    # state defaults to a realistic value matching `completed` when not
+    # given explicitly -- real ESPN payloads always carry state ("pre"/
+    # "in"/"post"), a completed match is never actually "pre".
+    if state is None:
+        state = "post" if completed else "pre"
     return {
         "date": date,
         "competitions": [
             {
-                "status": {"type": {"completed": completed}},
+                "status": {
+                    "type": {"completed": completed, "state": state},
+                    "displayClock": display_clock,
+                },
                 "competitors": [
                     {"homeAway": "home", "team": {"id": home_id, "displayName": home_name}, "score": home_score},
                     {"homeAway": "away", "team": {"id": away_id, "displayName": away_name}, "score": away_score},
@@ -132,6 +142,34 @@ def test_fetch_day_fixtures_keeps_only_upcoming(monkeypatch):
     assert len(fixtures) == 1
     assert fixtures[0].completed is False
     assert fixtures[0].home_score is None
+
+
+def test_fetch_day_fixtures_includes_live_match_with_real_score_and_clock(monkeypatch):
+    # A live match has completed=False (same as a genuinely upcoming one)
+    # but state="in" -- its score/clock must be captured, not discarded.
+    events = [
+        _event(completed=False, state="in", home_score="1", away_score="0", display_clock="63'"),
+    ]
+    monkeypatch.setattr(espn_client, "get", lambda *a, **k: {"events": events})
+
+    fixtures = espn_client.fetch_day_fixtures("usa.1", dt.date(2026, 10, 10))
+
+    assert len(fixtures) == 1
+    assert fixtures[0].state == "in"
+    assert fixtures[0].home_score == 1
+    assert fixtures[0].away_score == 0
+    assert fixtures[0].clock_label == "63'"
+
+
+def test_fetch_day_fixtures_upcoming_match_has_no_score_or_clock(monkeypatch):
+    events = [_event(completed=False, state="pre", home_score=None, away_score=None)]
+    monkeypatch.setattr(espn_client, "get", lambda *a, **k: {"events": events})
+
+    fixtures = espn_client.fetch_day_fixtures("usa.1", dt.date(2026, 10, 10))
+
+    assert fixtures[0].state == "pre"
+    assert fixtures[0].home_score is None
+    assert fixtures[0].clock_label is None
 
 
 def test_fetch_day_fixtures_returns_empty_on_request_exception(monkeypatch):
