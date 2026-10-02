@@ -148,3 +148,37 @@ def test_load_leagues_parses_trainable_flag(tmp_path, monkeypatch):
         assert league.supports_predictions is True
     finally:
         config.load_leagues.cache_clear()
+
+
+def test_news_query_defaults_to_none():
+    league = League(code="UCL", name="UEFA Champions League", api_competition_id=2001, seasons=["2425"])
+    assert league.news_query is None
+
+
+def test_load_leagues_parses_news_query(tmp_path, monkeypatch):
+    import soccer_predictor.config as config
+
+    (tmp_path / "leagues.yaml").write_text(
+        "leagues:\n"
+        "  - code: EPL\n"
+        "    name: English Premier League\n"
+        "    news_query: Premier League\n"
+        "    csv_code: E0\n"
+        "    api_competition_id: 2021\n"
+        '    seasons: ["2425"]\n'
+        "  - code: LALIGA\n"
+        "    name: La Liga\n"
+        "    csv_code: SP1\n"
+        "    api_competition_id: 2014\n"
+        '    seasons: ["2425"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    config.load_leagues.cache_clear()
+
+    try:
+        leagues = config.load_leagues()
+        assert leagues["EPL"].news_query == "Premier League"
+        assert leagues["LALIGA"].news_query is None
+    finally:
+        config.load_leagues.cache_clear()

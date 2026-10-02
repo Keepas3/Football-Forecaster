@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import html
 import urllib.parse
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,7 @@ import streamlit as st
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
+from soccer_predictor.ingest.news import fetch_news, search_news
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.ingest.squad import fetch_squad_for_team
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
@@ -125,6 +127,166 @@ def format_kickoff(
     if kickoff_utc <= now < kickoff_utc + LIVE_MATCH_WINDOW:
         return f"🔴 LIVE · {formatted}"
     return formatted
+
+
+def _relative_time(published_at: dt.datetime, now: dt.datetime | None = None) -> str:
+    now = now if now is not None else dt.datetime.now(dt.UTC)
+    seconds = (now - published_at).total_seconds()
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def match_team_crest(title: str, crest_by_team_name: dict[str, str]) -> str | None:
+    """Crest URL of the team a headline is about, by finding a team name in
+    it ("Man City charges: ..." -> Man City's crest). The longest matching
+    name wins so "Man City" isn't shadowed by a shorter name; None if no
+    team is named (or the name differs, e.g. "Man Utd" vs "Man United").
+    """
+    lowered = title.casefold()
+    best: tuple[str, str] | None = None
+    for name, url in crest_by_team_name.items():
+        if name.casefold() in lowered and (best is None or len(name) > len(best[0])):
+            best = (name, url)
+    return best[1] if best else None
+
+
+_TICKER_STYLE = (
+    "display:flex;gap:10px;align-items:center;overflow-x:auto;white-space:nowrap;"
+    "padding:4px 0 6px;margin:0.25rem 0 0.5rem;scrollbar-width:thin;"
+)
+_TICKER_ITEM_STYLE = (
+    "display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;max-width:340px;"
+    "padding:5px 10px;border:1px solid rgba(128,128,128,0.35);border-radius:8px;"
+    "text-decoration:none;color:inherit;font-size:0.82rem;"
+)
+
+
+def news_ticker_html(
+    articles: list,
+    crest_by_team_name: dict[str, str] | None = None,
+    default_icon: str | None = None,
+    now: dt.datetime | None = None,
+) -> str:
+    """One slim, horizontally scrolling row of small headline chips (badge +
+    truncated headline + a link arrow), each opening the article in a new tab
+    -- the layout the Premier League's own site uses for its news strip.
+    Hovering a chip shows the full headline, source and age.
+
+    Everything here came from the web, so every value placed into the HTML is
+    escaped (including attribute values) and links are only ever
+    `https://` (ingest/news.py drops anything else). Returns "" for no articles.
+    """
+    if not articles:
+        return ""
+    crests = crest_by_team_name or {}
+    chips = []
+    for a in articles:
+        icon_url = match_team_crest(a.title, crests) or default_icon
+        icon = (
+            f'<img src="{html.escape(icon_url, quote=True)}" '
+            'style="height:20px;width:20px;object-fit:contain;flex:none;">'
+            if icon_url
+            else ""
+        )
+        tooltip = html.escape(f"{a.title} — {a.source}, {_relative_time(a.published_at, now)}", quote=True)
+        chips.append(
+            f'<a href="{html.escape(a.url, quote=True)}" target="_blank" rel="noopener noreferrer" '
+            f'title="{tooltip}" style="{_TICKER_ITEM_STYLE}">{icon}'
+            f'<span style="overflow:hidden;text-overflow:ellipsis;min-width:0;">{html.escape(a.title)}</span>'
+            '<span style="opacity:0.6;flex:none;">↗</span></a>'
+        )
+    attribution = '<span style="opacity:0.5;font-size:0.7rem;flex:none;">via Google News</span>'
+    return f'<div style="{_TICKER_STYLE}">' + "".join(chips) + attribution + "</div>"
+
+
+def render_news_ticker(
+    articles: list, crest_by_team_name: dict[str, str] | None = None, default_icon: str | None = None
+) -> None:
+    """The compact news strip (see news_ticker_html). Renders nothing at all
+    when there are no articles (nothing recent, or ingest/news.py's fetch
+    failed and returned []) -- the strip is meant to take almost no space, so
+    an empty placeholder would just be clutter.
+    """
+    markup = news_ticker_html(articles, crest_by_team_name, default_icon)
+    if markup:
+        st.markdown(markup, unsafe_allow_html=True)
+
+
+_RESULT_ROW_STYLE = (
+    "display:flex;align-items:flex-start;gap:10px;padding:8px 0;"
+    "border-bottom:1px solid rgba(128,128,128,0.25);"
+)
+
+
+def news_results_html(
+    articles: list,
+    crest_by_team_name: dict[str, str] | None = None,
+    default_icon: str | None = None,
+    now: dt.datetime | None = None,
+) -> str:
+    """Search results as a vertical list -- unlike the strip's truncated
+    chips, each row shows the FULL headline (wrapping) with its source and
+    age underneath, since someone searching wants to read what they found.
+    Same escaping rules as news_ticker_html. Returns "" for no articles.
+    """
+    if not articles:
+        return ""
+    crests = crest_by_team_name or {}
+    rows = []
+    for a in articles:
+        icon_url = match_team_crest(a.title, crests) or default_icon
+        icon = (
+            f'<img src="{html.escape(icon_url, quote=True)}" '
+            'style="height:22px;width:22px;object-fit:contain;flex:none;margin-top:2px;">'
+            if icon_url
+            else '<span style="width:22px;flex:none;"></span>'
+        )
+        rows.append(
+            f'<div style="{_RESULT_ROW_STYLE}">{icon}<div style="min-width:0;">'
+            f'<a href="{html.escape(a.url, quote=True)}" target="_blank" rel="noopener noreferrer" '
+            f'style="text-decoration:none;color:inherit;font-weight:600;">{html.escape(a.title)} '
+            '<span style="opacity:0.6;">↗</span></a>'
+            f'<div style="opacity:0.6;font-size:0.78rem;">{html.escape(a.source)} · '
+            f"{_relative_time(a.published_at, now)}</div></div></div>"
+        )
+    return "<div>" + "".join(rows) + "</div>"
+
+
+def render_news_section(
+    base_query: str,
+    scope_key: str,
+    crest_by_team_name: dict[str, str] | None = None,
+    default_icon: str | None = None,
+) -> None:
+    """The league/team page's whole news area: the compact headline strip
+    (newest few, see news_ticker_html) plus a search box underneath. Typing
+    in the box (Enter to run) searches news within this page's scope -- see
+    ingest/news.py::search_news -- and shows the matches below the strip.
+
+    `scope_key` makes the text box's widget key unique per page/league/team
+    so a search typed on one page doesn't carry over to another.
+    """
+    render_news_ticker(fetch_news(base_query), crest_by_team_name, default_icon)
+    search_text = st.text_input(
+        "Search news",
+        key=f"news_search_{scope_key}",
+        placeholder="Search news, e.g. 115 charges",
+        label_visibility="collapsed",
+    )
+    if not search_text.strip():
+        return
+    results = search_news(base_query, search_text)
+    markup = news_results_html(results, crest_by_team_name, default_icon)
+    if markup:
+        st.caption(f"{len(results)} result(s), newest first")
+        st.markdown(markup, unsafe_allow_html=True)
+    else:
+        st.caption("No news found for that search.")
 
 
 def youtube_search_url(home_name: str, away_name: str, match_date: dt.date) -> str:

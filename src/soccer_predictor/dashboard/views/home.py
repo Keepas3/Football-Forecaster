@@ -25,6 +25,7 @@ from soccer_predictor.dashboard.components import (
     league_option_label,
     live_sync_requirement_note,
     render_head_to_head,
+    render_news_section,
     render_prediction_breakdown,
     season_already_concluded,
     season_not_yet_scheduled,
@@ -34,6 +35,7 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
 )
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
+from soccer_predictor.ingest.news import league_news_query
 from soccer_predictor.model.standings import compute_standings
 from soccer_predictor.model.team_facts import compute_head_to_head
 from soccer_predictor.prediction.service import load_latest_params, predict_fixture
@@ -223,6 +225,12 @@ def render() -> None:
         team_id: team_names.get(opponent_id, f"team#{opponent_id}")
         for team_id, opponent_id in next_opponent_ids.items()
     }
+
+    render_news_section(
+        league_news_query(league),
+        f"league_{league.code}",
+        {team_names[team_id]: url for team_id, url in crest_urls.items() if team_id in team_names},
+    )
 
     with st.expander("Upcoming Matches", expanded=True, key=f"upcoming_fixtures_expander_{league.code}"):
         if upcoming_fixtures_df.empty:

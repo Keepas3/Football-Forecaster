@@ -21,6 +21,7 @@
 leagues:
   - code: EPL
     name: English Premier League
+    news_query: Premier League
     csv_code: E0
     api_competition_id: 2021
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
@@ -113,6 +114,7 @@ leagues:
       - {start: 25, end: 36, kind: relegation, label: "Eliminated"}
   - code: EURO
     name: European Championship
+    news_query: UEFA European Championship
     api_competition_id: 2018
     # Historical match data (1960-2024) comes from a static archive (see
     # ingest/euro_archive.py -- openfootball/euro, CC0), same reasoning as

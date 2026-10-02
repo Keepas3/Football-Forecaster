@@ -83,6 +83,10 @@ class League:
     # exists for its current 36-team league-phase format (see its own
     # config/leagues.yaml comment), unlike WC/EURO/MLS.
     trainable: bool = False
+    # Search term for the Latest news section (ingest/news.py) when `name`
+    # isn't what news sites actually call the competition, e.g. "English
+    # Premier League" -> "Premier League". None falls back to `name`.
+    news_query: str | None = None
 
     @property
     def supports_predictions(self) -> bool:
@@ -147,6 +151,7 @@ def load_leagues() -> dict[str, League]:
             data_source=entry.get("data_source", "football_data_org"),
             espn_league_slug=entry.get("espn_league_slug"),
             trainable=entry.get("trainable", False),
+            news_query=entry.get("news_query"),
         )
         for entry in raw["leagues"]
     }

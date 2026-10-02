@@ -17,6 +17,7 @@ from soccer_predictor.dashboard.components import (
     format_kickoff,
     live_sync_requirement_note,
     render_head_to_head,
+    render_news_section,
     render_player_badges,
     render_prediction_breakdown,
     render_star_players,
@@ -34,6 +35,7 @@ from soccer_predictor.ingest.player_importance import (
     resolve_team_goals_and_assists,
     resolve_team_historical_stats,
 )
+from soccer_predictor.ingest.news import team_news_query
 from soccer_predictor.ingest.squad import fetch_squad_for_team, fetch_team_info
 from soccer_predictor.ingest.understat_client import (
     UNDERSTAT_AVAILABLE_SEASONS,
@@ -125,6 +127,8 @@ def render() -> None:
     header_cols[1].title(team_canonical_name)
     if league:
         st.caption(league.name)
+
+    render_news_section(team_news_query(team_canonical_name), f"team_{team_id}", default_icon=team_crest_url)
 
     with session_scope() as session:
         params = load_latest_params(session, team_league_code)
