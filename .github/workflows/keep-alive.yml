@@ -10,4 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping app
-        run: curl -sSfL --max-time 30 https://football-forecaster.streamlit.app/ -o /dev/null
+        # Streamlit Cloud's wake-up flow redirects through
+        # share.streamlit.io/-/auth/app, which sets a session cookie and
+        # redirects back to the app's own /-/login endpoint. Without a
+        # cookie jar, curl drops that cookie on the next hop, the app
+        # never recognizes the session, and the auth/login pair loops
+        # forever until curl's 50-redirect cap trips (confirmed live --
+        # this is exactly what caused the "Maximum (50) redirects
+        # followed" failure). -c/-b point at the same jar file so cookies
+        # carry across the whole chain.
+        run: |
+          curl -sSfL --max-time 30 -c cookies.txt -b cookies.txt \
+            https://football-forecaster.streamlit.app/ -o /dev/null
