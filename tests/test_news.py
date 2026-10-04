@@ -155,3 +155,22 @@ def test_same_words_with_different_windows_do_not_share_a_cache_entry(monkeypatc
     news.fetch_news("Manchester City", window="365d")
     news.fetch_news("Manchester City", window="14d")  # cached
     assert [c["q"] for c in calls] == ["Manchester City when:14d", "Manchester City when:365d"]
+
+
+def test_match_search_url_is_a_google_search_for_both_teams_and_the_league():
+    from soccer_predictor.ingest.news import match_search_url
+
+    assert (
+        match_search_url("Greece", "Germany", "UEFA Nations League")
+        == "https://www.google.com/search?q=Greece+vs+Germany+UEFA+Nations+League"
+    )
+
+
+def test_match_search_url_encodes_accents_and_reserved_characters():
+    from soccer_predictor.ingest.news import match_search_url
+
+    url = match_search_url("Türkiye", "Bosnia & Herzegovina", "League A/B")
+    assert url.startswith("https://www.google.com/search?q=")
+    assert "T%C3%BCrkiye" in url
+    assert "%26" in url and "%2F" in url
+    assert " " not in url and "&H" not in url

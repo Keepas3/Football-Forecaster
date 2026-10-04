@@ -15,7 +15,7 @@ import streamlit as st
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
-from soccer_predictor.ingest.news import fetch_news, search_news
+from soccer_predictor.ingest.news import fetch_news, match_search_url, search_news
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.ingest.squad import fetch_squad_for_team
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
@@ -129,6 +129,50 @@ def format_kickoff(
     return formatted
 
 
+# Wide enough for "🔴 LIVE NOW" at the banner's font size.
+LIVE_LABEL_WIDTH = "6.5rem"
+
+
+def live_scores_banner_html(live_matches: list, leagues: dict[str, League]) -> str:
+    """The banner's markup: at most two rows however many matches are live
+    (the first half of the matches on the top row, the rest below), each row
+    scrolling sideways if it's still too long for the page. Every match
+    carries its league's NAME -- not its flag emoji: the international
+    competitions all share the UN flag, and Windows has no flag glyphs at all
+    (it renders the two-letter code, "UN"). All text is HTML-escaped.
+    """
+    items = []
+    for m in live_matches:
+        league = leagues.get(m.league_code)
+        league_name = league.name if league else m.league_code
+        url = match_search_url(m.home_name, m.away_name, league_name)
+        # Inherits the banner's colour and only underlines on hover, so it
+        # reads as the same text, not a block of blue links.
+        items.append(
+            f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer" '
+            f'class="live-match-link" style="color:inherit;text-decoration:none;white-space:nowrap;">'
+            f"<b>{html.escape(league_name)}</b> "
+            f"{html.escape(m.home_name)} {int(m.home_score)}-{int(m.away_score)} "
+            f"{html.escape(m.away_name)} ({html.escape(str(m.clock_label))})</a>"
+        )
+
+    per_row = -(-len(items) // 2)  # ceil: the top row gets the extra match when odd
+    rows = [items[:per_row], items[per_row:]]
+    divider = '<span style="opacity:0.35;">|</span>'
+    row_style = "display:flex;gap:12px;align-items:center;overflow-x:auto;white-space:nowrap;line-height:1.6;"
+    row_html = []
+    for i, row in enumerate(rows):
+        if not row:
+            continue
+        # The second row gets an empty spacer the same width as the label, so
+        # its matches line up under the first row's instead of under "LIVE NOW".
+        label_style = f'display:inline-block;min-width:{LIVE_LABEL_WIDTH};white-space:nowrap;'
+        label = f'<span style="{label_style}">🔴 <b>LIVE NOW</b></span>' if i == 0 else f'<span style="{label_style}"></span>'
+        row_html.append(f'<div style="{row_style}">{label}{divider.join(f" {x} " for x in row)}</div>')
+    hover_css = "<style>a.live-match-link:hover{text-decoration:underline !important;}</style>"
+    return f'{hover_css}<div style="font-size:0.85rem;margin:0.25rem 0 0.5rem;">{"".join(row_html)}</div>'
+
+
 def render_live_scores_banner(live_matches: list, leagues: dict[str, League]) -> None:
     """The Leagues page's top "LIVE NOW" banner, with REAL running scores --
     see ingest/live_scores.py::fetch_all_live_matches, the only caller.
@@ -138,12 +182,7 @@ def render_live_scores_banner(live_matches: list, leagues: dict[str, League]) ->
     """
     if not live_matches:
         return
-    lines = []
-    for m in live_matches:
-        league = leagues.get(m.league_code)
-        flag = f"{league.flag_emoji} " if league and league.flag_emoji else ""
-        lines.append(f"{flag}{m.home_name} {m.home_score}-{m.away_score} {m.away_name} ({m.clock_label})")
-    st.caption("🔴 **LIVE NOW** · " + "  ·  ".join(lines))
+    st.markdown(live_scores_banner_html(live_matches, leagues), unsafe_allow_html=True)
 
 
 def _relative_time(published_at: dt.datetime, now: dt.datetime | None = None) -> str:

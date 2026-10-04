@@ -164,10 +164,12 @@ def _render_live_banner(leagues: dict[str, League]) -> None:
             if home_team is None or away_team is None:
                 continue
             row_league = leagues.get(row.league_code)
-            flag = f"{row_league.flag_emoji} " if row_league and row_league.flag_emoji else ""
-            live_lines.append(f"{flag}{home_team.canonical_name} vs {away_team.canonical_name}")
+            league_name = row_league.name if row_league else row.league_code
+            live_lines.append(f"**{league_name}** · {home_team.canonical_name} vs {away_team.canonical_name}")
         if live_lines:
-            st.caption("🔴 **LIVE NOW** · " + "  ·  ".join(live_lines))
+            st.caption("🔴 **LIVE NOW**")
+            for line in live_lines:
+                st.caption(line)
 
 
 def render() -> None:

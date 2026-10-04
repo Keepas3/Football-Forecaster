@@ -160,3 +160,22 @@ def test_fetch_all_live_matches_combines_football_data_org_and_espn(session, mon
     results = live_scores.fetch_all_live_matches(session, {"EPL": EPL, "MLS": mls})
 
     assert {m.league_code for m in results} == {"EPL", "MLS"}
+
+
+def test_espn_live_fetch_bypasses_the_six_hour_scoreboard_cache(monkeypatch):
+    # With the default 6h cache the banner froze on whichever games were live
+    # at first load and never showed later kickoffs.
+    from soccer_predictor.ingest import live_scores
+
+    seen = {}
+
+    def fake_fetch(slug, day, cache_ttl_seconds=None):
+        seen["ttl"] = cache_ttl_seconds
+        return []
+
+    monkeypatch.setattr(live_scores.espn_client, "fetch_day_fixtures", fake_fetch)
+    league = League(code="NL", name="UEFA Nations League", seasons=["2627"], data_source="espn", espn_league_slug="uefa.nations")
+
+    live_scores.fetch_live_matches_espn(league)
+
+    assert seen["ttl"] == live_scores.LIVE_SCORE_CACHE_TTL_SECONDS

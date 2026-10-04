@@ -118,7 +118,11 @@ def fetch_live_matches_espn(league: League) -> list[LiveMatch]:
     """
     import datetime as dt
 
-    matches = espn_client.fetch_day_fixtures(league.espn_league_slug, dt.date.today())
+    # The scoreboard's normal 6h cache would freeze the banner on whatever
+    # was live when it was first fetched (and miss every later kickoff).
+    matches = espn_client.fetch_day_fixtures(
+        league.espn_league_slug, dt.datetime.now(dt.UTC).date(), cache_ttl_seconds=LIVE_SCORE_CACHE_TTL_SECONDS
+    )
     results = []
     for match in matches:
         if match.state != "in" or match.home_score is None or match.away_score is None:

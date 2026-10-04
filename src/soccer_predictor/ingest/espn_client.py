@@ -278,15 +278,19 @@ def fetch_team_results(league_slug: str, espn_team_id: str, season: int) -> list
     return [m for m in matches if m is not None and m.completed and m.home_score is not None]
 
 
-def fetch_day_fixtures(league_slug: str, date: dt.date) -> list[EspnMatch]:
+def fetch_day_fixtures(
+    league_slug: str, date: dt.date, cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS
+) -> list[EspnMatch]:
     """Every not-yet-completed match league-wide on `date`. Empty list on
     any failure. Only a single date per call is supported by this endpoint.
+    `cache_ttl_seconds` lets the live banner (ingest/live_scores.py) ask for
+    a fresh copy -- the default 6h is far too stale for running scores.
     """
     try:
         data = get(
             f"/{league_slug}/scoreboard",
             params={"dates": date.strftime("%Y%m%d")},
-            cache_ttl_seconds=SCHEDULE_CACHE_TTL_SECONDS,
+            cache_ttl_seconds=cache_ttl_seconds,
         )
     except requests.RequestException:
         return []

@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import quote_plus
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -56,6 +57,14 @@ def team_news_query(team_name: str) -> str:
     # "football" disambiguates clubs whose names are also places/words
     # (Newcastle, Brighton, Fulham) and works for national teams too.
     return f'"{team_name}" football'
+
+
+def match_search_url(home_name: str, away_name: str, league_name: str) -> str:
+    """A Google web search for one match ("Greece vs Germany UEFA Nations
+    League") -- lands on its live-score box, highlights and match reports.
+    The league name disambiguates fixtures that recur across competitions.
+    """
+    return "https://www.google.com/search?q=" + quote_plus(f"{home_name} vs {away_name} {league_name}")
 
 
 def league_news_query(league: League) -> str:
