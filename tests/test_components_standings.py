@@ -129,3 +129,49 @@ def test_a_fixture_with_no_kickoff_time_uses_its_date_and_never_counts_as_live()
 
 def test_no_fixtures_gives_no_labels():
     assert next_match_labels(_fixtures([]), NAMES, UTC, now=NOW) == {}
+
+
+# --- Search link column ---------------------------------------------------------------
+
+from soccer_predictor.dashboard.components import STANDINGS_DISPLAY_COLUMNS, next_match_links  # noqa: E402
+
+
+def test_every_team_with_a_next_match_gets_a_search_link_live_or_upcoming():
+    df = _fixtures(
+        [
+            (dt.date(2026, 10, 4), 1, 2, dt.datetime(2026, 10, 4, 18, 45)),  # live (15 min in)
+            (dt.date(2026, 10, 6), 3, 4, dt.datetime(2026, 10, 6, 18, 45)),  # upcoming
+        ]
+    )
+    links = next_match_links(df, NAMES, "UEFA Nations League", now=NOW)
+    assert links[1] == links[2] == "https://www.google.com/search?q=Portugal+vs+Norway+UEFA+Nations+League"
+    assert links[3] == links[4] == "https://www.google.com/search?q=Denmark+vs+Wales+UEFA+Nations+League"
+
+
+def test_the_link_is_for_the_same_match_the_next_column_shows():
+    df = _fixtures(
+        [
+            (dt.date(2026, 10, 4), 1, 2, dt.datetime(2026, 10, 4, 12, 0)),  # finished -> skipped
+            (dt.date(2026, 10, 7), 1, 3, dt.datetime(2026, 10, 7, 18, 45)),
+            (dt.date(2026, 10, 9), 1, 4, dt.datetime(2026, 10, 9, 18, 45)),  # a later one for Portugal
+        ]
+    )
+    links = next_match_links(df, NAMES, "UEFA Nations League", now=NOW)
+    assert links[1] == "https://www.google.com/search?q=Portugal+vs+Denmark+UEFA+Nations+League"
+    assert 2 not in links  # Norway's only match is over -> blank
+
+
+def test_a_fixture_with_no_kickoff_time_still_gets_a_link():
+    df = _fixtures([(dt.date(2026, 10, 8), 1, 2, None)])
+    assert 1 in next_match_links(df, NAMES, "UEFA Nations League", now=NOW)
+
+
+def test_no_fixtures_gives_no_links():
+    assert next_match_links(_fixtures([]), NAMES, "UEFA Nations League", now=NOW) == {}
+
+
+def test_standings_dataframe_has_a_search_column_empty_without_a_match():
+    standings = [TeamStanding(1, "Portugal"), TeamStanding(2, "Norway")]
+    df = standings_dataframe(standings, {}, {}, match_links={1: "https://example.com/x"})
+    assert df["Search"].tolist() == ["https://example.com/x", ""]
+    assert "Search" in STANDINGS_DISPLAY_COLUMNS

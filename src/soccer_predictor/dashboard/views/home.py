@@ -19,6 +19,7 @@ from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
     HOME_WIN_COLUMN,
     LIVE_MATCH_WINDOW,
+    MATCH_LINK_DISPLAY_TEXT,
     STANDINGS_DISPLAY_COLUMNS,
     ZONE_MARKER,
     fixture_columns_with_kickoff_first,
@@ -28,6 +29,7 @@ from soccer_predictor.dashboard.components import (
     league_option_label,
     live_sync_requirement_note,
     next_match_labels,
+    next_match_links,
     render_head_to_head,
     render_live_scores_banner,
     render_news_section,
@@ -114,7 +116,12 @@ def _render_standings_table(table_df: pd.DataFrame, table_key: str, search_key: 
         hide_index=True,
         height=table_height,
         column_order=STANDINGS_DISPLAY_COLUMNS,
-        column_config={"Crest": st.column_config.ImageColumn(" ", width="small")},
+        column_config={
+            "Crest": st.column_config.ImageColumn(" ", width="small"),
+            # A Google search for the team's next (or live) match; empty when
+            # it has nothing scheduled.
+            "Search": st.column_config.LinkColumn("Search", display_text=MATCH_LINK_DISPLAY_TEXT, width="small"),
+        },
         on_select="rerun",
         selection_mode="single-row",
         key=table_key,
@@ -272,6 +279,7 @@ def render() -> None:
         st.stop()
 
     next_opponent_names = next_match_labels(next_fixtures_df, team_names, selected_timezone())
+    match_links = next_match_links(next_fixtures_df, team_names, league.name)
 
     render_news_section(
         league_news_query(league),
@@ -407,7 +415,9 @@ def render() -> None:
             table_key = _table_key(title)
             search_key = f"standings_search_{league.code}_{table_key}"
             st.markdown(f"**{title}**")
-        table_df = standings_dataframe(section_standings, crest_urls, next_opponent_names, league.zones)
+        table_df = standings_dataframe(
+            section_standings, crest_urls, next_opponent_names, league.zones, match_links=match_links
+        )
         rendered_keys.append(table_key)
         # Recorded before rendering: a row click inside _render_standings_table
         # switches page immediately, and the next run must already know this

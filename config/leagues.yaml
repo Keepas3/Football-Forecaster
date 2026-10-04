@@ -26,7 +26,7 @@ leagues:
     api_competition_id: 2021
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/gb-eng.png
-    flag_emoji: "🏴󠁧󠁢󠁥󠁮󠁧󠁿"
+    flag_emoji: "en"
     zones:
       - {start: 1, end: 4, kind: qualify, label: "Champions League"}
       - {start: 18, end: 20, kind: relegation, label: "Relegation"}

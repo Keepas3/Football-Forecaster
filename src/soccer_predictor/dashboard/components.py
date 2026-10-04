@@ -129,6 +129,11 @@ def format_kickoff(
     return formatted
 
 
+_LIVE_LABEL = "🔴 LIVE"
+# Text of the standings table's link column (see next_match_links).
+MATCH_LINK_DISPLAY_TEXT = "🔎 Search"
+
+
 def selected_timezone() -> ZoneInfo:
     """The zone chosen in timezone_selector, without drawing another picker
     (for tables that only need to format dates in the user's zone)."""
@@ -160,7 +165,7 @@ def next_match_labels(
         if known_kickoff and now >= row.kickoff_utc + LIVE_MATCH_WINDOW:
             continue
         if known_kickoff and row.kickoff_utc <= now:
-            when = "🔴 LIVE"
+            when = _LIVE_LABEL
         elif known_kickoff:
             when = row.kickoff_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz).strftime("%b %d")
         else:
@@ -169,6 +174,35 @@ def next_match_labels(
             if team_id not in labels:
                 labels[team_id] = f"{team_names.get(opponent_id, f'team#{opponent_id}')} · {when}"
     return labels
+
+
+def next_match_links(
+    fixtures_df: pd.DataFrame,
+    team_names: dict[int, str],
+    league_name: str,
+    now: dt.datetime | None = None,
+) -> dict[int, str]:
+    """{team_id: Google-search URL} for each team's next match -- the one in
+    progress right now or, failing that, the soonest upcoming one (the same
+    match next_match_labels shows in "Next"; finished fixtures are skipped
+    the same way). Teams with nothing scheduled have no entry. Backs the
+    standings table's link column, a separate column rather than links
+    inside "Next": a link column renders every cell as a link, including
+    plain dates that go nowhere.
+    """
+    now = now if now is not None else dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    links: dict[int, str] = {}
+    for row in sort_fixtures_by_kickoff(fixtures_df).itertuples(index=False):
+        if not pd.isna(row.kickoff_utc) and now >= row.kickoff_utc + LIVE_MATCH_WINDOW:
+            continue
+        url = match_search_url(
+            team_names.get(row.home_team_id, f"team#{row.home_team_id}"),
+            team_names.get(row.away_team_id, f"team#{row.away_team_id}"),
+            league_name,
+        )
+        links.setdefault(row.home_team_id, url)
+        links.setdefault(row.away_team_id, url)
+    return links
 
 
 def sort_fixtures_by_kickoff(fixtures_df):
@@ -442,6 +476,7 @@ STANDINGS_DISPLAY_COLUMNS = (
     "Pts",
     "Form",
     "Next",
+    "Search",
 )
 
 # No separate "Zone" text column (it ate too much width) -- the Pos number
@@ -467,6 +502,7 @@ def standings_dataframe(
     crest_urls: dict[int, str],
     next_opponent_names: dict[int, str],
     zones: list[TableZone] = (),
+    match_links: dict[int, str] | None = None,
 ) -> pd.DataFrame:
     """Includes a `team_id` column for callers that need to map a selected
     row back to a team (e.g. clickable rankings), and a hidden `_zone_kind`
@@ -492,6 +528,10 @@ def standings_dataframe(
             "Pts": standing.points,
             "Form": " ".join(_FORM_EMOJI[r] for r in standing.form),
             "Next": next_opponent_names.get(standing.team_id, ""),
+            # The Google-search URL for this team's next match, else "" (an
+            # empty cell -- None would show as the text "None" through the
+            # Styler) -- rendered by a LinkColumn, see MATCH_LINK_DISPLAY_TEXT.
+            "Search": (match_links or {}).get(standing.team_id, ""),
         }
         for pos, standing in enumerate(standings, start=1)
     ]
