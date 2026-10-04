@@ -173,7 +173,7 @@ def test_espn_live_fetch_bypasses_the_six_hour_scoreboard_cache(monkeypatch):
         seen["ttl"] = cache_ttl_seconds
         return []
 
-    monkeypatch.setattr(live_scores.espn_client, "fetch_day_fixtures", fake_fetch)
+    monkeypatch.setattr(live_scores.espn_client, "fetch_day_matches", fake_fetch)
     league = League(code="NL", name="UEFA Nations League", seasons=["2627"], data_source="espn", espn_league_slug="uefa.nations")
 
     live_scores.fetch_live_matches_espn(league)

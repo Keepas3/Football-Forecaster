@@ -44,7 +44,7 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
 )
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
-from soccer_predictor.ingest.live_scores import fetch_all_live_matches
+from soccer_predictor.ingest.live_scores import LiveMatch, fetch_all_live_matches
 from soccer_predictor.ingest.news import league_news_query
 from soccer_predictor.model.standings import compute_group_standings, compute_standings
 from soccer_predictor.model.team_facts import compute_head_to_head
@@ -166,19 +166,26 @@ def _render_live_banner(leagues: dict[str, League]) -> None:
         )
         if live_df.empty:
             return
-        live_lines = []
+        fallback_matches = []
         for row in live_df.itertuples(index=False):
             home_team = team_by_id(session, row.home_team_id)
             away_team = team_by_id(session, row.away_team_id)
             if home_team is None or away_team is None:
                 continue
-            row_league = leagues.get(row.league_code)
-            league_name = row_league.name if row_league else row.league_code
-            live_lines.append(f"**{league_name}** · {home_team.canonical_name} vs {away_team.canonical_name}")
-        if live_lines:
-            st.caption("🔴 **LIVE NOW**")
-            for line in live_lines:
-                st.caption(line)
+            fallback_matches.append(
+                LiveMatch(
+                    league_code=row.league_code,
+                    home_name=home_team.canonical_name,
+                    away_name=away_team.canonical_name,
+                    home_crest=None,
+                    away_crest=None,
+                    home_score=None,
+                    away_score=None,
+                    clock_label="",
+                )
+            )
+        # Same layout and Google links as the real banner, just with no score.
+        render_live_scores_banner(fallback_matches, leagues)
 
 
 def render() -> None:

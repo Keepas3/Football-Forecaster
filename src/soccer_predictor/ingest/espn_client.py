@@ -278,13 +278,14 @@ def fetch_team_results(league_slug: str, espn_team_id: str, season: int) -> list
     return [m for m in matches if m is not None and m.completed and m.home_score is not None]
 
 
-def fetch_day_fixtures(
+def fetch_day_matches(
     league_slug: str, date: dt.date, cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS
 ) -> list[EspnMatch]:
-    """Every not-yet-completed match league-wide on `date`. Empty list on
-    any failure. Only a single date per call is supported by this endpoint.
-    `cache_ttl_seconds` lets the live banner (ingest/live_scores.py) ask for
-    a fresh copy -- the default 6h is far too stale for running scores.
+    """Every match league-wide on `date` -- upcoming, live and finished.
+    Empty list on any failure. Only a single date per call is supported by
+    this endpoint. `cache_ttl_seconds` lets the live banner
+    (ingest/live_scores.py) ask for a fresh copy -- the default 6h is far
+    too stale for running scores.
     """
     try:
         data = get(
@@ -296,7 +297,15 @@ def fetch_day_fixtures(
         return []
 
     matches = (_parse_event(e) for e in data.get("events", []))
-    return [m for m in matches if m is not None and not m.completed]
+    return [m for m in matches if m is not None]
+
+
+def fetch_day_fixtures(
+    league_slug: str, date: dt.date, cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS
+) -> list[EspnMatch]:
+    """Every not-yet-completed match league-wide on `date` (so including
+    ones in progress). Empty list on any failure."""
+    return [m for m in fetch_day_matches(league_slug, date, cache_ttl_seconds) if not m.completed]
 
 
 def fetch_group_membership(league_slug: str, season: int) -> dict[str, str]:

@@ -2,23 +2,30 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Twice an hour. GitHub drops or delays most frequent scheduled runs (the
+    # old every-10-minutes cron really ran every 3-5 hours), and the app only
+    # sleeps after ~12 idle hours, so this is plenty.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 jobs:
-  ping:
+  visit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Ping app
-        # Streamlit Cloud's wake-up flow redirects through
-        # share.streamlit.io/-/auth/app, which sets a session cookie and
-        # redirects back to the app's own /-/login endpoint. Without a
-        # cookie jar, curl drops that cookie on the next hop, the app
-        # never recognizes the session, and the auth/login pair loops
-        # forever until curl's 50-redirect cap trips (confirmed live --
-        # this is exactly what caused the "Maximum (50) redirects
-        # followed" failure). -c/-b point at the same jar file so cookies
-        # carry across the whole chain.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # A plain `curl` of the app's URL does NOT keep it awake: it only
+      # fetches the static HTML shell (HTTP 200 whether the app is asleep or
+      # not) and never opens the websocket session Streamlit counts as a
+      # visitor. So visit it in a real browser instead (installed Chrome on
+      # the runner), waking the app if it's already asleep -- see
+      # scripts/keep_streamlit_alive.py. The job fails if the app doesn't come up.
+      - name: Visit the app in a browser
         run: |
-          curl -sSfL --max-time 30 -c cookies.txt -b cookies.txt \
-            https://football-forecaster.streamlit.app/ -o /dev/null
+          pip install playwright
+          python scripts/keep_streamlit_alive.py
