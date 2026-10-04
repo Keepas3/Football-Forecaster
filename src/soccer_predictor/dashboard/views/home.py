@@ -63,6 +63,9 @@ from soccer_predictor.storage.repository import (
 )
 
 RANKINGS_TABLE_KEY = "league_rankings_table"
+# The view toggle shown beside Season for group competitions.
+GROUPS_VIEW = "Groups"
+RANKINGS_VIEW = "Rankings"
 _CLEAR_SELECTION_FLAG = "_clear_rankings_selection"
 # Every standings table (one per group / conference) has its own widget key,
 # and the set of them depends on the league and season being viewed -- so the
@@ -211,7 +214,13 @@ def render() -> None:
         "home_league", query_league if query_league in leagues else next(iter(leagues))
     )
 
-    top_cols = st.columns([2, 1])
+    # A group competition (Nations League, World Cup, Euros) gets a third
+    # control beside Season to flip between its group tables and one overall
+    # ranking. Decided from the league already in session state, since the
+    # columns have to exist before the League picker below is drawn.
+    selected_league = leagues.get(st.session_state["home_league"])
+    has_view_toggle = selected_league is not None and selected_league.has_groups
+    top_cols = st.columns([2, 1, 1] if has_view_toggle else [2, 1])
     code = top_cols[0].selectbox(
         "League",
         options=list(leagues.keys()),
@@ -228,6 +237,13 @@ def render() -> None:
     season = top_cols[1].selectbox(
         "Season", options=season_options, format_func=lambda s: _season_label(s, league), key="home_season"
     )
+    show_rankings = False
+    if has_view_toggle:
+        view = top_cols[2].segmented_control(
+            "View", options=[GROUPS_VIEW, RANKINGS_VIEW], default=GROUPS_VIEW, key="home_table_view"
+        )
+        # Clicking the selected option again clears it -- treat that as Groups.
+        show_rankings = view == RANKINGS_VIEW
 
     # emblem_url comes straight from football-data.org's API response, not
     # our own static config -- html.escape() here (and, defensively, on the
@@ -394,9 +410,11 @@ def render() -> None:
         if league.has_groups
         else {}
     )
-    if group_standings:
+    if group_standings and not show_rankings:
         sections = list(group_standings.items())
     else:
+        # Also what the Rankings view shows for a group competition: every
+        # match of the season in one overall table.
         standings = compute_standings(matches, team_names, season)
         # Split into per-conference tables only when every team in the
         # current standings has a known conference (e.g. MLS's
