@@ -38,26 +38,17 @@ class TeamStanding:
         return self.won * 3 + self.drawn
 
 
-def compute_standings(
-    matches: pd.DataFrame,
+def _standings_from_matches(
+    season_matches: pd.DataFrame,
     team_names: dict[int, str],
-    season: str,
-    form_length: int = DEFAULT_FORM_LENGTH,
-) -> list[TeamStanding]:
-    """`matches` needs columns: date, season, home_team_id, away_team_id,
-    home_goals, away_goals (see storage.repository.matches_for_league).
-    Returns standings sorted by points/goal-diff/goals-for, best first.
-
-    Only teams that actually played a match in `season` are included --
-    `team_names` (and the underlying `matches` DataFrame) span every season
-    ever ingested for the league, so promoted/relegated clubs from other
-    seasons must not show up as padding rows with zero games played.
-    """
-    season_matches = matches[matches["season"] == season].sort_values("date")
-
+    form_length: int,
+) -> dict[int, TeamStanding]:
+    """Accumulates Played/W/D/L/GF/GA/form over `season_matches` (any subset
+    of a league's matches, already filtered by the caller) -- shared by the
+    overall table and each per-group table."""
     standings: dict[int, TeamStanding] = {}
 
-    for row in season_matches.itertuples(index=False):
+    for row in season_matches.sort_values("date").itertuples(index=False):
         home = standings.setdefault(
             row.home_team_id,
             TeamStanding(row.home_team_id, team_names.get(row.home_team_id, f"team#{row.home_team_id}")),
@@ -92,8 +83,74 @@ def compute_standings(
 
     for standing in standings.values():
         standing.form = standing.form[-form_length:]
+    return standings
 
+
+def _ranked(standings: dict[int, TeamStanding]) -> list[TeamStanding]:
     return sorted(
         standings.values(),
         key=lambda s: (-s.points, -s.goal_diff, -s.goals_for, s.team_name),
     )
+
+
+def compute_standings(
+    matches: pd.DataFrame,
+    team_names: dict[int, str],
+    season: str,
+    form_length: int = DEFAULT_FORM_LENGTH,
+) -> list[TeamStanding]:
+    """`matches` needs columns: date, season, home_team_id, away_team_id,
+    home_goals, away_goals (see storage.repository.matches_for_league).
+    Returns standings sorted by points/goal-diff/goals-for, best first.
+
+    Only teams that actually played a match in `season` are included --
+    `team_names` (and the underlying `matches` DataFrame) span every season
+    ever ingested for the league, so promoted/relegated clubs from other
+    seasons must not show up as padding rows with zero games played.
+    """
+    season_matches = matches[matches["season"] == season]
+    return _ranked(_standings_from_matches(season_matches, team_names, form_length))
+
+
+def compute_group_standings(
+    matches: pd.DataFrame,
+    team_names: dict[int, str],
+    season: str,
+    form_length: int = DEFAULT_FORM_LENGTH,
+    fixture_groups: pd.DataFrame | None = None,
+) -> dict[str, list[TeamStanding]]:
+    """One table per group of a group competition (Nations League, World Cup,
+    Euros): `{group name: standings}` with groups in name order, empty when
+    `season` has no group-tagged matches (the caller then falls back to the
+    single overall table).
+
+    Only matches with a `group_name` count -- knockout and playoff matches
+    are stored without one, so they never inflate a group's table.
+    `fixture_groups` (columns home_team_id, away_team_id, group_name; see
+    storage.repository.fixture_groups_for_league) adds any team that has an
+    upcoming group fixture but hasn't played yet, as a zero-games row, so a
+    group still shows all its teams at the start of a tournament. Pass it
+    only for the league's latest season -- fixtures carry no season of their
+    own.
+
+    Ranking is points, goal difference, goals scored -- an approximation:
+    UEFA breaks ties on head-to-head results first, so a tied group can
+    order differently from the official table.
+    """
+    if "group_name" not in matches.columns:
+        return {}
+    season_matches = matches[(matches["season"] == season) & matches["group_name"].notna()]
+    groups: dict[str, dict[int, TeamStanding]] = {
+        group: _standings_from_matches(group_matches, team_names, form_length)
+        for group, group_matches in season_matches.groupby("group_name")
+    }
+
+    if fixture_groups is not None and not fixture_groups.empty:
+        for row in fixture_groups.itertuples(index=False):
+            groups.setdefault(row.group_name, {})
+            for team_id in (row.home_team_id, row.away_team_id):
+                groups[row.group_name].setdefault(
+                    team_id, TeamStanding(team_id, team_names.get(team_id, f"team#{team_id}"))
+                )
+
+    return {group: _ranked(groups[group]) for group in sorted(groups)}

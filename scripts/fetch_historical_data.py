@@ -83,7 +83,8 @@ def _sync_euro_archive_season(session, league: League, season: str) -> tuple[int
     seed_teams_from_names(session, league.code, team_names)
 
     matches_df = pd.DataFrame(
-        matches, columns=["date", "home_team_name", "away_team_name", "home_goals", "away_goals"]
+        matches,
+        columns=["date", "home_team_name", "away_team_name", "home_goals", "away_goals", "group_name"],
     )
     ingested, skipped = ingest_into_db(session, league.code, season, matches_df)
     goal_ingested, goal_skipped = ingest_goals_into_db(

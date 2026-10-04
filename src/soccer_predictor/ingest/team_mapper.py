@@ -98,8 +98,12 @@ def seed_teams_from_espn(session: Session, league: League) -> int:
         # this doesn't cost an extra network call once squad/injuries have
         # already been synced for this team in the same refresh run, or
         # vice versa.
-        conference = espn_client.fetch_team_conference(league.espn_league_slug, entry.espn_id)
-        update_team_conference(session, team.id, conference)
+        # Conference ids are MLS-specific ("1"/"2"); in a group competition
+        # the same field is a group id, which would be mislabeled as one
+        # of those conferences -- and costs a request per team for nothing.
+        if not league.has_groups:
+            conference = espn_client.fetch_team_conference(league.espn_league_slug, entry.espn_id)
+            update_team_conference(session, team.id, conference)
         count += 1
     return count
 

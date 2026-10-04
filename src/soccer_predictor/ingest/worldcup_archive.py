@@ -71,28 +71,63 @@ def _season_from_tournament_id(tournament_id: str) -> str:
     return tournament_id.split("-")[-1]
 
 
+def _group_label(stage_name: str, group_name: str, group_stage: int) -> str | None:
+    """The table a match belongs to, or None for a knockout match (which
+    must stay out of every group table). A second round-robin stage (1974,
+    1978, 1982) reuses the first stage's group names -- "Group A" -- so it's
+    qualified with its stage ("Second Group Stage - Group A") to keep the
+    two stages' tables from merging; 1950's decisive "final round" has no
+    group name at all and becomes a single table of its own.
+    """
+    if not group_stage:
+        return None
+    has_group = bool(group_name) and group_name != "not applicable"
+    if stage_name == "group stage":
+        return group_name if has_group else None
+    stage_label = stage_name.title()
+    return f"{stage_label} - {group_name}" if has_group else stage_label
+
+
 def parse_matches(df: pd.DataFrame) -> pd.DataFrame:
     """Canonical (date, home_team_name, away_team_name, home_goals,
-    away_goals, season) rows, in the same shape
-    ingest.historical_csv.ingest_into_db already expects -- reused as-is
-    for match persistence (see scripts/fetch_historical_data.py). Scores are
+    away_goals, season, group_name) rows, in the same shape
+    ingest.historical_csv.ingest_into_db already expects -- reused as-is for
+    match persistence (see scripts/fetch_historical_data.py). Scores are
     whatever the source lists as the final result, including extra time
     when played (e.g. Argentina 3-3 France, 2022 final) -- penalty
     shootouts are never reflected in the goal columns, matching how this
     app has always treated a scoreline for Dixon-Coles training.
+    `group_name` is None for knockout matches (see _group_label).
     """
     mens = df[_is_mens(df)].copy()
     mens["season"] = mens["tournament_id"].map(_season_from_tournament_id)
+    if {"stage_name", "group_name", "group_stage"} <= set(mens.columns):
+        mens["group_label"] = [
+            _group_label(stage, group, group_stage)
+            for stage, group, group_stage in zip(mens["stage_name"], mens["group_name"], mens["group_stage"])
+        ]
+    else:
+        mens["group_label"] = None
     out = mens[
-        ["match_date", "home_team_name", "away_team_name", "home_team_score", "away_team_score", "season"]
+        [
+            "match_date",
+            "home_team_name",
+            "away_team_name",
+            "home_team_score",
+            "away_team_score",
+            "season",
+            "group_label",
+        ]
     ].rename(
         columns={
             "match_date": "date",
             "home_team_score": "home_goals",
             "away_team_score": "away_goals",
+            "group_label": "group_name",
         }
     )
     out["date"] = pd.to_datetime(out["date"]).dt.date
+    out["group_name"] = out["group_name"].astype(object).where(out["group_name"].notna(), None)
     return out
 
 

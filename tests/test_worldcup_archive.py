@@ -37,7 +37,15 @@ def test_parse_matches_produces_canonical_columns():
     df = _matches_df([{}])
     out = worldcup_archive.parse_matches(df)
 
-    assert list(out.columns) == ["date", "home_team_name", "away_team_name", "home_goals", "away_goals", "season"]
+    assert list(out.columns) == [
+        "date",
+        "home_team_name",
+        "away_team_name",
+        "home_goals",
+        "away_goals",
+        "season",
+        "group_name",
+    ]
     row = out.iloc[0]
     assert row["home_team_name"] == "France"
     assert row["away_team_name"] == "Mexico"

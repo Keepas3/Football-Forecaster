@@ -89,6 +89,11 @@ class Match(Base):
     home_goals: Mapped[int]
     away_goals: Mapped[int]
     source: Mapped[str] = mapped_column(String, default="football-data.co.uk")
+    # e.g. "Group A1" for a group-stage match of a group competition (Nations
+    # League, World Cup, Euros) -- None for everything else (domestic
+    # leagues, knockout/playoff matches), which is also how knockout results
+    # are kept out of the per-group tables (see model/standings.py).
+    group_name: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
 
 class Fixture(Base):
@@ -110,6 +115,9 @@ class Fixture(Base):
     # this app). Nullable: rows synced before this column existed, or ever,
     # simply have no kickoff time -- callers fall back to date-only display.
     kickoff_utc: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+    # Same meaning as Match.group_name -- lets a group with no results yet
+    # still list its teams.
+    group_name: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
 
 class Injury(Base):

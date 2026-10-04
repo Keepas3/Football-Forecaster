@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import re
 
 import pandas as pd
 import streamlit as st
@@ -40,11 +41,12 @@ from soccer_predictor.dashboard.components import (
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
 from soccer_predictor.ingest.live_scores import fetch_all_live_matches
 from soccer_predictor.ingest.news import league_news_query
-from soccer_predictor.model.standings import compute_standings
+from soccer_predictor.model.standings import compute_group_standings, compute_standings
 from soccer_predictor.model.team_facts import compute_head_to_head
 from soccer_predictor.prediction.service import load_latest_params, predict_fixture
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import (
+    fixture_groups_for_league,
     fixtures_for_league,
     live_fixtures_across_leagues,
     matches_for_league,
@@ -57,14 +59,18 @@ from soccer_predictor.storage.repository import (
 )
 
 RANKINGS_TABLE_KEY = "league_rankings_table"
-# Only ever used for a league with a real conference split (currently just
-# MLS's Eastern/Western) -- see team_conferences_for_league.
-_CONFERENCE_TABLE_KEYS = {
-    "Eastern Conference": "league_rankings_table_east",
-    "Western Conference": "league_rankings_table_west",
-}
 _CLEAR_SELECTION_FLAG = "_clear_rankings_selection"
+# Every standings table (one per group / conference) has its own widget key,
+# and the set of them depends on the league and season being viewed -- so the
+# keys rendered so far are remembered here, to clear stale row selections
+# for all of them (see render()).
+_RENDERED_TABLE_KEYS = "_rendered_standings_table_keys"
 UPCOMING_FIXTURES_WINDOW_DAYS = 14
+
+
+def _table_key(section_title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", section_title.casefold()).strip("_")
+    return f"league_rankings_table_{slug}"
 
 
 def _season_label(season: str, league) -> str:
@@ -174,7 +180,7 @@ def render() -> None:
     # every possible table key up front (harmless for ones not actually
     # rendered this run) rather than tracking which one was active.
     if st.session_state.pop(_CLEAR_SELECTION_FLAG, False):
-        for key in (RANKINGS_TABLE_KEY, *_CONFERENCE_TABLE_KEYS.values()):
+        for key in (RANKINGS_TABLE_KEY, *st.session_state.get(_RENDERED_TABLE_KEYS, [])):
             st.session_state[key] = {"selection": {"rows": []}}
 
     leagues = load_leagues()
@@ -237,6 +243,13 @@ def render() -> None:
         matches = matches_for_league(session, league.code)
         crest_urls = team_crests_for_league(session, league.code)
         conference_by_team = team_conferences_for_league(session, league.code)
+        # Fixtures carry no season of their own, so their groups only apply
+        # to the league's latest edition (what any stored fixture is for).
+        fixture_groups_df = (
+            fixture_groups_for_league(session, league.code)
+            if league.has_groups and season == league.seasons[-1]
+            else None
+        )
         next_opponent_ids = next_fixture_per_team(session, league.code, today)
         params = load_latest_params(session, league.code)
         upcoming_fixtures_df = fixtures_for_league(
@@ -351,25 +364,48 @@ def render() -> None:
         legend = " · ".join(f"{ZONE_MARKER.get(z.kind, '')} {z.label}" for z in league.zones)
         st.caption(legend)
 
-    standings = compute_standings(matches, team_names, season)
-
-    # Split into per-conference tables only when every team in the current
-    # standings has a known conference (e.g. MLS's Eastern/Western) -- a
-    # partial split (some teams unassigned) would silently drop teams from
-    # both tables, so this falls back to one flat table unless the data is
-    # complete.
-    has_full_conference_split = bool(conference_by_team) and all(
-        s.team_id in conference_by_team for s in standings
+    # One table per section: each group of a group competition (Nations
+    # League, World Cup, Euros) when this season has group data, else each
+    # conference of a league with a full conference split (MLS), else a
+    # single flat table.
+    sections: list[tuple[str | None, list]] = []
+    group_standings = (
+        compute_group_standings(matches, team_names, season, fixture_groups=fixture_groups_df)
+        if league.has_groups
+        else {}
     )
-
-    if has_full_conference_split:
-        for conference_name, table_key in _CONFERENCE_TABLE_KEYS.items():
-            conference_standings = [s for s in standings if conference_by_team[s.team_id] == conference_name]
-            if not conference_standings:
-                continue
-            st.markdown(f"**{conference_name}**")
-            table_df = standings_dataframe(conference_standings, crest_urls, next_opponent_names, league.zones)
-            _render_standings_table(table_df, table_key, f"standings_search_{league.code}_{table_key}", league.code)
+    if group_standings:
+        sections = list(group_standings.items())
     else:
-        table_df = standings_dataframe(standings, crest_urls, next_opponent_names, league.zones)
-        _render_standings_table(table_df, RANKINGS_TABLE_KEY, f"standings_search_{league.code}", league.code)
+        standings = compute_standings(matches, team_names, season)
+        # Split into per-conference tables only when every team in the
+        # current standings has a known conference (e.g. MLS's
+        # Eastern/Western) -- a partial split (some teams unassigned) would
+        # silently drop teams from both tables, so this falls back to one
+        # flat table unless the data is complete.
+        has_full_conference_split = bool(conference_by_team) and all(
+            s.team_id in conference_by_team for s in standings
+        )
+        if has_full_conference_split:
+            for conference_name in sorted({conference_by_team[s.team_id] for s in standings}):
+                sections.append(
+                    (conference_name, [s for s in standings if conference_by_team[s.team_id] == conference_name])
+                )
+        else:
+            sections = [(None, standings)]
+
+    rendered_keys = []
+    for title, section_standings in sections:
+        if title is None:
+            table_key, search_key = RANKINGS_TABLE_KEY, f"standings_search_{league.code}"
+        else:
+            table_key = _table_key(title)
+            search_key = f"standings_search_{league.code}_{table_key}"
+            st.markdown(f"**{title}**")
+        table_df = standings_dataframe(section_standings, crest_urls, next_opponent_names, league.zones)
+        rendered_keys.append(table_key)
+        # Recorded before rendering: a row click inside _render_standings_table
+        # switches page immediately, and the next run must already know this
+        # key to clear its stale selection.
+        st.session_state[_RENDERED_TABLE_KEYS] = sorted({*st.session_state.get(_RENDERED_TABLE_KEYS, []), *rendered_keys})
+        _render_standings_table(table_df, table_key, search_key, league.code)

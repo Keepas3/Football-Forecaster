@@ -44,6 +44,9 @@ import requests
 from soccer_predictor.config import DATA_DIR
 
 BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+# The standings endpoint lives under a different path (/apis/v2, not
+# /apis/site/v2) -- see fetch_group_membership.
+STANDINGS_BASE_URL = "https://site.api.espn.com/apis/v2/sports/soccer"
 CACHE_DIR = DATA_DIR / "cache" / "espn"
 MAX_REQUESTS_PER_MINUTE = 30  # self-imposed courtesy limit -- no published cap exists
 
@@ -93,25 +96,33 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
-def _cache_path(path: str, params: dict) -> Path:
-    key = hashlib.sha256(f"{path}?{sorted(params.items())}".encode()).hexdigest()
+def _cache_path(path: str, params: dict, base_url: str = BASE_URL) -> Path:
+    # The default base is left out of the key so cache files written before
+    # base_url existed keep resolving.
+    base_part = "" if base_url == BASE_URL else base_url
+    key = hashlib.sha256(f"{base_part}{path}?{sorted(params.items())}".encode()).hexdigest()
     return CACHE_DIR / f"{key}.json"
 
 
-def get(path: str, params: dict | None = None, cache_ttl_seconds: int = 6 * 3600) -> dict:
+def get(
+    path: str,
+    params: dict | None = None,
+    cache_ttl_seconds: int = 6 * 3600,
+    base_url: str = BASE_URL,
+) -> dict:
     """GETs `{BASE_URL}{path}`, serving from an on-disk cache within TTL.
     No API key exists for this endpoint -- the only failure mode is a
     network/HTTP error, left to the caller (mirrors understat_client.get).
     """
     params = params or {}
-    cache_file = _cache_path(path, params)
+    cache_file = _cache_path(path, params, base_url)
     if cache_file.exists():
         age = time.time() - cache_file.stat().st_mtime
         if age < cache_ttl_seconds:
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
     _rate_limiter.wait()
-    response = requests.get(f"{BASE_URL}{path}", params=params, timeout=15)
+    response = requests.get(f"{base_url}{path}", params=params, timeout=15)
     response.raise_for_status()
     data = response.json()
 
@@ -144,6 +155,13 @@ class EspnMatch:
     # ingest/live_scores.py, the only current consumer of these two fields.
     state: str = "pre"
     clock_label: str | None = None  # e.g. "63'", "HT", "45+2'" -- only meaningful when state == "in"
+    # Group-competition context (e.g. the Nations League), where ESPN
+    # provides it: `group_name` is the scoreboard's own per-match group
+    # label (not present for every edition -- see fetch_group_membership for
+    # the reliable source), `stage` is the schedule endpoint's season-type
+    # name ("Group Stage", "Semifinals", or a division like "League A").
+    group_name: str | None = None
+    stage: str | None = None
 
 
 @dataclass
@@ -199,6 +217,14 @@ def _parse_score(competitor: dict) -> int | None:
     return int(score)
 
 
+def normalize_group_name(raw: str | None) -> str | None:
+    """ESPN's group labels come in inconsistent casing across editions
+    ("GROUP D1", "Group B1", "LEAGUE D - GROUP 2") -- one display form."""
+    if not raw or not raw.strip():
+        return None
+    return raw.strip().title()
+
+
 def _parse_event(event: dict) -> EspnMatch | None:
     try:
         competition = event["competitions"][0]
@@ -227,8 +253,10 @@ def _parse_event(event: dict) -> EspnMatch | None:
             away_score=away_score,
             state=state,
             clock_label=clock_label,
+            group_name=normalize_group_name((competition.get("group") or {}).get("name")),
+            stage=(event.get("seasonType") or {}).get("name"),
         )
-    except (KeyError, IndexError, StopIteration, ValueError, TypeError):
+    except (KeyError, IndexError, StopIteration, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -265,6 +293,37 @@ def fetch_day_fixtures(league_slug: str, date: dt.date) -> list[EspnMatch]:
 
     matches = (_parse_event(e) for e in data.get("events", []))
     return [m for m in matches if m is not None and not m.completed]
+
+
+def fetch_group_membership(league_slug: str, season: int) -> dict[str, str]:
+    """{espn team id: group name} for one edition of a group competition
+    (e.g. the Nations League), from the standings endpoint's per-group
+    children. Verified live that, unlike the scoreboard's per-match group
+    label, this answers for past editions too (`season=` is the edition's
+    start year) -- though ESPN's own data is incomplete for the oldest one
+    (2018-19 lists only League D). Empty dict on any failure or for a league
+    with no groups (a flat standings table has no `children`).
+    """
+    try:
+        data = get(
+            f"/{league_slug}/standings",
+            params={"season": season},
+            cache_ttl_seconds=SCHEDULE_CACHE_TTL_SECONDS,
+            base_url=STANDINGS_BASE_URL,
+        )
+    except (requests.RequestException, ValueError):
+        return {}
+
+    membership: dict[str, str] = {}
+    for child in data.get("children") or []:
+        group = normalize_group_name(child.get("name"))
+        if group is None:
+            continue
+        for entry in (child.get("standings") or {}).get("entries") or []:
+            team_id = (entry.get("team") or {}).get("id")
+            if team_id is not None:
+                membership[str(team_id)] = group
+    return membership
 
 
 def fetch_team_roster(

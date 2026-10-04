@@ -184,6 +184,31 @@ def _parse_match_line(line: str) -> tuple[str, int, int, str] | None:
     return home, int(score.group("hg")), int(score.group("ag")), away
 
 
+# "▪ Group A" / "▪ Group 1" section headers (not the "Group A | Teams..."
+# roster lines near the top of each file, which have no leading marker).
+_SECTION_HEADER_RE = re.compile(r"^▪\s*(?P<title>.+?)\s*$")
+_GROUP_HEADER_RE = re.compile(r"^(?P<group>Group\s+\w+)", re.IGNORECASE)
+
+
+def _group_for_section_header(line: str, current_group: str | None) -> tuple[bool, str | None]:
+    """Returns (is_section_header, group the following matches belong to).
+    A "▪ Group X" header starts that group; "▪ Matchday N | dates" lines are
+    schedule summaries printed before the groups, so they leave the current
+    group alone; every other header (quarter-finals, final, third-place...)
+    ends group play -- those matches are knockout and get no group.
+    """
+    header = _SECTION_HEADER_RE.match(line.strip())
+    if header is None:
+        return False, current_group
+    title = header.group("title")
+    group = _GROUP_HEADER_RE.match(title)
+    if group:
+        return True, group.group("group").title()
+    if title.casefold().startswith("matchday"):
+        return True, current_group
+    return True, None
+
+
 def _parse_date_line(line: str, year: int) -> "dt.date | None":
     import datetime as dt
 
@@ -201,7 +226,9 @@ def _parse_date_line(line: str, year: int) -> "dt.date | None":
 
 def parse_matches(text: str, year: int) -> list[dict]:
     """Canonical match dicts (date, home_team_name, away_team_name,
-    home_goals, away_goals) for one tournament's raw euro.txt. `year` seeds
+    home_goals, away_goals, group_name) for one tournament's raw euro.txt;
+    `group_name` ("Group A") is None for a knockout match or a file with no
+    group headers (the 1960-1972 knockout-only tournaments). `year` seeds
     a fallback date (the tournament's own year, month/day unknown) for the
     handful of tournaments whose file never states a per-match date at all
     (e.g. 1972's file only labels stages, not dates on some lines) -- close
@@ -212,11 +239,16 @@ def parse_matches(text: str, year: int) -> list[dict]:
 
     fallback_date = dt.date(year, 7, 1)
     current_date = fallback_date
+    current_group: str | None = None
     matches: list[dict] = []
 
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
         if not line.strip():
+            continue
+
+        is_header, current_group = _group_for_section_header(line, current_group)
+        if is_header:
             continue
 
         parsed_date = _parse_date_line(line, year)
@@ -234,6 +266,7 @@ def parse_matches(text: str, year: int) -> list[dict]:
                 "away_team_name": away,
                 "home_goals": home_goals,
                 "away_goals": away_goals,
+                "group_name": current_group,
             }
         )
 

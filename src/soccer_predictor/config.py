@@ -87,6 +87,12 @@ class League:
     # isn't what news sites actually call the competition, e.g. "English
     # Premier League" -> "Premier League". None falls back to `name`.
     news_query: str | None = None
+    # True for a group competition (Nations League, World Cup, Euros): the
+    # Leagues page shows one standings table per group (Match.group_name)
+    # instead of a single overall ranking, and ingest records each match's
+    # group. Off by default -- and kept off for MLS, whose ESPN "groups" are
+    # its two conferences, which most matches cross (see Team.conference).
+    has_groups: bool = False
 
     @property
     def supports_predictions(self) -> bool:
@@ -152,6 +158,7 @@ def load_leagues() -> dict[str, League]:
             espn_league_slug=entry.get("espn_league_slug"),
             trainable=entry.get("trainable", False),
             news_query=entry.get("news_query"),
+            has_groups=entry.get("has_groups", False),
         )
         for entry in raw["leagues"]
     }

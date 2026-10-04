@@ -95,6 +95,7 @@ leagues:
     # best third-placed).
     data_source: archive_worldcup
     trainable: true
+    has_groups: true
     seasons: ["1930", "1934", "1938", "1950", "1954", "1958", "1962", "1966", "1970", "1974", "1978", "1982", "1986", "1990", "1994", "1998", "2002", "2006", "2010", "2014", "2018", "2022", "2026", "2030"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
@@ -125,8 +126,29 @@ leagues:
     # live-fixture path unchanged.
     data_source: archive_euro
     trainable: true
+    has_groups: true
     seasons: ["1960", "1964", "1968", "1972", "1976", "1980", "1984", "1988", "1992", "1996", "2000", "2004", "2008", "2012", "2016", "2020", "2024", "2028"]
     season_display: single_year
+    flag_url: https://flagcdn.com/w40/un.png
+    flag_emoji: "🇺🇳"
+  # football-data.org's free tier doesn't cover the Nations League, so --
+  # like MLS below -- everything comes from ESPN's keyless endpoints
+  # (slug uefa.nations, verified live: 54 teams, results back to the
+  # 2018-19 edition). Editions are biennial and ESPN keys them by start
+  # year, so season "2425" is ESPN `season=2024` and the odd years return
+  # nothing. `has_groups` turns on the per-group standings tables: each
+  # edition's groups (Group A1..D2) change every time, so the group is
+  # stored per match (Match.group_name) rather than per team. No zones --
+  # promotion/relegation between Leagues A-D follows rules that vary by
+  # edition (same reasoning as the World Cup's missing zones).
+  - code: NL
+    name: UEFA Nations League
+    news_query: UEFA Nations League
+    data_source: espn
+    espn_league_slug: uefa.nations
+    trainable: true
+    has_groups: true
+    seasons: ["1819", "2021", "2223", "2425", "2627"]
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"
 

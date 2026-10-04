@@ -153,7 +153,16 @@ def upsert_match(
     home_goals: int,
     away_goals: int,
     source: str = "football-data.co.uk",
+    group_name: str | None = None,
+    group_is_fallback: bool = False,
 ) -> None:
+    """`group_name` is only ever set, never cleared: a re-sync from a source
+    that doesn't know the group (e.g. ESPN's team-schedule endpoint) must
+    not wipe a group an earlier pass already filled in. A `group_is_fallback`
+    name (one derived from the match graph, see
+    ingest/fixtures.py::derive_groups_from_matches) is a guess, so it only
+    fills a match that has no group yet -- it never replaces a real label.
+    """
     existing = session.scalar(
         select(Match).where(
             Match.league_code == league_code,
@@ -166,6 +175,8 @@ def upsert_match(
         existing.home_goals = home_goals
         existing.away_goals = away_goals
         existing.season = season
+        if group_name is not None and not (group_is_fallback and existing.group_name is not None):
+            existing.group_name = group_name
         return
     session.add(
         Match(
@@ -177,8 +188,28 @@ def upsert_match(
             home_goals=home_goals,
             away_goals=away_goals,
             source=source,
+            group_name=group_name,
         )
     )
+
+
+def set_match_group_names(
+    session: Session, league_code: str, season: str, group_by_match: dict[tuple[int, int], str]
+) -> int:
+    """Fills Match.group_name for already-stored matches of one season, keyed
+    by (home_team_id, away_team_id) -- used when the group is only learnable
+    after the results are in (ESPN's team-schedule endpoint carries no
+    group). Returns how many rows were updated.
+    """
+    updated = 0
+    for match in session.scalars(
+        select(Match).where(Match.league_code == league_code, Match.season == season)
+    ).all():
+        group = group_by_match.get((match.home_team_id, match.away_team_id))
+        if group is not None and match.group_name != group:
+            match.group_name = group
+            updated += 1
+    return updated
 
 
 def replace_historical_tournament_goals(
@@ -291,11 +322,20 @@ def matches_for_league(session: Session, league_code: str) -> pd.DataFrame:
             Match.away_team_id,
             Match.home_goals,
             Match.away_goals,
+            Match.group_name,
         ).where(Match.league_code == league_code)
     ).all()
     return pd.DataFrame(
         rows,
-        columns=["date", "season", "home_team_id", "away_team_id", "home_goals", "away_goals"],
+        columns=[
+            "date",
+            "season",
+            "home_team_id",
+            "away_team_id",
+            "home_goals",
+            "away_goals",
+            "group_name",
+        ],
     )
 
 
@@ -345,6 +385,7 @@ def upsert_fixture(
     away_team_id: int,
     status: str,
     kickoff_utc: dt.datetime | None = None,
+    group_name: str | None = None,
 ) -> None:
     existing = session.scalar(
         select(Fixture).where(
@@ -360,6 +401,8 @@ def upsert_fixture(
         existing.fetched_at = now
         if kickoff_utc is not None:
             existing.kickoff_utc = kickoff_utc
+        if group_name is not None:
+            existing.group_name = group_name
         return
     session.add(
         Fixture(
@@ -370,8 +413,22 @@ def upsert_fixture(
             status=status,
             fetched_at=now,
             kickoff_utc=kickoff_utc,
+            group_name=group_name,
         )
     )
+
+
+def fixture_groups_for_league(session: Session, league_code: str) -> pd.DataFrame:
+    """(home_team_id, away_team_id, group_name) for every stored fixture with
+    a group -- lets a group that hasn't played yet still list its teams
+    (see model/standings.py::compute_group_standings's `fixture_groups`).
+    """
+    rows = session.execute(
+        select(Fixture.home_team_id, Fixture.away_team_id, Fixture.group_name).where(
+            Fixture.league_code == league_code, Fixture.group_name.is_not(None)
+        )
+    ).all()
+    return pd.DataFrame(rows, columns=["home_team_id", "away_team_id", "group_name"])
 
 
 def fixtures_for_league(

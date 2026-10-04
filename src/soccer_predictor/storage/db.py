@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from soccer_predictor.config import DATA_DIR, DB_PATH, turso_auth_token, turso_database_url
@@ -36,8 +36,29 @@ def get_engine():
     return _engine
 
 
+def ensure_group_name_columns(engine=None) -> list[str]:
+    """Adds matches.group_name / fixtures.group_name to a database created
+    before those columns existed, returning the tables that were altered.
+    Unlike this app's earlier one-off migration scripts, init_db() runs this
+    automatically: the deployed dashboard opens a committed data/soccer.db
+    that may predate the columns, and every query selecting them would
+    otherwise fail until the next scheduled refresh rewrote the file.
+    """
+    engine = engine or get_engine()
+    altered = []
+    for table in ("matches", "fixtures"):
+        columns = {col["name"] for col in inspect(engine).get_columns(table)}
+        if "group_name" in columns:
+            continue
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN group_name VARCHAR"))
+        altered.append(table)
+    return altered
+
+
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
+    ensure_group_name_columns()
 
 
 @contextmanager

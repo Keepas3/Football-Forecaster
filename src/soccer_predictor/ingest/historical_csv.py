@@ -39,6 +39,14 @@ def parse_csv(path: Path) -> pd.DataFrame:
     )
 
 
+def _optional_group_name(row) -> str | None:
+    """`group_name` only exists on the WC/Euro archive frames (see
+    worldcup_archive.parse_matches); football-data.co.uk CSVs never have
+    one, and a knockout match's is None/NaN."""
+    group = getattr(row, "group_name", None)
+    return group if isinstance(group, str) and group else None
+
+
 def ingest_into_db(
     session: Session, league_code: str, season: str, df: pd.DataFrame
 ) -> tuple[int, int]:
@@ -61,6 +69,7 @@ def ingest_into_db(
             away_team_id=away_team_id,
             home_goals=row.home_goals,
             away_goals=row.away_goals,
+            group_name=_optional_group_name(row),
         )
         ingested += 1
     return ingested, skipped
