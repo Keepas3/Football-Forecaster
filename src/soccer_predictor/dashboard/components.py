@@ -129,6 +129,57 @@ def format_kickoff(
     return formatted
 
 
+def selected_timezone() -> ZoneInfo:
+    """The zone chosen in timezone_selector, without drawing another picker
+    (for tables that only need to format dates in the user's zone)."""
+    label = st.session_state.get(_TIMEZONE_SESSION_KEY, DEFAULT_TIMEZONE_LABEL)
+    return ZoneInfo(TIMEZONE_CHOICES.get(label, TIMEZONE_CHOICES[DEFAULT_TIMEZONE_LABEL]))
+
+
+def next_match_labels(
+    fixtures_df: pd.DataFrame,
+    team_names: dict[int, str],
+    tz: ZoneInfo,
+    now: dt.datetime | None = None,
+) -> dict[int, str]:
+    """Each team's "Next" cell for the standings table: its next opponent and
+    when -- "Norway · Oct 06" (the date in `tz`, no time), or
+    "Norway · 🔴 LIVE" while that match is in progress (within
+    LIVE_MATCH_WINDOW of kickoff). `fixtures_df` needs date, home_team_id,
+    away_team_id and kickoff_utc (see storage.repository.fixtures_for_league).
+
+    A fixture whose kickoff is further back than the live window is treated
+    as already played and skipped -- fixtures stay in the table until the
+    next data refresh, and a finished game isn't anyone's "next" match.
+    Teams with no upcoming fixture are absent.
+    """
+    now = now if now is not None else dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    labels: dict[int, str] = {}
+    for row in sort_fixtures_by_kickoff(fixtures_df).itertuples(index=False):
+        known_kickoff = not pd.isna(row.kickoff_utc)
+        if known_kickoff and now >= row.kickoff_utc + LIVE_MATCH_WINDOW:
+            continue
+        if known_kickoff and row.kickoff_utc <= now:
+            when = "🔴 LIVE"
+        elif known_kickoff:
+            when = row.kickoff_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz).strftime("%b %d")
+        else:
+            when = row.date.strftime("%b %d")
+        for team_id, opponent_id in ((row.home_team_id, row.away_team_id), (row.away_team_id, row.home_team_id)):
+            if team_id not in labels:
+                labels[team_id] = f"{team_names.get(opponent_id, f'team#{opponent_id}')} · {when}"
+    return labels
+
+
+def sort_fixtures_by_kickoff(fixtures_df):
+    """Upcoming fixtures in kickoff order: by date, then by kickoff time
+    within a day (fixtures with no known kickoff time go last in their day).
+    Sorting on `date` alone left same-day matches in arbitrary database
+    order, so a 6:45pm game could sit above a noon one.
+    """
+    return fixtures_df.sort_values(["date", "kickoff_utc"], na_position="last", kind="stable")
+
+
 # Wide enough for "🔴 LIVE NOW" at the banner's font size.
 LIVE_LABEL_WIDTH = "6.5rem"
 

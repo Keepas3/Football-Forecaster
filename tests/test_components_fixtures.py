@@ -212,3 +212,29 @@ def test_fixture_prediction_row_uses_plain_english_percent_columns():
     assert row["Over 2.5 goals %"] == 57.1
     assert row["Both teams score %"] == 50.5
     assert not any(key.startswith("P(") for key in row)
+
+
+def test_sort_fixtures_by_kickoff_orders_within_a_day_and_puts_unknown_times_last():
+    import datetime as dt
+
+    import pandas as pd
+
+    from soccer_predictor.dashboard.components import sort_fixtures_by_kickoff
+
+    day = dt.date(2026, 10, 4)
+    df = pd.DataFrame(
+        {
+            "date": [day, day, day, dt.date(2026, 10, 5), day],
+            "home_team_id": [1, 2, 3, 4, 5],
+            "kickoff_utc": [
+                dt.datetime(2026, 10, 4, 18, 45),
+                dt.datetime(2026, 10, 4, 16, 0),
+                None,
+                dt.datetime(2026, 10, 5, 13, 0),
+                dt.datetime(2026, 10, 4, 18, 45),
+            ],
+        }
+    )
+    ordered = sort_fixtures_by_kickoff(df)["home_team_id"].tolist()
+    # 16:00, then the two 18:45s in their original order, then no-time, then next day.
+    assert ordered == [2, 1, 5, 3, 4]

@@ -27,12 +27,15 @@ from soccer_predictor.dashboard.components import (
     format_kickoff,
     league_option_label,
     live_sync_requirement_note,
+    next_match_labels,
     render_head_to_head,
     render_live_scores_banner,
     render_news_section,
     render_prediction_breakdown,
     season_already_concluded,
     season_not_yet_scheduled,
+    selected_timezone,
+    sort_fixtures_by_kickoff,
     standings_dataframe,
     style_fixture_predictions,
     style_standings,
@@ -51,7 +54,6 @@ from soccer_predictor.storage.repository import (
     live_fixtures_across_leagues,
     matches_for_league,
     matches_for_team,
-    next_fixture_per_team,
     team_by_id,
     team_conferences_for_league,
     team_crests_for_league,
@@ -252,7 +254,11 @@ def render() -> None:
             if league.has_groups and season == league.seasons[-1]
             else None
         )
-        next_opponent_ids = next_fixture_per_team(session, league.code, today)
+        # From yesterday so a match still in progress after UTC midnight is
+        # still found (next_match_labels drops anything already finished).
+        next_fixtures_df = fixtures_for_league(
+            session, league.code, today - dt.timedelta(days=1), today + dt.timedelta(days=365)
+        )
         params = load_latest_params(session, league.code)
         upcoming_fixtures_df = fixtures_for_league(
             session, league.code, today, today + dt.timedelta(days=UPCOMING_FIXTURES_WINDOW_DAYS)
@@ -265,10 +271,7 @@ def render() -> None:
         )
         st.stop()
 
-    next_opponent_names = {
-        team_id: team_names.get(opponent_id, f"team#{opponent_id}")
-        for team_id, opponent_id in next_opponent_ids.items()
-    }
+    next_opponent_names = next_match_labels(next_fixtures_df, team_names, selected_timezone())
 
     render_news_section(
         league_news_query(league),
@@ -294,7 +297,7 @@ def render() -> None:
             fixture_rows = []
             fixture_meta = []  # parallel to fixture_rows: (home_id, away_id, home_name, away_name, date)
             with session_scope() as session:
-                for row in upcoming_fixtures_df.sort_values("date").itertuples(index=False):
+                for row in sort_fixtures_by_kickoff(upcoming_fixtures_df).itertuples(index=False):
                     home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
                     away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
                     if params is not None:

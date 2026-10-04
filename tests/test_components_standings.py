@@ -60,3 +60,72 @@ def test_style_standings_no_color_when_no_zones():
     assert "#2e7d32" not in html
     assert "#f9a825" not in html
     assert "#c62828" not in html
+
+
+# --- "Next" column labels ---------------------------------------------------------
+
+import datetime as dt  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+import pandas as pd  # noqa: E402
+
+from soccer_predictor.dashboard.components import next_match_labels  # noqa: E402
+
+NAMES = {1: "Portugal", 2: "Norway", 3: "Denmark", 4: "Wales"}
+NOW = dt.datetime(2026, 10, 4, 19, 0)  # naive UTC, like Fixture.kickoff_utc
+UTC = ZoneInfo("UTC")
+
+
+def _fixtures(rows):
+    return pd.DataFrame(rows, columns=["date", "home_team_id", "away_team_id", "kickoff_utc"])
+
+
+def test_next_label_is_the_opponent_and_the_date_with_no_time():
+    df = _fixtures([(dt.date(2026, 10, 6), 1, 2, dt.datetime(2026, 10, 6, 18, 45))])
+    labels = next_match_labels(df, NAMES, UTC, now=NOW)
+    assert labels == {1: "Norway · Oct 06", 2: "Portugal · Oct 06"}
+
+
+def test_next_label_shows_live_instead_of_the_date_while_the_match_is_on():
+    df = _fixtures([(dt.date(2026, 10, 4), 1, 2, dt.datetime(2026, 10, 4, 18, 45))])  # kicked off 15 min ago
+    labels = next_match_labels(df, NAMES, UTC, now=NOW)
+    assert labels[1] == "Norway · 🔴 LIVE"
+    assert labels[2] == "Portugal · 🔴 LIVE"
+
+
+def test_a_finished_match_is_skipped_so_the_following_one_shows():
+    df = _fixtures(
+        [
+            (dt.date(2026, 10, 4), 1, 2, dt.datetime(2026, 10, 4, 12, 0)),  # over (7h ago)
+            (dt.date(2026, 10, 7), 1, 3, dt.datetime(2026, 10, 7, 18, 45)),
+        ]
+    )
+    labels = next_match_labels(df, NAMES, UTC, now=NOW)
+    assert labels[1] == "Denmark · Oct 07"
+    assert 2 not in labels  # Norway has nothing else scheduled
+
+
+def test_a_live_match_comes_before_a_later_one_for_the_same_team():
+    df = _fixtures(
+        [
+            (dt.date(2026, 10, 7), 1, 3, dt.datetime(2026, 10, 7, 18, 45)),
+            (dt.date(2026, 10, 4), 1, 2, dt.datetime(2026, 10, 4, 18, 45)),
+        ]
+    )
+    assert next_match_labels(df, NAMES, UTC, now=NOW)[1] == "Norway · 🔴 LIVE"
+
+
+def test_the_date_is_shown_in_the_chosen_timezone():
+    # 01:00 UTC on Oct 7 is still the evening of Oct 6 in New York.
+    df = _fixtures([(dt.date(2026, 10, 7), 1, 2, dt.datetime(2026, 10, 7, 1, 0))])
+    assert next_match_labels(df, NAMES, ZoneInfo("America/New_York"), now=NOW)[1] == "Norway · Oct 06"
+    assert next_match_labels(df, NAMES, UTC, now=NOW)[1] == "Norway · Oct 07"
+
+
+def test_a_fixture_with_no_kickoff_time_uses_its_date_and_never_counts_as_live():
+    df = _fixtures([(dt.date(2026, 10, 4), 1, 2, None)])
+    assert next_match_labels(df, NAMES, UTC, now=NOW)[1] == "Norway · Oct 04"
+
+
+def test_no_fixtures_gives_no_labels():
+    assert next_match_labels(_fixtures([]), NAMES, UTC, now=NOW) == {}
