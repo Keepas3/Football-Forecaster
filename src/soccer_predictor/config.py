@@ -243,5 +243,15 @@ def admin_password() -> str | None:
     return os.environ.get("ADMIN_PASSWORD") or None
 
 
+def notes_password() -> str | None:
+    """Password for the Predictor page's Notes chat, which spends the app
+    owner's Anthropic credits on every note (see dashboard/notes_access.py).
+    Unset or blank (None) keeps the chat disabled for everyone -- off unless
+    explicitly configured, like admin_password. Anyone can still read the
+    saved notes.
+    """
+    return os.environ.get("NOTES_PASSWORD") or None
+
+
 def claude_model() -> str:
     return os.environ.get("SOCCER_PREDICTOR_CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL
