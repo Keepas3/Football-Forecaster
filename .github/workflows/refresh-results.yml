@@ -1,0 +1,80 @@
+name: Refresh results (frequent)
+
+# A light, frequent companion to refresh-data.yml (which runs once a day and
+# does the heavy work: every league's full history, injuries, retraining).
+# This one only keeps RESULTS and the Track Record current: it pulls recent
+# results, locks in predictions for newly announced fixtures, and commits
+# data/soccer.db ONLY if a result or prediction actually changed. GitHub
+# delays scheduled runs, so "every 2 hours" really means roughly every 2-4.
+
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to push the updated data/soccer.db back
+
+# Same group as refresh-data.yml, on purpose: the two never run at the same
+# time (so they can't clobber each other's database or double up on the
+# football-data.org rate limit), and a run waits for the other to finish.
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  quick-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen
+
+      - name: Fingerprint before
+        id: before
+        run: echo "value=$(python3 scripts/data_fingerprint.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Quick refresh
+        env:
+          FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
+          # The deployed dashboard shares this API key and makes its own
+          # football-data.org calls for the live-score banner. The free tier
+          # allows 10 requests a minute in total, so this job caps itself at
+          # 5 and always leaves headroom for the site (see
+          # ingest/api_client.py). It makes ~15 requests, so ~3 minutes.
+          FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE: "5"
+        run: |
+          # In-progress season of each football-data.co.uk league: a few small static files.
+          uv run python scripts/fetch_historical_data.py --current-season-only
+          # Recent results (ESPN scoreboard: a few requests, not one per team),
+          # new fixtures + prediction snapshots. No injuries, no retraining.
+          uv run python scripts/refresh_live_data.py --quick
+
+      - name: Fingerprint after
+        id: after
+        run: echo "value=$(python3 scripts/data_fingerprint.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push only if a result or prediction changed
+        env:
+          BEFORE: ${{ steps.before.outputs.value }}
+          AFTER: ${{ steps.after.outputs.value }}
+        run: |
+          echo "before: $BEFORE"
+          echo "after:  $AFTER"
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "No new results or predictions -- not committing"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/soccer.db
+          git commit -m "Automated results refresh"
+          # Someone may have pushed code while this ran (~3 min): rebase onto
+          # it rather than failing the push and losing the run's work.
+          git pull --rebase
+          git push

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -20,7 +21,22 @@ from soccer_predictor.config import DATA_DIR, football_data_org_api_key
 
 BASE_URL = "https://api.football-data.org/v4"
 CACHE_DIR = DATA_DIR / "cache" / "football_data_org"
-MAX_REQUESTS_PER_MINUTE = 10
+FREE_TIER_MAX_REQUESTS_PER_MINUTE = 10
+
+
+def _configured_max_requests_per_minute() -> int:
+    """The free tier's 10/minute by default; FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE
+    can only LOWER it (clamped to 1..10). The frequent GitHub Actions refresh
+    sets a low value so it leaves headroom for the deployed dashboard, which
+    shares this API key and makes its own live-score calls."""
+    try:
+        value = int(os.environ.get("FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE", FREE_TIER_MAX_REQUESTS_PER_MINUTE))
+    except ValueError:
+        return FREE_TIER_MAX_REQUESTS_PER_MINUTE
+    return max(1, min(FREE_TIER_MAX_REQUESTS_PER_MINUTE, value))
+
+
+MAX_REQUESTS_PER_MINUTE = _configured_max_requests_per_minute()
 
 
 class MissingApiKey(Exception):

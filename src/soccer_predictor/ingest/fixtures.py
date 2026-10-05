@@ -249,7 +249,9 @@ def derive_groups_from_matches(
     return derived
 
 
-def sync_fixtures_to_db_espn(session: Session, league: League) -> tuple[int, int]:
+def sync_fixtures_to_db_espn(
+    session: Session, league: League, window_days: int = ESPN_UPCOMING_FIXTURE_WINDOW_DAYS
+) -> tuple[int, int]:
     """ESPN-backed equivalent of sync_fixtures_to_db, for leagues with
     data_source == "espn" (e.g. MLS). Scans the next
     ESPN_UPCOMING_FIXTURE_WINDOW_DAYS days one at a time -- ESPN's
@@ -264,7 +266,7 @@ def sync_fixtures_to_db_espn(session: Session, league: League) -> tuple[int, int
         if league.has_groups
         else {}
     )
-    for offset in range(ESPN_UPCOMING_FIXTURE_WINDOW_DAYS):
+    for offset in range(window_days):
         day = today + dt.timedelta(days=offset)
         for match in espn_client.fetch_day_fixtures(league.espn_league_slug, day):
             resolved = _resolve_espn_match(session, league, match)
@@ -337,4 +339,54 @@ def sync_results_to_db_espn(session: Session, league: League, season: str) -> tu
             group_name=group_name,
             group_is_fallback=group_is_fallback,
         )
+    return synced, skipped
+
+
+# Cached just long enough that two runs in a row don't repeat a request, short
+# enough that a result that has just landed is picked up.
+RECENT_RESULTS_CACHE_TTL_SECONDS = 300
+
+
+def sync_recent_results_to_db_espn(
+    session: Session, league: League, season: str, days_back: int = 2
+) -> tuple[int, int]:
+    """Cheap alternative to sync_results_to_db_espn for frequent refreshes:
+    reads the league-wide scoreboard for the last `days_back` days (plus
+    today) -- a handful of requests -- instead of every team's whole-season
+    schedule (one request per team: 55 for the Nations League). Only
+    completed matches with a score are stored, upserted on the same key as
+    the full sync so the two never create duplicates. Returns (synced, skipped).
+    """
+    synced = 0
+    skipped = 0
+    season_year = league.api_season_year(season)
+    membership = (
+        espn_client.fetch_group_membership(league.espn_league_slug, season_year) if league.has_groups else {}
+    )
+    today = dt.datetime.now(dt.UTC).date()
+    for offset in range(days_back, -1, -1):
+        day = today - dt.timedelta(days=offset)
+        for match in espn_client.fetch_day_matches(
+            league.espn_league_slug, day, cache_ttl_seconds=RECENT_RESULTS_CACHE_TTL_SECONDS
+        ):
+            if not match.completed or match.home_score is None or match.away_score is None:
+                continue
+            resolved = _resolve_espn_match(session, league, match)
+            if resolved is None:
+                skipped += 1
+                continue
+            home_team_id, away_team_id = resolved
+            upsert_match(
+                session,
+                league_code=league.code,
+                season=season,
+                date=match.date,
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+                home_goals=match.home_score,
+                away_goals=match.away_score,
+                source="espn",
+                group_name=_group_for_match(match, membership) if league.has_groups else None,
+            )
+            synced += 1
     return synced, skipped

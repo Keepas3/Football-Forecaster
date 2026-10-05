@@ -20,6 +20,7 @@ from soccer_predictor.ingest.fixtures import (
     sync_fixtures_to_db,
     sync_fixtures_to_db_espn,
     sync_results_to_db,
+    sync_recent_results_to_db_espn,
     sync_results_to_db_espn,
 )
 from soccer_predictor.ingest.team_mapper import seed_teams_from_api, seed_teams_from_espn
@@ -43,11 +44,23 @@ class RefreshResult:
     injuries_error: str | None = None
 
 
-def refresh_league(league: League) -> RefreshResult:
+# How far ahead a quick refresh looks for fixtures (the full daily refresh
+# covers the whole 14-day window; this only needs to catch stragglers).
+QUICK_FIXTURE_WINDOW_DAYS = 3
+
+
+def refresh_league(league: League, quick: bool = False) -> RefreshResult:
     """Everything scripts/refresh_live_data.py used to do inline for one
     league -- same branching on league.data_source/league.csv_code, same
     functions, just captured into a result object instead of printed
     directly, so callers can present it however they like.
+
+    `quick=True` is the light version for the frequent GitHub Actions run
+    that keeps results and the Track Record current: ESPN leagues read the
+    scoreboard for recent results and a short fixture window (a few requests
+    instead of one per team), and the slow injury sync is skipped. The
+    football-data.org leagues are already one request each, so they run as
+    usual. The daily full refresh still does everything.
     """
     result = RefreshResult(league_code=league.code)
 
@@ -57,11 +70,21 @@ def refresh_league(league: League) -> RefreshResult:
         # keyless endpoints instead (ingest/espn_client.py).
         try:
             with session_scope() as session:
-                seed_teams_from_espn(session, league)
-                result.fixtures_synced, result.fixtures_skipped = sync_fixtures_to_db_espn(session, league)
-                result.results_synced, result.results_skipped = sync_results_to_db_espn(
-                    session, league, league.seasons[-1]
-                )
+                if quick:
+                    # Teams are already seeded by the daily run (and a group
+                    # competition adds any new opponent it meets on its own).
+                    result.fixtures_synced, result.fixtures_skipped = sync_fixtures_to_db_espn(
+                        session, league, window_days=QUICK_FIXTURE_WINDOW_DAYS
+                    )
+                    result.results_synced, result.results_skipped = sync_recent_results_to_db_espn(
+                        session, league, league.seasons[-1]
+                    )
+                else:
+                    seed_teams_from_espn(session, league)
+                    result.fixtures_synced, result.fixtures_skipped = sync_fixtures_to_db_espn(session, league)
+                    result.results_synced, result.results_skipped = sync_results_to_db_espn(
+                        session, league, league.seasons[-1]
+                    )
         except requests.RequestException as exc:
             result.fixtures_error = result.results_error = str(exc)
     else:
@@ -90,9 +113,10 @@ def refresh_league(league: League) -> RefreshResult:
         if params is not None:
             result.snapshots_created = snapshot_upcoming_predictions(session, league, params)
 
-    with session_scope() as session:
-        result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
-            session, league, season_year=dt.date.today().year
-        )
+    if not quick:
+        with session_scope() as session:
+            result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
+                session, league, season_year=dt.date.today().year
+            )
 
     return result

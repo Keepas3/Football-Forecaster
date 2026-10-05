@@ -1,7 +1,10 @@
 """Refreshes upcoming fixtures (and, best-effort, injuries) from live APIs.
 
 Usage:
-    uv run python scripts/refresh_live_data.py [LEAGUE_CODE ...]
+    uv run python scripts/refresh_live_data.py [--quick] [LEAGUE_CODE ...]
+
+--quick is the light refresh the frequent GitHub Actions run uses: recent results
+and a short fixture window, no injury sync (see ingest.refresh.refresh_league).
 
 Requires FOOTBALL_DATA_ORG_API_KEY in .env for fixtures. Automatic
 injuries only exist for MLS (via ESPN); every other league relies on
@@ -27,13 +30,14 @@ from soccer_predictor.storage.db import init_db  # noqa: E402
 def main() -> None:
     init_db()
     leagues = load_leagues()
-    requested = sys.argv[1:] or list(leagues.keys())
+    quick = "--quick" in sys.argv[1:]
+    requested = [a for a in sys.argv[1:] if a != "--quick"] or list(leagues.keys())
 
     for code in requested:
         league = leagues[code]
         print(f"League {league.name} ({league.code})")
 
-        result = refresh_league(league)
+        result = refresh_league(league, quick=quick)
 
         if result.fixtures_error:
             print(f"  fixtures: skipped -- {result.fixtures_error}")
@@ -46,6 +50,9 @@ def main() -> None:
             print(f"  results: {result.results_synced} synced, {result.results_skipped} skipped (unresolved teams)")
 
         print(f"  prediction tracking: {result.snapshots_created} new snapshot(s) locked in")
+
+        if quick:
+            continue  # injuries aren't synced in a quick refresh
 
         if result.injuries_error:
             print(f"  injuries: skipped -- {result.injuries_error}")

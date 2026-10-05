@@ -153,10 +153,17 @@ def _sync_archive_league(league: League) -> None:
 def main() -> None:
     init_db()
     leagues = load_leagues()
-    requested = sys.argv[1:] or list(leagues.keys())
+    # --current-season-only: the light run for the frequent GitHub Actions
+    # refresh -- re-download just each CSV league's in-progress season (a few
+    # small static files, no API key) and skip every other league, which
+    # refresh_live_data.py --quick already keeps current.
+    current_season_only = "--current-season-only" in sys.argv[1:]
+    requested = [a for a in sys.argv[1:] if a != "--current-season-only"] or list(leagues.keys())
 
     for code in requested:
         league = leagues[code]
+        if current_season_only and (league.csv_code is None or league.data_source != "football_data_org"):
+            continue
         print(f"League {league.name} ({league.code})")
 
         if league.data_source in ("archive_worldcup", "archive_euro"):
@@ -210,7 +217,8 @@ def main() -> None:
         with session_scope() as session:
             seed_teams_and_aliases(session, league.code)
 
-        for season in league.seasons:
+        csv_seasons = league.seasons[-1:] if current_season_only else league.seasons
+        for season in csv_seasons:
             is_current_season = season == league.seasons[-1]
             csv_path = download_season_csv(league.csv_code, season, force=is_current_season)
             df = parse_csv(csv_path)
