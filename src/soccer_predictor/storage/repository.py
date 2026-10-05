@@ -546,6 +546,35 @@ def replace_injuries(
         )
 
 
+def active_chat_injuries(session: Session, as_of: dt.date) -> list[tuple[Injury, Team]]:
+    """Every chat-sourced injury still counting as of `as_of` (no return date,
+    or one that hasn't passed), across ALL leagues, each with its team."""
+    return [
+        (injury, team)
+        for injury, team in session.execute(
+            select(Injury, Team)
+            .join(Team, Team.id == Injury.team_id)
+            .where(
+                Injury.source == "chat",
+                or_(Injury.expected_return_date.is_(None), Injury.expected_return_date >= as_of),
+            )
+        ).all()
+    ]
+
+
+def active_form_notes(session: Session, as_of: dt.date) -> list[tuple[TeamFormNote, Team]]:
+    """Every form note not yet expired as of `as_of`, across ALL leagues,
+    each with its team."""
+    return [
+        (note, team)
+        for note, team in session.execute(
+            select(TeamFormNote, Team)
+            .join(Team, Team.id == TeamFormNote.team_id)
+            .where(TeamFormNote.expires_on >= as_of)
+        ).all()
+    ]
+
+
 def injuries_for_team(session: Session, team_id: int) -> list[Injury]:
     return list(session.scalars(select(Injury).where(Injury.team_id == team_id)).all())
 

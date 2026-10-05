@@ -15,6 +15,7 @@ from soccer_predictor.ai.note_parser import MissingApiKey as NoteParserMissingAp
 from soccer_predictor.ai.note_parser import NoteParsingError, parse_note
 from soccer_predictor.config import load_leagues, notes_password
 from soccer_predictor.dashboard import notes_access as na
+from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
 from soccer_predictor.dashboard.chat_notes import (
     add_reply,
     delete_exchange,
@@ -43,13 +44,13 @@ from soccer_predictor.prediction.service import (
 from soccer_predictor.prediction.tracking import compute_prediction_accuracy
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import (
+    active_chat_injuries,
+    active_form_notes,
     add_form_note,
     add_or_update_chat_injury,
     delete_form_note,
     delete_injury,
     fixtures_for_league,
-    form_notes_for_team,
-    injuries_for_team,
     teams_for_league,
 )
 
@@ -61,49 +62,55 @@ def _safe_index(options: list, value, default: int = 0) -> int:
         return default
 
 
-def _render_active_notes(team_names: dict[int, str], can_delete: bool) -> None:
-    """Saved chat-sourced notes that still count toward predictions. Anyone can
-    read them; the Delete buttons only appear once the chat is unlocked, so a
-    visitor can't remove the owner's notes."""
+def _render_active_notes(leagues: dict, can_delete: bool) -> None:
+    """Saved chat-sourced notes that still count toward predictions, for EVERY
+    league -- not just the one picked above. A note is saved against a team
+    in one league (e.g. Poland in the Nations League), so listing only the
+    selected league's teams made notes vanish whenever the picker was on a
+    different league (it resets to the first league on revisiting the page).
+    Anyone can read them; the Delete buttons only appear once the chat is
+    unlocked, so a visitor can't remove the owner's notes."""
     st.subheader("Active chat-sourced notes")
-    any_active = False
+    today = dt.date.today()
+
     with session_scope() as session:
-        for team_id in sorted(team_names, key=lambda t: team_names[t]):
-            chat_injuries = [
-                row
-                for row in injuries_for_team(session, team_id)
-                if row.source == "chat"
-                and (row.expected_return_date is None or row.expected_return_date >= dt.date.today())
-            ]
-            chat_forms = [
-                row for row in form_notes_for_team(session, team_id) if row.expires_on >= dt.date.today()
-            ]
-            if not chat_injuries and not chat_forms:
-                continue
+        # {league_code: {team_name: ([injuries], [form notes])}}
+        grouped: dict[str, dict[str, tuple[list, list]]] = {}
+        for injury, team in active_chat_injuries(session, today):
+            grouped.setdefault(team.league_code, {}).setdefault(team.canonical_name, ([], []))[0].append(injury)
+        for note, team in active_form_notes(session, today):
+            grouped.setdefault(team.league_code, {}).setdefault(team.canonical_name, ([], []))[1].append(note)
 
-            any_active = True
-            st.markdown(f"**{team_names[team_id]}**")
-            for row in chat_injuries:
-                cols = st.columns([5, 1])
-                return_note = f", est. return {row.expected_return_date}" if row.expected_return_date else ""
-                cols[0].write(
-                    f"- [injury] {row.player_name} ({row.position}, "
-                    f"weight={row.importance_weight:.2f}){return_note}"
-                )
-                if can_delete and cols[1].button("Delete", key=f"del_injury_{row.id}"):
-                    delete_injury(session, row.id)
-                    st.rerun()
-            for row in chat_forms:
-                cols = st.columns([5, 1])
-                cols[0].write(
-                    f"- [form] {row.summary} (magnitude={row.magnitude:+.2f}, "
-                    f"affects={row.affects}, expires {row.expires_on})"
-                )
-                if can_delete and cols[1].button("Delete", key=f"del_form_{row.id}"):
-                    delete_form_note(session, row.id)
-                    st.rerun()
+        league_order = [code for code in leagues if code in grouped] + sorted(
+            code for code in grouped if code not in leagues
+        )
+        for league_code in league_order:
+            st.markdown(f"##### {leagues[league_code].name if league_code in leagues else league_code}")
+            for team_name in sorted(grouped[league_code]):
+                chat_injuries, chat_forms = grouped[league_code][team_name]
+                st.markdown(f"**{team_name}**")
+                for row in chat_injuries:
+                    cols = st.columns([5, 1])
+                    headline, maths = describe_injury(
+                        row.player_name, row.position, row.importance_weight, row.expected_return_date, today
+                    )
+                    cols[0].markdown(headline)
+                    cols[0].caption(maths)
+                    if can_delete and cols[1].button("Delete", key=f"del_injury_{row.id}"):
+                        delete_injury(session, row.id)
+                        st.rerun()
+                for row in chat_forms:
+                    cols = st.columns([5, 1])
+                    headline, maths = describe_form_note(
+                        row.summary, row.magnitude, row.affects, row.expires_on, today
+                    )
+                    cols[0].markdown(headline)
+                    cols[0].caption(maths)
+                    if can_delete and cols[1].button("Delete", key=f"del_form_{row.id}"):
+                        delete_form_note(session, row.id)
+                        st.rerun()
 
-    if not any_active:
+    if not grouped:
         st.caption("No active chat-sourced notes.")
 
 
@@ -575,7 +582,7 @@ def render() -> None:
                                 st.session_state.pending_cards.remove(card)
                                 st.rerun()
 
-        _render_active_notes(team_names, can_delete=unlocked)
+        _render_active_notes(leagues, can_delete=unlocked)
 
     with st.expander("Model info"):
         st.write(f"Fitted at: {params.fitted_at}")
