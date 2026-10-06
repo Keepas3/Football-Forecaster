@@ -218,3 +218,12 @@ class PredictionRecord(Base):
     predicted_home_goals: Mapped[int]
     predicted_away_goals: Mapped[int]
     snapshotted_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    # The model's win/draw/loss probabilities for this match, saved with the
+    # scoreline so the Track Record can grade the most likely OUTCOME (not
+    # just the single most likely scoreline, which is usually a 0-0/1-1 draw
+    # even when a win is likelier) and score the probabilities themselves.
+    # None for records locked in before these columns existed -- those are
+    # graded from the scoreline alone.
+    p_home: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    p_draw: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    p_away: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)

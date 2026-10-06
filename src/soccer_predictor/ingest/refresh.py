@@ -25,7 +25,7 @@ from soccer_predictor.ingest.fixtures import (
 )
 from soccer_predictor.ingest.team_mapper import seed_teams_from_api, seed_teams_from_espn
 from soccer_predictor.prediction.service import load_latest_params
-from soccer_predictor.prediction.tracking import snapshot_upcoming_predictions
+from soccer_predictor.prediction.tracking import backfill_prediction_probabilities, snapshot_upcoming_predictions
 from soccer_predictor.storage.db import session_scope
 
 
@@ -39,6 +39,7 @@ class RefreshResult:
     results_skipped: int = 0
     results_error: str | None = None
     snapshots_created: int = 0
+    probabilities_backfilled: int = 0
     injuries_synced: int = 0
     injuries_skipped: int = 0
     injuries_error: str | None = None
@@ -112,6 +113,7 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
         params = load_latest_params(session, league.code)
         if params is not None:
             result.snapshots_created = snapshot_upcoming_predictions(session, league, params)
+            result.probabilities_backfilled = backfill_prediction_probabilities(session, league, params)
 
     if not quick:
         with session_scope() as session:

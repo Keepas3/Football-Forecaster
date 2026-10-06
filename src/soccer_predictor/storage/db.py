@@ -80,9 +80,25 @@ def ensure_group_name_columns(engine=None) -> list[str]:
     return altered
 
 
+def ensure_prediction_probability_columns(engine=None) -> list[str]:
+    """Adds prediction_records.p_home/p_draw/p_away to a database created before
+    they existed, returning the columns that were added -- automatic in
+    init_db() for the same reason as ensure_group_name_columns."""
+    engine = engine or get_engine()
+    existing = {col["name"] for col in inspect(engine).get_columns("prediction_records")}
+    added = []
+    for column in ("p_home", "p_draw", "p_away"):
+        if column not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE prediction_records ADD COLUMN {column} FLOAT"))
+            added.append(column)
+    return added
+
+
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
     ensure_group_name_columns()
+    ensure_prediction_probability_columns()
 
 
 @contextmanager

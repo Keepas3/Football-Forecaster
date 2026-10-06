@@ -93,6 +93,19 @@ class League:
     # group. Off by default -- and kept off for MLS, whose ESPN "groups" are
     # its two conferences, which most matches cross (see Team.conference).
     has_groups: bool = False
+    # How the Dixon-Coles ratings are fit (prediction/training.py). All three
+    # default to "the standard fit": the football-data.co.uk leagues are tuned
+    # fine as they are, but national teams play so rarely that the default
+    # one-year memory throws away most of what is known about them.
+    # `rating_decay_xi`: recency-weighting rate (model/time_weighting.py);
+    # None keeps DEFAULT_XI (half-life ~1 year); smaller = longer memory.
+    rating_decay_xi: float | None = None
+    # `rating_ridge`: smoothing that pulls each team's rating toward the
+    # average -- useful when teams have few matches (see dixon_coles.fit_league).
+    rating_ridge: float = 0.0
+    # `division_prior`: pull each team toward its own division's average
+    # instead (Nations League League A-D, read from Match.group_name).
+    division_prior: bool = False
 
     @property
     def supports_predictions(self) -> bool:
@@ -159,6 +172,9 @@ def load_leagues() -> dict[str, League]:
             trainable=entry.get("trainable", False),
             news_query=entry.get("news_query"),
             has_groups=entry.get("has_groups", False),
+            rating_decay_xi=entry.get("rating_decay_xi"),
+            rating_ridge=float(entry.get("rating_ridge", 0.0)),
+            division_prior=entry.get("division_prior", False),
         )
         for entry in raw["leagues"]
     }

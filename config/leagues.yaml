@@ -96,6 +96,13 @@ leagues:
     data_source: archive_worldcup
     trainable: true
     has_groups: true
+    # Rating memory/smoothing chosen by a walk-forward backtest over the
+    # 1990-2022 World Cups (each tournament predicted from only the ones
+    # before it): the default one-year memory forgot previous tournaments and
+    # scored WORSE than guessing the usual win/draw/loss rates (RPS 0.265 vs
+    # 0.241); a ~9-year half-life plus light smoothing scores 0.213.
+    rating_decay_xi: 0.0002
+    rating_ridge: 1.5
     seasons: ["1930", "1934", "1938", "1950", "1954", "1958", "1962", "1966", "1970", "1974", "1978", "1982", "1986", "1990", "1994", "1998", "2002", "2006", "2010", "2014", "2018", "2022", "2026", "2030"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
@@ -127,6 +134,10 @@ leagues:
     data_source: archive_euro
     trainable: true
     has_groups: true
+    # Same reasoning as the World Cup above, backtested over the 1992-2024
+    # Euros: default settings RPS 0.270 (guessing: 0.241), these 0.236.
+    rating_decay_xi: 0.0002
+    rating_ridge: 1.5
     seasons: ["1960", "1964", "1968", "1972", "1976", "1980", "1984", "1988", "1992", "1996", "2000", "2004", "2008", "2012", "2016", "2020", "2024", "2028"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/un.png
@@ -148,6 +159,13 @@ leagues:
     espn_league_slug: uefa.nations
     trainable: true
     has_groups: true
+    # Walk-forward backtest over 614 Nations League matches (2020-21 on): a
+    # ~3.8-year rating half-life (national teams play ~6-10 matches a year)
+    # plus a pull toward each team's division average (League A-D) cut RPS from
+    # 0.2068 to 0.1999 and log loss from 1.035 to 0.997; guessing scores 0.233.
+    rating_decay_xi: 0.0005
+    rating_ridge: 0.15
+    division_prior: true
     seasons: ["1819", "2021", "2223", "2425", "2627"]
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"

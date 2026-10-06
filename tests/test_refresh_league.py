@@ -19,6 +19,7 @@ def _patch_common(monkeypatch, params=None):
     monkeypatch.setattr(refresh, "seed_teams_from_espn", lambda *a, **k: 0)
     monkeypatch.setattr(refresh, "load_latest_params", lambda *a, **k: params)
     monkeypatch.setattr(refresh, "snapshot_upcoming_predictions", lambda *a, **k: 3 if params else 0)
+    monkeypatch.setattr(refresh, "backfill_prediction_probabilities", lambda *a, **k: 2 if params else 0)
     monkeypatch.setattr(refresh.injuries_module, "sync_injuries_to_db", lambda *a, **k: (5, 1))
 
     class _FakeSession:

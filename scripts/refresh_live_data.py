@@ -49,7 +49,10 @@ def main() -> None:
         elif result.results_synced or result.results_skipped:
             print(f"  results: {result.results_synced} synced, {result.results_skipped} skipped (unresolved teams)")
 
-        print(f"  prediction tracking: {result.snapshots_created} new snapshot(s) locked in")
+        print(
+            f"  prediction tracking: {result.snapshots_created} new snapshot(s) locked in, "
+            f"{result.probabilities_backfilled} given probabilities"
+        )
 
         if quick:
             continue  # injuries aren't synced in a quick refresh

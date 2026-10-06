@@ -288,6 +288,9 @@ def insert_prediction_record(
     away_team_id: int,
     predicted_home_goals: int,
     predicted_away_goals: int,
+    p_home: float | None = None,
+    p_draw: float | None = None,
+    p_away: float | None = None,
 ) -> None:
     """Locks in a prediction -- unlike upsert_match/upsert_fixture, an
     existing row means skip, never update. That's the whole point of a
@@ -305,7 +308,26 @@ def insert_prediction_record(
             predicted_home_goals=predicted_home_goals,
             predicted_away_goals=predicted_away_goals,
             snapshotted_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+            p_home=p_home,
+            p_draw=p_draw,
+            p_away=p_away,
         )
+    )
+
+
+def prediction_records_missing_probabilities(
+    session: Session, league_code: str, from_date: dt.date
+) -> list[PredictionRecord]:
+    """Locked-in records dated `from_date` or later that have no saved
+    probabilities (i.e. made before those were stored)."""
+    return list(
+        session.scalars(
+            select(PredictionRecord).where(
+                PredictionRecord.league_code == league_code,
+                PredictionRecord.date >= from_date,
+                PredictionRecord.p_home.is_(None),
+            )
+        ).all()
     )
 
 
@@ -416,6 +438,28 @@ def upsert_fixture(
             group_name=group_name,
         )
     )
+
+
+def team_group_names_for_season(session: Session, league_code: str, season: str) -> dict[int, str]:
+    """{team_id: group name} for one edition of a group competition, from its
+    group-tagged matches plus its fixtures (fixtures carry no season, so they
+    count as the latest edition -- pass the league's latest season for those
+    to be meaningful). Used to read each Nations League team's division."""
+    teams: dict[int, str] = {}
+    match_rows = session.execute(
+        select(Match.home_team_id, Match.away_team_id, Match.group_name).where(
+            Match.league_code == league_code, Match.season == season, Match.group_name.is_not(None)
+        )
+    ).all()
+    fixture_rows = session.execute(
+        select(Fixture.home_team_id, Fixture.away_team_id, Fixture.group_name).where(
+            Fixture.league_code == league_code, Fixture.group_name.is_not(None)
+        )
+    ).all()
+    for home_id, away_id, group in [*match_rows, *fixture_rows]:
+        teams.setdefault(home_id, group)
+        teams.setdefault(away_id, group)
+    return teams
 
 
 def fixture_groups_for_league(session: Session, league_code: str) -> pd.DataFrame:
