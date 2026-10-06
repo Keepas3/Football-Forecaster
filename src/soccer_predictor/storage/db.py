@@ -17,22 +17,46 @@ from soccer_predictor.config import DATA_DIR, DB_PATH, turso_auth_token, turso_d
 from soccer_predictor.storage.models import Base
 
 _engine = None
+_engine_file_signature: tuple | None = None
 _SessionLocal: sessionmaker | None = None
 
 
+def _db_file_signature() -> tuple | None:
+    """Identity of the SQLite file as it is on disk right now. A `git pull`
+    (or the refresh workflows' commits arriving) replaces data/soccer.db with
+    a NEW file, which changes at least the inode/mtime."""
+    try:
+        stat = DB_PATH.stat()
+    except OSError:
+        return None
+    return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+
+
 def get_engine():
-    global _engine
-    if _engine is None:
-        turso_url = turso_database_url()
-        if turso_url:
+    """The shared engine. For the local SQLite file it is rebuilt whenever the
+    file on disk has been replaced: a long-running dashboard (Streamlit Cloud)
+    otherwise keeps pooled connections to the OLD file for as long as it
+    runs -- the scheduled refreshes only commit a new data/soccer.db, which
+    touches no Python file, so Streamlit never restarts the app, and the site
+    kept showing data from whenever it last started."""
+    global _engine, _engine_file_signature
+    if turso_database_url():
+        if _engine is None:
             _engine = create_engine(
-                f"sqlite+libsql://{turso_url}?secure=true",
+                f"sqlite+libsql://{turso_database_url()}?secure=true",
                 connect_args={"auth_token": turso_auth_token()},
                 future=True,
             )
-        else:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            _engine = create_engine(f"sqlite:///{DB_PATH}", future=True)
+        return _engine
+
+    signature = _db_file_signature()
+    if _engine is not None and signature != _engine_file_signature:
+        _engine.dispose()  # connections already checked out finish normally
+        _engine = None
+    if _engine is None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _engine = create_engine(f"sqlite:///{DB_PATH}", future=True)
+        _engine_file_signature = _db_file_signature()
     return _engine
 
 
@@ -64,8 +88,9 @@ def init_db() -> None:
 @contextmanager
 def session_scope() -> Iterator[Session]:
     global _SessionLocal
-    if _SessionLocal is None:
-        _SessionLocal = sessionmaker(bind=get_engine(), future=True)
+    engine = get_engine()
+    if _SessionLocal is None or _SessionLocal.kw.get("bind") is not engine:
+        _SessionLocal = sessionmaker(bind=engine, future=True)
     session = _SessionLocal()
     try:
         yield session
