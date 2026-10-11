@@ -23,6 +23,7 @@ import os
 import sys
 import time
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
 DEFAULT_URL = "https://football-forecaster.streamlit.app/"
@@ -42,17 +43,54 @@ def _frames(page: Page):
     return page.frames
 
 
+# While the app wakes up or the deployment restarts, the page redirects and
+# reloads, and a frame can disappear between listing it and querying it
+# ("Frame was detached"). That just means "look again in a moment" -- it must not
+# fail the job (it did, right after a deploy).
+_TRANSIENT_ERRORS = (PlaywrightError,)
+
+
 def _click_wake_button_if_present(page: Page) -> bool:
     for frame in _frames(page):
-        button = frame.get_by_role("button", name=WAKE_BUTTON_TEXT, exact=False)
-        if button.count() and button.first.is_visible():
-            button.first.click()
-            return True
+        try:
+            button = frame.get_by_role("button", name=WAKE_BUTTON_TEXT, exact=False)
+            if button.count() and button.first.is_visible():
+                button.first.click()
+                return True
+        except _TRANSIENT_ERRORS:
+            continue
     return False
 
 
 def _app_is_ready(page: Page) -> bool:
-    return any(frame.locator(APP_READY_SELECTOR).count() > 0 for frame in _frames(page))
+    for frame in _frames(page):
+        try:
+            if frame.locator(APP_READY_SELECTOR).count() > 0:
+                return True
+        except _TRANSIENT_ERRORS:
+            continue
+    return False
+
+
+def _page_title(page: Page) -> str:
+    try:
+        return page.title()
+    except _TRANSIENT_ERRORS:
+        return "(page was reloading)"
+
+
+def _open(page: Page, url: str, attempts: int = 3) -> None:
+    """Loads the page, retrying: the app's own redirects can abort a navigation
+    mid-flight, and one aborted attempt shouldn't fail the whole job."""
+    for attempt in range(1, attempts + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            return
+        except _TRANSIENT_ERRORS as exc:
+            print(f"Page load attempt {attempt}/{attempts} failed: {str(exc).splitlines()[0]}")
+            if attempt == attempts:
+                raise
+            time.sleep(5)
 
 
 def keep_alive(url: str) -> bool:
@@ -61,13 +99,13 @@ def keep_alive(url: str) -> bool:
         browser = p.chromium.launch(channel="chrome", headless=True)
         try:
             page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            _open(page, url)
 
             woke_it = False
             deadline = time.monotonic() + APP_READY_TIMEOUT_SECONDS
             while time.monotonic() < deadline:
                 if _app_is_ready(page):
-                    print(f"App is up{' (it was asleep; woke it)' if woke_it else ''}: {page.title()!r}")
+                    print(f"App is up{' (it was asleep; woke it)' if woke_it else ''}: {_page_title(page)!r}")
                     time.sleep(LINGER_SECONDS)
                     return True
                 if not woke_it and _click_wake_button_if_present(page):
@@ -75,7 +113,7 @@ def keep_alive(url: str) -> bool:
                     print("App was asleep -- clicked the wake-up button, waiting for it to start...")
                 time.sleep(2)
 
-            print(f"App did not come up within {APP_READY_TIMEOUT_SECONDS}s. Page title: {page.title()!r}")
+            print(f"App did not come up within {APP_READY_TIMEOUT_SECONDS}s. Page title: {_page_title(page)!r}")
             return False
         finally:
             browser.close()
