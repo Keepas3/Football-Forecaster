@@ -119,7 +119,10 @@ def render() -> None:
     league = leagues.get(team_league_code)
 
     if st.button(f"← Back to {league.name if league else team_league_code}"):
-        st.switch_page(navigation.home_page(), query_params={"league": team_league_code})
+        back_params = {"league": team_league_code}
+        if st.query_params.get("season"):
+            back_params["season"] = st.query_params["season"]
+        st.switch_page(navigation.home_page(), query_params=back_params)
 
     header_cols = st.columns([1, 6])
     if team_crest_url:

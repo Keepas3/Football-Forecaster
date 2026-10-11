@@ -17,6 +17,17 @@ import pandas as pd
 DEFAULT_FORM_LENGTH = 7
 
 
+@dataclass(frozen=True)
+class FormGame:
+    """One game behind a form square -- for its hover text."""
+
+    date: object  # a date/Timestamp; only ever formatted
+    home_name: str
+    away_name: str
+    home_goals: int
+    away_goals: int
+
+
 @dataclass
 class TeamStanding:
     team_id: int
@@ -28,6 +39,8 @@ class TeamStanding:
     goals_for: int = 0
     goals_against: int = 0
     form: list[str] = field(default_factory=list)  # "W"/"D"/"L", oldest first
+    # The games behind `form`, same order and length (see FormGame).
+    form_games: list[FormGame] = field(default_factory=list)
 
     @property
     def goal_diff(self) -> int:
@@ -58,6 +71,16 @@ def _standings_from_matches(
             TeamStanding(row.away_team_id, team_names.get(row.away_team_id, f"team#{row.away_team_id}")),
         )
 
+        game = FormGame(
+            row.date,
+            team_names.get(row.home_team_id, f"team#{row.home_team_id}"),
+            team_names.get(row.away_team_id, f"team#{row.away_team_id}"),
+            int(row.home_goals),
+            int(row.away_goals),
+        )
+        home.form_games.append(game)
+        away.form_games.append(game)
+
         home.played += 1
         away.played += 1
         home.goals_for += row.home_goals
@@ -83,6 +106,7 @@ def _standings_from_matches(
 
     for standing in standings.values():
         standing.form = standing.form[-form_length:]
+        standing.form_games = standing.form_games[-form_length:]
     return standings
 
 

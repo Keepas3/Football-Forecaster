@@ -289,10 +289,12 @@ def test_backfill_skips_a_match_under_way_but_fills_one_that_has_not_started(ses
     d = get_or_create_team(session, "Spain", "EPL").id
     session.commit()
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    _fixture_at(session, a, b, now - dt.timedelta(minutes=30))  # in progress
-    _fixture_at(session, c, d, now + dt.timedelta(hours=2))  # not started
-    _record(session, a, b, (1, 0), date=now.date())
-    _record(session, c, d, (1, 0), date=now.date())
+    started, later = now - dt.timedelta(minutes=30), now + dt.timedelta(hours=2)
+    _fixture_at(session, a, b, started)  # in progress
+    _fixture_at(session, c, d, later)  # not started
+    # Each record carries its fixture's own (UTC) date -- which differ around midnight.
+    _record(session, a, b, (1, 0), date=started.date())
+    _record(session, c, d, (1, 0), date=later.date())
     params = _params(a, b)
     params.attack.update({c: 1.2, d: 0.8})
     params.defense.update({c: 1.0, d: 1.1})

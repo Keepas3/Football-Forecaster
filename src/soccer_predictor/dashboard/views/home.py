@@ -11,7 +11,6 @@ import datetime as dt
 import html
 import re
 
-import pandas as pd
 import streamlit as st
 
 from soccer_predictor.config import League, load_leagues
@@ -19,8 +18,6 @@ from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
     HOME_WIN_COLUMN,
     LIVE_MATCH_WINDOW,
-    MATCH_LINK_DISPLAY_TEXT,
-    STANDINGS_DISPLAY_COLUMNS,
     ZONE_MARKER,
     fixture_columns_with_kickoff_first,
     fixture_percent_column_config,
@@ -38,9 +35,9 @@ from soccer_predictor.dashboard.components import (
     season_not_yet_scheduled,
     selected_timezone,
     sort_fixtures_by_kickoff,
-    standings_dataframe,
+    inject_standings_sort,
+    standings_table_html,
     style_fixture_predictions,
-    style_standings,
     timezone_selector,
 )
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
@@ -62,22 +59,11 @@ from soccer_predictor.storage.repository import (
     teams_for_league,
 )
 
-RANKINGS_TABLE_KEY = "league_rankings_table"
 # The view toggle shown beside Season for group competitions.
 GROUPS_VIEW = "Groups"
 RANKINGS_VIEW = "Rankings"
 _CLEAR_SELECTION_FLAG = "_clear_rankings_selection"
-# Every standings table (one per group / conference) has its own widget key,
-# and the set of them depends on the league and season being viewed -- so the
-# keys rendered so far are remembered here, to clear stale row selections
-# for all of them (see render()).
-_RENDERED_TABLE_KEYS = "_rendered_standings_table_keys"
 UPCOMING_FIXTURES_WINDOW_DAYS = 14
-
-
-def _table_key(section_title: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", section_title.casefold()).strip("_")
-    return f"league_rankings_table_{slug}"
 
 
 def _season_label(season: str, league) -> str:
@@ -88,56 +74,37 @@ def _season_label(season: str, league) -> str:
     return f"20{season[:2]}/{season[2:]}"
 
 
-def _render_standings_table(table_df: pd.DataFrame, table_key: str, search_key: str, league_code: str) -> None:
-    """One searchable, clickable standings table -- shared by the flat
-    single-table case and each per-conference table (see render()). Clicking
-    a row navigates to Team Detail, same as before this was split out.
+def _render_standings_table(
+    standings: list,
+    crest_urls: dict,
+    next_labels: dict,
+    zones: list,
+    match_links: dict,
+    search_key: str,
+    league_code: str,
+    season: str = "",
+) -> None:
+    """One searchable standings table -- shared by the flat single-table case
+    and each per-group / per-conference table (see render()). Hovering a form
+    square shows the game behind it; a team's name opens its page.
     """
-    # Streamlit's dataframe grid (glide-data-grid) is a canvas, not real DOM
-    # text -- the browser's own Ctrl+F can't see into it at all, so this is
-    # a real search, not decoration: filtering table_df server-side before
-    # it's ever rendered.
     search_query = st.text_input("Search team", placeholder="e.g. Man City", key=search_key)
-    if search_query:
-        filtered_df = table_df[table_df["Team"].str.contains(search_query, case=False, na=False, regex=False)]
-    else:
-        filtered_df = table_df
-
-    if search_query and filtered_df.empty:
+    if search_query and not any(search_query.casefold() in s.team_name.casefold() for s in standings):
         st.info(f'No team matches "{search_query}".')
         return
-
-    # Streamlit's dataframe otherwise caps itself at a fixed default height
-    # with its own internal scrollbar -- size it to fit every (post-search)
-    # row instead, so the whole table renders in one page (35px/row + 35px
-    # header, per Streamlit's own default row height).
-    table_height = 35 * (len(filtered_df) + 1) + 3
-
-    event = st.dataframe(
-        style_standings(filtered_df),
-        use_container_width=True,
-        hide_index=True,
-        height=table_height,
-        column_order=STANDINGS_DISPLAY_COLUMNS,
-        column_config={
-            "Crest": st.column_config.ImageColumn(" ", width="small"),
-            # A Google search for the team's next (or live) match; empty when
-            # it has nothing scheduled.
-            "Search": st.column_config.LinkColumn("Search", display_text=MATCH_LINK_DISPLAY_TEXT, width="small"),
-        },
-        on_select="rerun",
-        selection_mode="single-row",
-        key=table_key,
+    st.markdown(
+        standings_table_html(
+            standings,
+            crest_urls,
+            next_labels,
+            zones,
+            match_links=match_links,
+            league_code=league_code,
+            name_filter=search_query,
+            season=season,
+        ),
+        unsafe_allow_html=True,
     )
-
-    selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        team_id = int(filtered_df.iloc[selected_rows[0]]["team_id"])
-        # Defer clearing the selection to the top of the *next* run of this
-        # page (see render()) -- can't touch it in this run, the widget
-        # above is already instantiated.
-        st.session_state[_CLEAR_SELECTION_FLAG] = True
-        st.switch_page(navigation.team_detail_page(), query_params={"league": league_code, "team": str(team_id)})
 
 
 LIVE_BANNER_REFRESH_SECONDS = 40
@@ -194,16 +161,6 @@ def _render_live_banner(leagues: dict[str, League]) -> None:
 def render() -> None:
     st.title("⚽ Leagues")
 
-    # Streamlit forbids writing to a widget's session_state key in the same
-    # run after that widget has already been instantiated -- so a stale
-    # selection (from the click that sent us to Team Detail) can only be
-    # cleared here, before any st.dataframe(key=...) below runs. Clears
-    # every possible table key up front (harmless for ones not actually
-    # rendered this run) rather than tracking which one was active.
-    if st.session_state.pop(_CLEAR_SELECTION_FLAG, False):
-        for key in (RANKINGS_TABLE_KEY, *st.session_state.get(_RENDERED_TABLE_KEYS, [])):
-            st.session_state[key] = {"selection": {"rows": []}}
-
     leagues = load_leagues()
     if not leagues:
         st.error("No leagues configured in config/leagues.yaml.")
@@ -231,12 +188,16 @@ def render() -> None:
     league = leagues[code]
 
     season_options = list(reversed(league.seasons))
-    st.session_state.setdefault("home_season", season_options[0])
+    # A team link in the standings table reloads the page (new session), so the
+    # season being viewed travels in the URL and is restored from it here.
+    query_season = st.query_params.get("season")
+    st.session_state.setdefault("home_season", query_season if query_season in season_options else season_options[0])
     if st.session_state["home_season"] not in season_options:
         st.session_state["home_season"] = season_options[0]
     season = top_cols[1].selectbox(
         "Season", options=season_options, format_func=lambda s: _season_label(s, league), key="home_season"
     )
+    st.query_params["season"] = season
     show_rankings = False
     if has_view_toggle:
         view = top_cols[2].segmented_control(
@@ -395,7 +356,7 @@ def render() -> None:
                             prediction, home_name, away_name, session, league, home_id, away_id
                         )
 
-    st.caption("Click a team's row for its schedule, recent results, and injuries.")
+    st.caption("Click a team's name for its schedule, recent results, and injuries. Hover a form square for the game.")
     if league.zones:
         legend = " · ".join(f"{ZONE_MARKER.get(z.kind, '')} {z.label}" for z in league.zones)
         st.caption(legend)
@@ -432,20 +393,20 @@ def render() -> None:
         else:
             sections = [(None, standings)]
 
-    rendered_keys = []
+    inject_standings_sort()
     for title, section_standings in sections:
         if title is None:
-            table_key, search_key = RANKINGS_TABLE_KEY, f"standings_search_{league.code}"
+            search_key = f"standings_search_{league.code}"
         else:
-            table_key = _table_key(title)
-            search_key = f"standings_search_{league.code}_{table_key}"
+            search_key = f"standings_search_{league.code}_{re.sub('[^a-z0-9]+', '_', title.casefold()).strip('_')}"
             st.markdown(f"**{title}**")
-        table_df = standings_dataframe(
-            section_standings, crest_urls, next_opponent_names, league.zones, match_links=match_links
+        _render_standings_table(
+            section_standings,
+            crest_urls,
+            next_opponent_names,
+            league.zones,
+            match_links,
+            search_key,
+            league.code,
+            season,
         )
-        rendered_keys.append(table_key)
-        # Recorded before rendering: a row click inside _render_standings_table
-        # switches page immediately, and the next run must already know this
-        # key to clear its stale selection.
-        st.session_state[_RENDERED_TABLE_KEYS] = sorted({*st.session_state.get(_RENDERED_TABLE_KEYS, []), *rendered_keys})
-        _render_standings_table(table_df, table_key, search_key, league.code)

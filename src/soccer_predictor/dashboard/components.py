@@ -23,7 +23,7 @@ from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.dixon_coles import tau as dixon_coles_tau
 from soccer_predictor.model.markets import MatchPrediction
 from soccer_predictor.model.scoreline_matrix import DEFAULT_DISPERSION, build_matrix, marginal_pmf
-from soccer_predictor.model.standings import TeamStanding
+from soccer_predictor.model.standings import FormGame, TeamStanding
 from soccer_predictor.model.team_facts import HeadToHeadRecord, TeamFacts
 
 
@@ -474,27 +474,8 @@ _FORM_EMOJI = {"W": "🟩", "D": "⬜", "L": "🟥"}
 # whose color varies by platform/font and is never actually green or red.
 ZONE_MARKER = {"qualify": "🟩", "playoff": "🟧", "relegation": "🟥"}
 
-STANDINGS_DISPLAY_COLUMNS = (
-    "Pos",
-    "Crest",
-    "Team",
-    "Pl",
-    "W",
-    "D",
-    "L",
-    "GF",
-    "GA",
-    "GD",
-    "Pts",
-    "Form",
-    "Next",
-    "Search",
-)
-
-# No separate "Zone" text column (it ate too much width) -- the Pos number
-# itself is colored instead, via style_standings below. Same three kinds as
-# ZONE_MARKER's emoji legend, just as text colors: qualify=green,
-# playoff=amber ("yellow" per the request), relegation=red.
+# Same three kinds as ZONE_MARKER's emoji legend, as text colors on the Pos
+# number: qualify=green, playoff=amber, relegation=red.
 _ZONE_TEXT_COLOR = {
     "qualify": "color: #2e7d32; font-weight: 700",
     "playoff": "color: #f9a825; font-weight: 700",
@@ -509,62 +490,198 @@ def _zone_kind(pos: int, zones: list[TableZone]) -> str:
     return ""
 
 
-def standings_dataframe(
+def _short_date(value) -> str:
+    try:
+        return f"{value:%b} {value.day}"
+    except (TypeError, ValueError, AttributeError):
+        return ""
+
+
+def form_game_tooltip(game: FormGame, result: str) -> str:
+    """Hover text for one form square: "Spain vs Argentina · Score 1-0 · Oct 5
+    (Win)". Home team first, as the match was played."""
+    word = {"W": "Win", "D": "Draw", "L": "Loss"}.get(result, "")
+    parts = [f"{game.home_name} vs {game.away_name}", f"Score {game.home_goals}-{game.away_goals}"]
+    date_text = _short_date(game.date)
+    if date_text:
+        parts.append(date_text)
+    return " · ".join(parts) + (f" ({word})" if word else "")
+
+
+def _safe_image_url(url: str | None) -> str | None:
+    # Crest URLs come from third-party APIs: only ever load plain web images.
+    return url if url and url.startswith(("https://", "http://")) else None
+
+
+STANDINGS_TABLE_CSS = """<style>
+.fb-table-wrap{overflow-x:auto;margin:0.25rem 0 1rem;}
+table.fb-table{width:100%;border-collapse:collapse;font-size:0.85rem;}
+table.fb-table th{font-weight:600;opacity:0.7;text-align:right;padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.35);white-space:nowrap;}
+table.fb-table td{padding:5px 8px;border-bottom:1px solid rgba(128,128,128,0.18);text-align:right;white-space:nowrap;}
+table.fb-table tr:hover td{background:rgba(128,128,128,0.10);}
+table.fb-table .left{text-align:left;}
+table.fb-table th[data-sort]{cursor:pointer;user-select:none;}
+table.fb-table th[data-sort]:hover{opacity:1;}
+table.fb-table th[aria-sort=ascending]::after{content:" ▲";font-size:0.7em;}
+table.fb-table th[aria-sort=descending]::after{content:" ▼";font-size:0.7em;}
+table.fb-table a.team{color:inherit;text-decoration:none;font-weight:600;}
+table.fb-table a.team:hover{text-decoration:underline;}
+table.fb-table a.search{text-decoration:none;white-space:nowrap;}
+table.fb-table .form span{cursor:help;margin-right:1px;}
+table.fb-table img.crest{height:18px;width:auto;vertical-align:middle;border-radius:2px;}
+</style>"""
+
+
+# Points for a team's form score: what a win/draw is worth in the table, so
+# sorting the Form column puts the best recent run first.
+FORM_POINTS = {"W": 3, "D": 1, "L": 0}
+
+# Columns that can be sorted: header -> (kind, direction of the first click).
+# Pos and Team start ascending (1st first, A-Z); the stats start highest-first.
+# Next and Search are not sortable.
+SORTABLE_COLUMNS = {
+    "Pos": ("num", "asc"),
+    "Team": ("text", "asc"),
+    "Pl": ("num", "desc"),
+    "W": ("num", "desc"),
+    "D": ("num", "desc"),
+    "L": ("num", "desc"),
+    "GF": ("num", "desc"),
+    "GA": ("num", "desc"),
+    "GD": ("num", "desc"),
+    "Pts": ("num", "desc"),
+    "Form": ("num", "desc"),
+}
+
+# Click-to-sort for the standings tables. A table in st.markdown can't carry a
+# script, so this one small, STATIC script (it contains no data from the
+# database or any API) is injected once per page with
+# st.html(unsafe_allow_javascript=True) -- see inject_standings_sort. It listens
+# on `document` rather than on each table, so it keeps working after Streamlit
+# replaces the tables on a rerun. A header click cycles: first direction ->
+# reversed -> back to the original order.
+STANDINGS_SORT_JS = """
+(function () {
+  if (window.__fbSortInstalled) return;
+  window.__fbSortInstalled = true;
+  document.addEventListener('click', function (event) {
+    var th = event.target.closest ? event.target.closest('table.fb-table th[data-sort]') : null;
+    if (!th) return;
+    var table = th.closest('table');
+    var body = table.tBodies[0];
+    var rows = Array.prototype.slice.call(body.rows);
+    rows.forEach(function (row, i) { if (row.dataset.order === undefined) row.dataset.order = i; });
+
+    var firstAsc = th.getAttribute('data-first') === 'asc';
+    var first = firstAsc ? 'ascending' : 'descending';
+    var second = firstAsc ? 'descending' : 'ascending';
+    var current = th.getAttribute('aria-sort');
+    var next = !current ? first : (current === first ? second : null);
+
+    Array.prototype.forEach.call(table.querySelectorAll('th[aria-sort]'), function (other) {
+      other.removeAttribute('aria-sort');
+    });
+    if (next) th.setAttribute('aria-sort', next);
+
+    var column = th.cellIndex;
+    var numeric = th.getAttribute('data-sort') === 'num';
+    var sign = next === 'descending' ? -1 : 1;
+    rows.sort(function (a, b) {
+      var byOrder = a.dataset.order - b.dataset.order;
+      if (!next) return byOrder;
+      var x = a.cells[column].getAttribute('data-v');
+      var y = b.cells[column].getAttribute('data-v');
+      var result = numeric ? parseFloat(x) - parseFloat(y) : x.localeCompare(y);
+      return result * sign || byOrder;
+    });
+    rows.forEach(function (row) { body.appendChild(row); });
+  });
+})();
+"""
+
+
+def inject_standings_sort() -> None:
+    """Call once per page render, before drawing any standings table."""
+    st.html(f"<script>{STANDINGS_SORT_JS}</script>", unsafe_allow_javascript=True)
+
+
+def standings_table_html(
     standings: list[TeamStanding],
     crest_urls: dict[int, str],
-    next_opponent_names: dict[int, str],
+    next_labels: dict[int, str],
     zones: list[TableZone] = (),
     match_links: dict[int, str] | None = None,
-) -> pd.DataFrame:
-    """Includes a `team_id` column for callers that need to map a selected
-    row back to a team (e.g. clickable rankings), and a hidden `_zone_kind`
-    column ("qualify"/"playoff"/"relegation"/"") for style_standings to color
-    the Pos cell by -- pass `column_order=STANDINGS_DISPLAY_COLUMNS` to
-    st.dataframe to hide both (a league with no zones configured, e.g. the
-    World Cup/Euros, just gets "" for every row, so Pos renders uncolored).
+    league_code: str = "",
+    name_filter: str = "",
+    season: str = "",
+) -> str:
+    """A league table as HTML (a Streamlit dataframe can't put a tooltip on a
+    single cell). Hovering a form square shows the game behind it -- "Spain vs
+    Argentina · Score 1-0 · Oct 5 (Win)". The team name links to its page.
+
+    Positions come from the full `standings` order, so filtering with
+    `name_filter` (case-insensitive substring) keeps each team's real rank.
+    `season` is added to each team link so Team Detail's Back button returns to
+    the same season (the link reloads the page, which resets the picker).
+    Everything from the database or an API is HTML-escaped.
     """
-    rows = [
-        {
-            "team_id": standing.team_id,
-            "Pos": pos,
-            "_zone_kind": _zone_kind(pos, zones),
-            "Crest": crest_urls.get(standing.team_id, ""),
-            "Team": standing.team_name,
-            "Pl": standing.played,
-            "W": standing.won,
-            "D": standing.drawn,
-            "L": standing.lost,
-            "GF": standing.goals_for,
-            "GA": standing.goals_against,
-            "GD": standing.goal_diff,
-            "Pts": standing.points,
-            "Form": " ".join(_FORM_EMOJI[r] for r in standing.form),
-            "Next": next_opponent_names.get(standing.team_id, ""),
-            # The Google-search URL for this team's next match, else "" (an
-            # empty cell -- None would show as the text "None" through the
-            # Styler) -- rendered by a LinkColumn, see MATCH_LINK_DISPLAY_TEXT.
-            "Search": (match_links or {}).get(standing.team_id, ""),
-        }
-        for pos, standing in enumerate(standings, start=1)
-    ]
-    return pd.DataFrame(rows)
+    needle = name_filter.casefold()
+    body = []
+    for pos, standing in enumerate(standings, start=1):
+        if needle and needle not in standing.team_name.casefold():
+            continue
+        zone_style = _ZONE_TEXT_COLOR.get(_zone_kind(pos, zones), "")
+        crest = _safe_image_url(crest_urls.get(standing.team_id))
+        crest_html = f'<img class="crest" src="{html.escape(crest)}" alt="">' if crest else ""
+        team_url = f"/team_detail?league={urllib.parse.quote(league_code)}&team={standing.team_id}"
+        if season:
+            team_url += f"&season={urllib.parse.quote(season)}"
+        squares = "".join(
+            f'<span title="{html.escape(form_game_tooltip(game, result), quote=True)}">{_FORM_EMOJI[result]}</span>'
+            for result, game in zip(standing.form, standing.form_games)
+        )
+        # Older callers/tests may give a form with no games: still show the squares.
+        if not standing.form_games:
+            squares = "".join(f"<span>{_FORM_EMOJI[r]}</span>" for r in standing.form)
+        search_url = (match_links or {}).get(standing.team_id)
+        search_html = (
+            f'<a class="search" href="{html.escape(search_url)}" target="_blank" rel="noopener noreferrer">'
+            f"{html.escape(MATCH_LINK_DISPLAY_TEXT)}</a>"
+            if search_url
+            else ""
+        )
+        form_score = sum(FORM_POINTS.get(result, 0) for result in standing.form)
+        body.append(
+            "<tr>"
+            f'<td style="{zone_style}" data-v="{pos}">{pos}</td>'
+            f'<td class="left">{crest_html}</td>'
+            f'<td class="left" data-v="{html.escape(standing.team_name.casefold(), quote=True)}">'
+            f'<a class="team" href="{html.escape(team_url)}" target="_self">{html.escape(standing.team_name)}</a></td>'
+            f'<td data-v="{standing.played}">{standing.played}</td><td data-v="{standing.won}">{standing.won}</td>'
+            f'<td data-v="{standing.drawn}">{standing.drawn}</td><td data-v="{standing.lost}">{standing.lost}</td>'
+            f'<td data-v="{standing.goals_for}">{standing.goals_for}</td>'
+            f'<td data-v="{standing.goals_against}">{standing.goals_against}</td>'
+            f'<td data-v="{standing.goal_diff}">{standing.goal_diff}</td>'
+            f'<td data-v="{standing.points}"><b>{standing.points}</b></td>'
+            f'<td class="left form" data-v="{form_score}">{squares}</td>'
+            f'<td class="left">{html.escape(next_labels.get(standing.team_id, ""))}</td>'
+            f'<td class="left">{search_html}</td>'
+            "</tr>"
+        )
 
-
-def _pos_zone_style(row: pd.Series) -> pd.Series:
-    styles = pd.Series("", index=row.index)
-    color = _ZONE_TEXT_COLOR.get(row.get("_zone_kind", ""), "")
-    if color and "Pos" in styles.index:
-        styles["Pos"] = color
-    return styles
-
-
-def style_standings(df: pd.DataFrame):
-    """Colors the Pos number by zone (see _ZONE_TEXT_COLOR) instead of the
-    old separate Zone text column. Pass the returned Styler straight to
-    st.dataframe in place of the plain DataFrame; `_zone_kind` stays hidden
-    via STANDINGS_DISPLAY_COLUMNS' column_order, same as `team_id` always was.
-    """
-    return df.style.apply(_pos_zone_style, axis=1)
+    headers = ["Pos", "", "Team", "Pl", "W", "D", "L", "GF", "GA", "GD", "Pts", "Form", "Next", "Search"]
+    left = {"", "Team", "Form", "Next", "Search"}
+    head_cells = []
+    for h in headers:
+        css = ' class="left"' if h in left else ""
+        sort = SORTABLE_COLUMNS.get(h)
+        sort_attrs = f' data-sort="{sort[0]}" data-first="{sort[1]}" title="Click to sort"' if sort else ""
+        head_cells.append(f"<th{css}{sort_attrs}>{h}</th>")
+    head = "".join(head_cells)
+    return (
+        f'{STANDINGS_TABLE_CSS}<div class="fb-table-wrap"><table class="fb-table">'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
 
 
 LEADERBOARD_DISPLAY_COLUMNS = (

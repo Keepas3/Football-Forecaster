@@ -113,7 +113,7 @@ def backfill_prediction_probabilities(session: Session, league: League, params: 
         for row in matches_for_league(session, league.code).itertuples(index=False)
     }
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    today = dt.date.today()
+    today = now.date()  # UTC, like kickoff times and fixture dates (not the machine's local date)
     kickoff_by_match = {
         (row.date, row.home_team_id, row.away_team_id): row.kickoff_utc
         for row in fixtures_for_league(session, league.code, today, today + dt.timedelta(days=SNAPSHOT_WINDOW_DAYS)).itertuples(index=False)
