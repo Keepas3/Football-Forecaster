@@ -170,6 +170,34 @@ leagues:
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"
 
+  # The AFC Asian Cup is on ESPN (slug afc.asian.cup) -- football-data.org's free
+  # tier doesn't carry it (verified: its 13 competitions have no Asian Cup). Same
+  # pipeline as the Nations League: results, fixtures, groups (A-D up to 2015, A-F
+  # from 2019) and past editions' participants all come from ESPN's keyless
+  # endpoints. Editions are keyed by year (2007, 2011, 2015, 2019, 2023 are complete:
+  # 32/32/32/51/51 matches; 2027 -- Saudi Arabia, Jan 7 - Feb 5 2027 -- already has
+  # its 51 fixtures and groups listed). ESPN has nothing for 2000/2004.
+  - code: ASIA
+    name: AFC Asian Cup
+    news_query: AFC Asian Cup
+    data_source: espn
+    espn_league_slug: afc.asian.cup
+    trainable: true
+    has_groups: true
+    # Rating settings from a walk-forward backtest over the 2011-2023 editions
+    # (each predicted from only earlier ones; 166 matches): settings chosen on
+    # 2011-2019 alone scored RPS 0.1746 on the held-out 2023 edition, against 0.2010
+    # for the default one-year memory and 0.2323 for guessing the usual win/draw/loss
+    # rates. Over all four editions: 0.207 vs 0.223 default vs 0.246 guessing -- clearly
+    # better than guessing, but with so few matches the gain over the default is
+    # not statistically certain, so revisit once 2027 has been played.
+    rating_decay_xi: 0.0004
+    rating_ridge: 0.5
+    seasons: ["2007", "2011", "2015", "2019", "2023", "2027"]
+    season_display: single_year
+    flag_url: https://flagcdn.com/w40/un.png
+    flag_emoji: "🇺🇳"
+
   # football-data.org has zero MLS coverage at all (confirmed live: its
   # /v4/competitions list has 13 entries, none of them MLS) -- fixtures,
   # results, team seeding, squads, and injuries all come from ESPN's public,

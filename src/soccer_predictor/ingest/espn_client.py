@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -222,7 +223,10 @@ def normalize_group_name(raw: str | None) -> str | None:
     ("GROUP D1", "Group B1", "LEAGUE D - GROUP 2") -- one display form."""
     if not raw or not raw.strip():
         return None
-    return raw.strip().title()
+    # 2019's Asian Cup labels its last group "AFC ASIAN CUP - GROUP F"; drop that
+    # competition prefix so it reads like its siblings ("Group F").
+    label = re.sub(r"^afc asian cup\s*-\s*", "", raw.strip(), flags=re.IGNORECASE)
+    return label.title()
 
 
 def _parse_event(event: dict) -> EspnMatch | None:
@@ -300,6 +304,29 @@ def fetch_day_matches(
     return [m for m in matches if m is not None]
 
 
+def fetch_year_fixtures(
+    league_slug: str, year: int, cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS
+) -> list[EspnMatch]:
+    """Every not-yet-completed match the league has scheduled in calendar year
+    `year`, in ONE request -- verified live that `dates=<year>` returns the
+    whole year's scoreboard (51 events for the 2027 Asian Cup). The day-by-day
+    scoreboard only reaches a couple of weeks ahead, so on its own a tournament
+    that starts in three months has no fixtures (and so no group tables or
+    predictions) until it's nearly here. Empty list on any failure.
+    """
+    try:
+        data = get(
+            f"/{league_slug}/scoreboard",
+            params={"dates": str(year)},
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+    except requests.RequestException:
+        return []
+
+    matches = (_parse_event(e) for e in data.get("events", []))
+    return [m for m in matches if m is not None and not m.completed]
+
+
 def fetch_day_fixtures(
     league_slug: str, date: dt.date, cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS
 ) -> list[EspnMatch]:
@@ -308,14 +335,26 @@ def fetch_day_fixtures(
     return [m for m in fetch_day_matches(league_slug, date, cache_ttl_seconds) if not m.completed]
 
 
-def fetch_group_membership(league_slug: str, season: int) -> dict[str, str]:
-    """{espn team id: group name} for one edition of a group competition
-    (e.g. the Nations League), from the standings endpoint's per-group
-    children. Verified live that, unlike the scoreboard's per-match group
-    label, this answers for past editions too (`season=` is the edition's
-    start year) -- though ESPN's own data is incomplete for the oldest one
-    (2018-19 lists only League D). Empty dict on any failure or for a league
-    with no groups (a flat standings table has no `children`).
+@dataclass
+class EspnParticipant:
+    """A team that played an edition of a group competition, as listed by that
+    edition's standings."""
+
+    espn_id: str
+    name: str
+    group: str
+    logo_url: str | None = None
+
+
+def fetch_group_participants(league_slug: str, season: int) -> list[EspnParticipant]:
+    """Every team in one edition of a group competition (e.g. the Nations
+    League, the Asian Cup), with its group, from the standings endpoint's
+    per-group children. Verified live that, unlike the scoreboard's per-match
+    group label, this answers for past editions too (`season=` is the
+    edition's start year) -- though ESPN's own data is incomplete for the
+    oldest Nations League edition (2018-19 lists only League D). Empty list on
+    any failure or for a league with no groups (a flat standings table has no
+    `children`).
     """
     try:
         data = get(
@@ -325,18 +364,32 @@ def fetch_group_membership(league_slug: str, season: int) -> dict[str, str]:
             base_url=STANDINGS_BASE_URL,
         )
     except (requests.RequestException, ValueError):
-        return {}
+        return []
 
-    membership: dict[str, str] = {}
+    participants: list[EspnParticipant] = []
     for child in data.get("children") or []:
         group = normalize_group_name(child.get("name"))
         if group is None:
             continue
         for entry in (child.get("standings") or {}).get("entries") or []:
-            team_id = (entry.get("team") or {}).get("id")
-            if team_id is not None:
-                membership[str(team_id)] = group
-    return membership
+            team = entry.get("team") or {}
+            if team.get("id") is None:
+                continue
+            logos = team.get("logos") or []
+            participants.append(
+                EspnParticipant(
+                    espn_id=str(team["id"]),
+                    name=team.get("displayName") or team.get("name") or f"team#{team['id']}",
+                    group=group,
+                    logo_url=logos[0].get("href") if logos else None,
+                )
+            )
+    return participants
+
+
+def fetch_group_membership(league_slug: str, season: int) -> dict[str, str]:
+    """{espn team id: group name} for one edition -- see fetch_group_participants."""
+    return {p.espn_id: p.group for p in fetch_group_participants(league_slug, season)}
 
 
 def fetch_team_roster(

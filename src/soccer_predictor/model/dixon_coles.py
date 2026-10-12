@@ -23,6 +23,18 @@ from scipy.stats import poisson
 from soccer_predictor.model.time_weighting import DEFAULT_XI, match_weights
 
 
+class AverageForUnknownTeam(dict):
+    """A {team_id: rating} dict that rates a team the model has never seen as
+    an average team instead of raising KeyError. That happens for a debutant:
+    the 2027 Asian Cup field includes Singapore, which hasn't played in the
+    tournament since 1984, so it has no matches to fit -- and every page that
+    predicts one of its fixtures would otherwise crash. Membership tests and
+    iteration still reflect only the teams actually fitted."""
+
+    def __missing__(self, key):
+        return sum(self.values()) / len(self) if self else 1.0
+
+
 @dataclass
 class DixonColesParams:
     league_code: str
@@ -33,6 +45,10 @@ class DixonColesParams:
     xi: float
     fitted_at: str
     n_matches: int
+
+    def __post_init__(self):
+        self.attack = AverageForUnknownTeam(self.attack)
+        self.defense = AverageForUnknownTeam(self.defense)
 
     def to_json(self) -> str:
         return json.dumps(

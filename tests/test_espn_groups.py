@@ -80,6 +80,15 @@ def _match(home_id, away_id, day, stage="Group Stage", group_name=None, home_nam
     )
 
 
+def _participants(mapping):
+    """{espn id: group} as the EspnParticipant list the standings fetch returns."""
+    return [espn_client.EspnParticipant(espn_id=i, name=f"Team {i}", group=g) for i, g in mapping.items()]
+
+
+def _patch_participants(monkeypatch, mapping):
+    monkeypatch.setattr(espn_client, "fetch_group_participants", lambda *a, **k: _participants(mapping))
+
+
 def _seed(s, league_code, ids):
     for espn_id in ids:
         team = get_or_create_team(s, f"Team {espn_id}", league_code)
@@ -168,11 +177,7 @@ def test_results_sync_tags_group_stage_matches_from_standings_membership(monkeyp
             _match("1", "3", 20, stage="Quarterfinals"),  # different groups -> knockout
         ]
         monkeypatch.setattr(espn_client, "fetch_team_results", lambda slug, team_id, season: matches)
-        monkeypatch.setattr(
-            espn_client,
-            "fetch_group_membership",
-            lambda slug, season: {"1": "Group A1", "2": "Group A1", "3": "Group A2", "4": "Group A2"},
-        )
+        _patch_participants(monkeypatch, {"1": "Group A1", "2": "Group A1", "3": "Group A2", "4": "Group A2"})
 
         sync_results_to_db_espn(s, GROUP_LEAGUE, "2425")
         s.commit()
@@ -194,7 +199,7 @@ def test_results_sync_never_looks_up_groups_for_a_league_without_has_groups(monk
         def fail(*a, **k):
             raise AssertionError("must not look up groups for a league without has_groups")
 
-        monkeypatch.setattr(espn_client, "fetch_group_membership", fail)
+        monkeypatch.setattr(espn_client, "fetch_group_participants", fail)
 
         sync_results_to_db_espn(s, FLAT_LEAGUE, "2026")
         s.commit()
@@ -208,7 +213,7 @@ def test_results_sync_adds_an_opponent_missing_from_the_current_team_list(monkey
         _seed(s, "NL", [1])
         match = _match("1", "99", 5, home_name="Team 1", away_name="Russia")
         monkeypatch.setattr(espn_client, "fetch_team_results", lambda *a, **k: [match])
-        monkeypatch.setattr(espn_client, "fetch_group_membership", lambda *a, **k: {})
+        _patch_participants(monkeypatch, {})
 
         synced, skipped = sync_results_to_db_espn(s, GROUP_LEAGUE, "2425")
         s.commit()
@@ -233,11 +238,11 @@ def test_results_sync_keeps_a_group_filled_in_earlier(monkeypatch):
         _seed(s, "NL", [1, 2])
         match = _match("1", "2", 5)
         monkeypatch.setattr(espn_client, "fetch_team_results", lambda *a, **k: [match])
-        monkeypatch.setattr(espn_client, "fetch_group_membership", lambda *a, **k: {"1": "Group A1", "2": "Group A1"})
+        _patch_participants(monkeypatch, {"1": "Group A1", "2": "Group A1"})
         sync_results_to_db_espn(s, GROUP_LEAGUE, "2425")
         s.commit()
 
-        monkeypatch.setattr(espn_client, "fetch_group_membership", lambda *a, **k: {})
+        _patch_participants(monkeypatch, {})
         sync_results_to_db_espn(s, GROUP_LEAGUE, "2425")
         s.commit()
 

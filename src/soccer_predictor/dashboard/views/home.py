@@ -262,8 +262,15 @@ def render() -> None:
         )
         st.stop()
 
-    next_opponent_names = next_match_labels(next_fixtures_df, team_names, selected_timezone())
-    match_links = next_match_links(next_fixtures_df, team_names, league.name)
+    # Stored fixtures are always the league's CURRENT edition (they carry no season
+    # of their own), so on an older season's table they would show next to teams
+    # that played that edition years ago -- e.g. Qatar's 2027 opener on the 2023
+    # Asian Cup table. Next and Search belong to the latest season only.
+    if season == league.seasons[-1]:
+        next_opponent_names = next_match_labels(next_fixtures_df, team_names, selected_timezone())
+        match_links = next_match_links(next_fixtures_df, team_names, league.name)
+    else:
+        next_opponent_names, match_links = {}, {}
 
     render_news_section(
         league_news_query(league),
