@@ -146,7 +146,7 @@ def test_get_cached_json_returns_empty_on_non_list_response(tmp_path, monkeypatc
         def json(self):
             return {"error": "nope"}
 
-    monkeypatch.setattr(asa_client.requests, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(asa_client.http_session, "get", lambda *a, **k: FakeResponse())
 
     assert asa_client._get_cached_json("x", "https://example.test/x", {}) == []
 
@@ -163,7 +163,7 @@ def test_get_cached_json_caches_to_disk(tmp_path, monkeypatch):
             calls.append(1)
             return [{"a": 1}]
 
-    monkeypatch.setattr(asa_client.requests, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(asa_client.http_session, "get", lambda *a, **k: FakeResponse())
 
     first = asa_client._get_cached_json("x", "https://example.test/x", {})
     second = asa_client._get_cached_json("x", "https://example.test/x", {})

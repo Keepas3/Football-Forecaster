@@ -1,7 +1,7 @@
 """Downloads football-data.co.uk season CSVs and loads them into SQLite.
 
 Usage:
-    uv run python scripts/fetch_historical_data.py [LEAGUE_CODE ...]
+    uv run python scripts/fetch_historical_data.py [--all-seasons] [LEAGUE_CODE ...]
 
 With no arguments, fetches every league in config/leagues.yaml. Every
 season except the last one in a league's `seasons` list is treated as
@@ -9,6 +9,11 @@ concluded and only ever downloaded once; the last season is always
 re-downloaded, since football-data.co.uk updates that file continuously
 while it's the current in-progress season -- re-run this periodically to
 pick up new results for it.
+
+ESPN-backed leagues (MLS, Nations League, Asian Cup) follow the same rule: a
+past season that already has matches stored is skipped, since walking it costs
+one request per team. Pass --all-seasons to re-walk every season anyway (e.g.
+to repair a past season that ESPN has since corrected).
 """
 
 from __future__ import annotations
@@ -24,7 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from soccer_predictor.config import DATA_DIR, League, load_leagues  # noqa: E402
 from soccer_predictor.ingest import euro_archive, worldcup_archive  # noqa: E402
 from soccer_predictor.ingest.api_client import MissingApiKey  # noqa: E402
-from soccer_predictor.ingest.fixtures import sync_results_to_db, sync_results_to_db_espn  # noqa: E402
+from soccer_predictor.ingest.fixtures import (  # noqa: E402
+    espn_seasons_to_sync,
+    sync_results_to_db,
+    sync_results_to_db_espn,
+)
 from soccer_predictor.ingest.historical_csv import (  # noqa: E402
     ingest_goals_into_db,
     ingest_into_db,
@@ -158,7 +167,8 @@ def main() -> None:
     # small static files, no API key) and skip every other league, which
     # refresh_live_data.py --quick already keeps current.
     current_season_only = "--current-season-only" in sys.argv[1:]
-    requested = [a for a in sys.argv[1:] if a != "--current-season-only"] or list(leagues.keys())
+    all_seasons = "--all-seasons" in sys.argv[1:]
+    requested = [a for a in sys.argv[1:] if not a.startswith("--")] or list(leagues.keys())
 
     for code in requested:
         league = leagues[code]
@@ -181,7 +191,11 @@ def main() -> None:
                 print("  skipping season sync -- ESPN team seeding returned nothing")
                 continue
 
-            for season in league.seasons:
+            with session_scope() as session:
+                espn_seasons = espn_seasons_to_sync(session, league, all_seasons)
+            if len(espn_seasons) < len(league.seasons):
+                print(f"  skipping {len(league.seasons) - len(espn_seasons)} already-synced past season(s) (--all-seasons to redo)")
+            for season in espn_seasons:
                 try:
                     with session_scope() as session:
                         synced, skipped = sync_results_to_db_espn(session, league, season)

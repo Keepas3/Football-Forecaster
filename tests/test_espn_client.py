@@ -245,7 +245,7 @@ def test_get_serves_from_disk_cache(tmp_path, monkeypatch):
         calls.append(1)
         return FakeResponse()
 
-    monkeypatch.setattr(espn_client.requests, "get", fake_get)
+    monkeypatch.setattr(espn_client.http_session, "get", fake_get)
 
     first = espn_client.get("/usa.1/teams", params={"limit": 50})
     second = espn_client.get("/usa.1/teams", params={"limit": 50})

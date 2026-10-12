@@ -64,12 +64,33 @@ def season_already_concluded(league: League, season: str, today: dt.date | None 
     return int(season) < today.year
 
 
+def next_tournament_year(league: League) -> str | None:
+    """The year of the upcoming edition for a tournament that only happens
+    every few years (World Cup, Euros, Asian Cup), else None.
+
+    The config keeps the upcoming edition as the last entry in `seasons`, so
+    that's the one named. Annual single-year leagues (MLS) have one-year gaps
+    between editions and are left unlabelled, as are range-style leagues."""
+    if league.season_display != "single_year" or len(league.seasons) < 2:
+        return None
+    try:
+        latest, previous = int(league.seasons[-1]), int(league.seasons[-2])
+    except ValueError:
+        return None
+    return str(latest) if latest - previous > 1 else None
+
+
 def league_option_label(league: League) -> str:
     """A League selectbox option's display text -- st.selectbox only ever
     renders plain text for its options (no <img>), so a country flag can
     only show up there as a unicode emoji, not the flag_url image used
-    elsewhere (e.g. the header below the picker)."""
-    return f"{league.flag_emoji} {league.name}" if league.flag_emoji else league.name
+    elsewhere (e.g. the header below the picker). Tournaments held every
+    few years carry the year of their next edition, e.g. "FIFA World Cup 2030"."""
+    name = league.name
+    year = next_tournament_year(league)
+    if year:
+        name = f"{name} {year}"
+    return f"{league.flag_emoji} {name}" if league.flag_emoji else name
 
 # A shared session_state key (see timezone_selector) so picking a timezone
 # in any one fixtures table applies to every other one too, rather than
@@ -218,14 +239,33 @@ def sort_fixtures_by_kickoff(fixtures_df):
 LIVE_LABEL_WIDTH = "6.5rem"
 
 
+def live_match_detail_href(match) -> str | None:
+    """In-app link to a live-banner match's detail page (views/match_detail.py):
+    by ESPN's event id when the match came from ESPN, else by team names and
+    date so the page can find it on ESPN. None when neither is known."""
+    if getattr(match, "event_id", None):
+        query = {"league": match.league_code, "event": match.event_id}
+    elif getattr(match, "match_date", None):
+        query = {
+            "league": match.league_code,
+            "home_name": match.home_name,
+            "away_name": match.away_name,
+            "date": match.match_date.isoformat(),
+        }
+    else:
+        return None
+    return "/match_detail?" + urllib.parse.urlencode(query, quote_via=urllib.parse.quote)
+
+
 def live_scores_banner_html(live_matches: list, leagues: dict[str, League]) -> str:
     """The banner's markup: at most two rows however many matches there are
     (the first half of the matches on the top row, the rest below), each row
     scrolling sideways if it's still too long for the page. Matches in
     progress show their running score and clock; recently finished ones show
     the final score marked "FT" (slightly muted). With no score known (the
-    clock-based fallback) it reads "Home vs Away". Every match is a Google
-    search link and carries its league's NAME -- not its flag emoji: the
+    clock-based fallback) it reads "Home vs Away". Every match links to its
+    match detail page in this app (a Google search only if the match is too
+    thinly identified for that) and carries its league's NAME -- not its flag emoji: the
     international competitions all share the UN flag, and Windows has no flag
     glyphs at all (it renders the two-letter code, "UN"). All text is
     HTML-escaped.
@@ -234,7 +274,13 @@ def live_scores_banner_html(live_matches: list, leagues: dict[str, League]) -> s
     for m in live_matches:
         league = leagues.get(m.league_code)
         league_name = league.name if league else m.league_code
-        url = match_search_url(m.home_name, m.away_name, league_name)
+        detail_href = live_match_detail_href(m)
+        if detail_href is not None:
+            # Same tab, like the standings' team links: the detail page is part of the app.
+            link_attrs = f'href="{html.escape(detail_href)}" target="_self"'
+        else:
+            url = match_search_url(m.home_name, m.away_name, league_name)
+            link_attrs = f'href="{html.escape(url)}" target="_blank" rel="noopener noreferrer"'
         if m.home_score is None or m.away_score is None:
             versus = f"{html.escape(m.home_name)} vs {html.escape(m.away_name)}"
         else:
@@ -246,7 +292,7 @@ def live_scores_banner_html(live_matches: list, leagues: dict[str, League]) -> s
         # Inherits the banner's colour and only underlines on hover, so it
         # reads as the same text, not a block of blue links.
         items.append(
-            f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer" '
+            f'<a {link_attrs} '
             f'class="live-match-link" style="color:inherit;text-decoration:none;white-space:nowrap;{muted}">'
             f"<b>{html.escape(league_name)}</b> {versus}{clock}</a>"
         )

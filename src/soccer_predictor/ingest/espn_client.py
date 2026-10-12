@@ -34,22 +34,43 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import os
 import re
+import threading
 import time
+import unicodedata
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
+from rapidfuzz import fuzz
 
 from soccer_predictor.config import DATA_DIR
+from soccer_predictor.ingest import http_session
 
 BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 # The standings endpoint lives under a different path (/apis/v2, not
 # /apis/site/v2) -- see fetch_group_membership.
 STANDINGS_BASE_URL = "https://site.api.espn.com/apis/v2/sports/soccer"
 CACHE_DIR = DATA_DIR / "cache" / "espn"
-MAX_REQUESTS_PER_MINUTE = 30  # self-imposed courtesy limit -- no published cap exists
+DEFAULT_MAX_REQUESTS_PER_MINUTE = 60  # self-imposed courtesy limit -- no published cap exists
+HARD_MAX_REQUESTS_PER_MINUTE = 120
+
+
+def _configured_max_requests_per_minute() -> int:
+    """One request a second by default (it was one every two seconds, which with
+    kept-alive connections -- ingest/http_session.py -- made the limiter, not the
+    network, the bottleneck). ESPN_MAX_REQUESTS_PER_MINUTE lowers or raises it,
+    e.g. if ESPN ever starts refusing requests from a CI runner."""
+    try:
+        value = int(os.environ.get("ESPN_MAX_REQUESTS_PER_MINUTE", DEFAULT_MAX_REQUESTS_PER_MINUTE))
+    except ValueError:
+        return DEFAULT_MAX_REQUESTS_PER_MINUTE
+    return max(1, min(HARD_MAX_REQUESTS_PER_MINUTE, value))
+
+
+MAX_REQUESTS_PER_MINUTE = _configured_max_requests_per_minute()
 
 # A team's schedule/roster changes slowly; a scoreboard day is finalized
 # once played. 6h mirrors ingest/fixtures.py's own TTLs for the same reason
@@ -58,6 +79,9 @@ MAX_REQUESTS_PER_MINUTE = 30  # self-imposed courtesy limit -- no published cap 
 SCHEDULE_CACHE_TTL_SECONDS = 6 * 3600
 TEAM_LIST_CACHE_TTL_SECONDS = 24 * 3600
 ROSTER_CACHE_TTL_SECONDS = 24 * 3600
+# A finished match's lineups/stats never change; a live one's change every
+# minute; a not-yet-started one only gains lineups about an hour before kickoff.
+MATCH_DETAIL_CACHE_TTL_SECONDS = {"post": 24 * 3600, "in": 30, "pre": 300}
 
 # ESPN's position.abbreviation -> this app's attack/defense bucket, same
 # "midfielders count as attack" rationale already documented in
@@ -83,15 +107,21 @@ class RateLimiter:
     def __init__(self, max_per_minute: int = MAX_REQUESTS_PER_MINUTE):
         self.max_per_minute = max_per_minute
         self._timestamps: deque[float] = deque()
+        # The live banner (ingest/live_scores.py) fetches from several threads
+        # at once; the lock keeps the shared timestamp window consistent (a
+        # caller that has to sleep makes the others queue behind it, which is
+        # exactly the throttling wanted).
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        now = time.monotonic()
-        while self._timestamps and now - self._timestamps[0] > 60:
-            self._timestamps.popleft()
-        if len(self._timestamps) >= self.max_per_minute:
-            sleep_for = 60 - (now - self._timestamps[0]) + 0.1
-            time.sleep(max(sleep_for, 0))
-        self._timestamps.append(time.monotonic())
+        with self._lock:
+            now = time.monotonic()
+            while self._timestamps and now - self._timestamps[0] > 60:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self.max_per_minute:
+                sleep_for = 60 - (now - self._timestamps[0]) + 0.1
+                time.sleep(max(sleep_for, 0))
+            self._timestamps.append(time.monotonic())
 
 
 _rate_limiter = RateLimiter()
@@ -123,7 +153,7 @@ def get(
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
     _rate_limiter.wait()
-    response = requests.get(f"{base_url}{path}", params=params, timeout=15)
+    response = http_session.get(f"{base_url}{path}", params=params, timeout=15)
     response.raise_for_status()
     data = response.json()
 
@@ -163,6 +193,9 @@ class EspnMatch:
     # name ("Group Stage", "Semifinals", or a division like "League A").
     group_name: str | None = None
     stage: str | None = None
+    # ESPN's id for the match itself -- what the match detail page (see
+    # fetch_match_detail) is keyed by.
+    event_id: str | None = None
 
 
 @dataclass
@@ -259,6 +292,7 @@ def _parse_event(event: dict) -> EspnMatch | None:
             clock_label=clock_label,
             group_name=normalize_group_name((competition.get("group") or {}).get("name")),
             stage=(event.get("seasonType") or {}).get("name"),
+            event_id=str(event["id"]) if event.get("id") else None,
         )
     except (KeyError, IndexError, StopIteration, ValueError, TypeError, AttributeError):
         return None
@@ -443,3 +477,267 @@ def fetch_team_conference(league_slug: str, espn_team_id: str) -> str | None:
 
     group_id = data.get("team", {}).get("groups", {}).get("id")
     return _CONFERENCE_NAME.get(group_id)
+
+
+@dataclass
+class LineupPlayer:
+    name: str
+    jersey: str
+    position: str  # ESPN's abbreviation: "G", "D", "M", "F", "SUB"...
+    starter: bool
+    subbed_in: bool = False
+    subbed_out: bool = False
+    # ESPN stat name -> count, only for the stats in PLAYER_STAT_CHIPS and only
+    # when non-zero.
+    stats: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class TeamMatchInfo:
+    espn_id: str
+    name: str
+    home_away: str  # "home" | "away"
+    formation: str | None
+    # stat name -> (ESPN's label, display value), e.g. "possessionPct" -> ("Possession", "58.9")
+    stats: dict[str, tuple[str, str]] = field(default_factory=dict)
+    players: list[LineupPlayer] = field(default_factory=list)
+    logo: str | None = None
+
+
+@dataclass
+class MatchEvent:
+    minute: str  # "25'", "90'+3'"
+    kind: str  # "goal" | "yellow" | "red" | "sub"
+    text: str
+    team_id: str | None
+
+
+@dataclass
+class MatchDetail:
+    event_id: str
+    state: str  # "pre" | "in" | "post"
+    status_label: str  # e.g. "FT", "HT", "63'"
+    home: TeamMatchInfo
+    away: TeamMatchInfo
+    home_score: int | None
+    away_score: int | None
+    venue: str | None
+    city: str | None
+    attendance: int | None
+    events: list[MatchEvent] = field(default_factory=list)
+
+    @property
+    def has_lineups(self) -> bool:
+        return bool(self.home.players or self.away.players)
+
+
+# ESPN keyEvents "type.type" values -> the few kinds the timeline shows
+# (kickoff, half-time, delays etc. are noise here).
+_EVENT_KIND = {
+    "goal": "goal",
+    "penalty---scored": "goal",
+    "own-goal": "goal",
+    "yellow-card": "yellow",
+    "red-card": "red",
+    "substitution": "sub",
+}
+# ESPN's per-player stat names -> short chip label, in display order.
+PLAYER_STAT_CHIPS = {
+    "totalGoals": "goals",
+    "goalAssists": "assists",
+    "totalShots": "shots",
+    "shotsOnTarget": "on target",
+    "saves": "saves",
+    "yellowCards": "yellow",
+    "redCards": "red",
+}
+
+
+def _to_int(value) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_lineup_players(roster: list[dict] | None) -> list[LineupPlayer]:
+    players = []
+    for entry in roster or []:
+        athlete = entry.get("athlete") or {}
+        name = athlete.get("displayName") or athlete.get("fullName")
+        if not name:
+            continue
+        stats: dict[str, int] = {}
+        for stat in entry.get("stats") or []:
+            if stat.get("name") in PLAYER_STAT_CHIPS:
+                value = _to_int(stat.get("value"))
+                if value:
+                    stats[stat["name"]] = value
+        players.append(
+            LineupPlayer(
+                name=name,
+                jersey=str(entry.get("jersey") or ""),
+                position=(entry.get("position") or {}).get("abbreviation") or "",
+                starter=bool(entry.get("starter")),
+                subbed_in=bool(entry.get("subbedIn")),
+                subbed_out=bool(entry.get("subbedOut")),
+                stats=stats,
+            )
+        )
+    return players
+
+
+def _parse_match_events(key_events: list[dict] | None) -> list[MatchEvent]:
+    events = []
+    for event in key_events or []:
+        kind = _EVENT_KIND.get((event.get("type") or {}).get("type"))
+        if kind is None:
+            continue
+        team_id = (event.get("team") or {}).get("id")
+        events.append(
+            MatchEvent(
+                minute=(event.get("clock") or {}).get("displayValue") or "",
+                kind=kind,
+                text=event.get("text") or event.get("shortText") or "",
+                team_id=str(team_id) if team_id else None,
+            )
+        )
+    return events
+
+
+def _team_logo(team: dict) -> str | None:
+    if team.get("logo"):
+        return team["logo"]
+    logos = team.get("logos") or []
+    return logos[0].get("href") if logos else None
+
+
+def parse_match_detail(event_id: str, data: dict) -> MatchDetail | None:
+    """None when the payload doesn't look like a match summary."""
+    try:
+        competition = data["header"]["competitions"][0]
+        status_type = competition["status"]["type"]
+        competitors = {c["homeAway"]: c for c in competition["competitors"]}
+        home_competitor, away_competitor = competitors["home"], competitors["away"]
+        str(home_competitor["team"]["id"]), str(away_competitor["team"]["id"])
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+    boxscore_by_team: dict[str, dict[str, tuple[str, str]]] = {}
+    for team in (data.get("boxscore") or {}).get("teams") or []:
+        team_id = str((team.get("team") or {}).get("id"))
+        boxscore_by_team[team_id] = {
+            stat["name"]: (stat.get("label") or stat["name"], str(stat.get("displayValue", "")))
+            for stat in team.get("statistics") or []
+            if stat.get("name")
+        }
+    roster_by_team = {str((r.get("team") or {}).get("id")): r for r in data.get("rosters") or []}
+
+    def team_info(side: str, competitor: dict) -> TeamMatchInfo:
+        team_id = str(competitor["team"]["id"])
+        roster = roster_by_team.get(team_id) or {}
+        return TeamMatchInfo(
+            espn_id=team_id,
+            name=competitor["team"].get("displayName") or "",
+            home_away=side,
+            formation=roster.get("formation") or None,
+            stats=boxscore_by_team.get(team_id, {}),
+            players=_parse_lineup_players(roster.get("roster")),
+            logo=_team_logo(competitor["team"]),
+        )
+
+    game_info = data.get("gameInfo") or {}
+    venue = game_info.get("venue") or {}
+    state = status_type.get("state", "pre")
+    return MatchDetail(
+        event_id=event_id,
+        state=state,
+        status_label=status_type.get("shortDetail") or status_type.get("detail") or "",
+        home=team_info("home", home_competitor),
+        away=team_info("away", away_competitor),
+        home_score=_to_int(home_competitor.get("score")) if state != "pre" else None,
+        away_score=_to_int(away_competitor.get("score")) if state != "pre" else None,
+        venue=venue.get("fullName"),
+        city=(venue.get("address") or {}).get("city"),
+        attendance=_to_int(game_info.get("attendance")) or None,
+        events=_parse_match_events(data.get("keyEvents")),
+    )
+
+
+def fetch_match_detail(league_slug: str, event_id: str, state: str = "post") -> MatchDetail | None:
+    """Lineups, team/player match stats and the goals/cards/subs timeline for
+    one match, from ESPN's summary endpoint (keyless, same host as the rest of
+    this client). `state` ("pre"/"in"/"post") only picks the cache lifetime.
+    None on any failure -- the page shows a friendly caption instead.
+    """
+    try:
+        data = get(
+            f"/{league_slug}/summary",
+            params={"event": event_id},
+            cache_ttl_seconds=MATCH_DETAIL_CACHE_TTL_SECONDS.get(state, 300),
+        )
+    except (requests.RequestException, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return parse_match_detail(event_id, data)
+
+
+def find_event_id(
+    league_slug: str, date: dt.date, espn_home_id: str, espn_away_id: str
+) -> tuple[str, str] | None:
+    """(event id, state) of the match between these two ESPN teams on `date`,
+    found on that day's scoreboard (one 6h-cached request per day). Used when
+    the database has no stored event id for a match. None if not found."""
+    for match in fetch_day_matches(league_slug, date):
+        if (
+            match.event_id
+            and match.espn_home_id == str(espn_home_id)
+            and match.espn_away_id == str(espn_away_id)
+        ):
+            return match.event_id, match.state
+    return None
+
+
+TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as the other clients' team matching
+# Club-form words that differ between sources ("Arsenal FC" vs "Arsenal").
+_NAME_NOISE = {"fc", "afc", "cf", "sc", "ac", "ssc", "fk", "sk"}
+
+
+def _name_key(name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    words = re.sub(r"[^a-z0-9 ]+", " ", ascii_name.casefold()).split()
+    return " ".join(w for w in words if w not in _NAME_NOISE)
+
+
+def _name_score(a: str, b: str) -> float:
+    return fuzz.WRatio(_name_key(a), _name_key(b))
+
+
+def find_event_by_names(
+    league_slug: str,
+    date: dt.date,
+    home_name: str,
+    away_name: str,
+    cache_ttl_seconds: int = SCHEDULE_CACHE_TTL_SECONDS,
+) -> tuple[str, str] | None:
+    """(event id, state) of the match between teams NAMED like this, for
+    leagues whose teams carry no ESPN id (the football-data.org ones): scans
+    the scoreboards of `date` and the days either side (ESPN files late
+    kickoffs under a neighbouring day) and takes the best-matching pair, home
+    and away both above TEAM_NAME_FUZZY_THRESHOLD. The given date wins over a
+    neighbour when it has a match. None if nothing matches."""
+    best: tuple[float, str, str] | None = None
+    for offset in (0, -1, 1):
+        for match in fetch_day_matches(league_slug, date + dt.timedelta(days=offset), cache_ttl_seconds):
+            if not match.event_id:
+                continue
+            home_score = _name_score(home_name, match.home_name)
+            away_score = _name_score(away_name, match.away_name)
+            if min(home_score, away_score) < TEAM_NAME_FUZZY_THRESHOLD:
+                continue
+            if best is None or home_score + away_score > best[0]:
+                best = (home_score + away_score, match.event_id, match.state)
+        if best is not None:
+            break
+    return (best[1], best[2]) if best else None

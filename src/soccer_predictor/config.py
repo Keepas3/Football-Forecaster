@@ -70,9 +70,11 @@ class League:
     # set and go through the normal football-data.org path for their
     # current/next (not-yet-archived) tournament's live fixtures.
     data_source: str = "football_data_org"
-    # Only meaningful when data_source == "espn" -- ESPN's own league slug,
-    # e.g. "usa.1" for MLS (verified live against site.api.espn.com; no
-    # documented, stable list of these exists).
+    # ESPN's own league slug, e.g. "usa.1" for MLS (verified live against
+    # site.api.espn.com; no documented, stable list of these exists). Required
+    # when data_source == "espn"; for every other league it only switches on
+    # the match detail page (lineups, team stats, timeline), which looks the
+    # match up on ESPN by team names.
     espn_league_slug: str | None = None
     # Explicit opt-in for a league with a real historical-match source that
     # ISN'T a football-data.co.uk CSV (e.g. MLS via ESPN, World Cup/Euro via
@@ -194,9 +196,26 @@ def load_team_aliases() -> list[TeamAlias]:
     ]
 
 
+_yaml_by_mtime: dict[Path, tuple[tuple[int, int], dict]] = {}
+
+
+def _load_hand_edited_yaml(path: Path) -> dict:
+    """Parses a YAML file that is meant to be hand-edited between dashboard
+    runs, re-reading it only when it has changed on disk. (Every prediction
+    looks at the manual injuries, so parsing the file each time added up.)
+    The returned dict is shared -- callers only read it."""
+    stat = path.stat()
+    signature = (stat.st_mtime_ns, stat.st_size)
+    cached = _yaml_by_mtime.get(path)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    _yaml_by_mtime[path] = (signature, raw)
+    return raw
+
+
 def load_manual_injuries() -> list[ManualInjury]:
-    # Not cached: this file is meant to be hand-edited between dashboard runs.
-    raw = yaml.safe_load((CONFIG_DIR / "injuries.yaml").read_text(encoding="utf-8"))
+    raw = _load_hand_edited_yaml(CONFIG_DIR / "injuries.yaml")
     return [
         ManualInjury(
             team=entry["team"],
@@ -210,16 +229,14 @@ def load_manual_injuries() -> list[ManualInjury]:
 
 
 def load_manual_captains() -> list[ManualCaptain]:
-    # Not cached: this file is meant to be hand-edited between dashboard runs.
-    raw = yaml.safe_load((CONFIG_DIR / "captains.yaml").read_text(encoding="utf-8"))
+    raw = _load_hand_edited_yaml(CONFIG_DIR / "captains.yaml")
     return [
         ManualCaptain(team=entry["team"], player=entry["player"]) for entry in (raw.get("captains") or [])
     ]
 
 
 def load_manual_star_players() -> list[ManualStarPlayer]:
-    # Not cached: this file is meant to be hand-edited between dashboard runs.
-    raw = yaml.safe_load((CONFIG_DIR / "star_players.yaml").read_text(encoding="utf-8"))
+    raw = _load_hand_edited_yaml(CONFIG_DIR / "star_players.yaml")
     return [
         ManualStarPlayer(team=entry["team"], player=entry["player"], note=entry.get("note", ""))
         for entry in (raw.get("star_players") or [])

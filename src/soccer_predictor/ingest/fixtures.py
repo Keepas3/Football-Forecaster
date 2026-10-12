@@ -14,6 +14,7 @@ from soccer_predictor.ingest.team_mapper import UnresolvedTeamName, resolve
 from soccer_predictor.storage.models import Team
 from soccer_predictor.storage.repository import (
     get_or_create_team,
+    match_count_for_season,
     team_by_espn_id,
     teams_for_league,
     update_espn_team_id,
@@ -354,9 +355,27 @@ def sync_fixtures_to_db_espn(
             status="SCHEDULED",
             kickoff_utc=match.kickoff_utc,
             group_name=_group_for_match(match, membership) if league.has_groups else None,
+            espn_event_id=match.event_id,
         )
         synced += 1
     return synced, skipped
+
+
+def espn_seasons_to_sync(session: Session, league: League, all_seasons: bool = False) -> list[str]:
+    """Which of a league's seasons a full historical sync needs to fetch.
+
+    Syncing one ESPN season costs a request per team (55 for the Nations
+    League), throttled to ~2s each, and a concluded edition's results never
+    change -- so, like the CSV leagues' past seasons, a past season that
+    already has matches stored is skipped rather than re-walked on every run.
+    The latest season is always synced (it's the one still changing), and so
+    is any past season with nothing stored yet (first run, or an earlier
+    attempt that failed). `all_seasons` forces the full re-walk.
+    """
+    if all_seasons:
+        return list(league.seasons)
+    *past, latest = league.seasons
+    return [s for s in past if match_count_for_season(session, league.code, s) == 0] + [latest]
 
 
 def sync_results_to_db_espn(session: Session, league: League, season: str) -> tuple[int, int]:
@@ -411,6 +430,7 @@ def sync_results_to_db_espn(session: Session, league: League, season: str) -> tu
             source="espn",
             group_name=group_name,
             group_is_fallback=group_is_fallback,
+            espn_event_id=match.event_id,
         )
     return synced, skipped
 
@@ -463,6 +483,7 @@ def sync_recent_results_to_db_espn(
                 # group-mates can't be told from a group game: trust only ESPN's
                 # own group label here.
                 group_name=_group_for_match(match, membership, require_label=True) if league.has_groups else None,
+                espn_event_id=match.event_id,
             )
             synced += 1
     return synced, skipped

@@ -80,6 +80,22 @@ def ensure_group_name_columns(engine=None) -> list[str]:
     return altered
 
 
+def ensure_espn_event_id_columns(engine=None) -> list[str]:
+    """Adds matches.espn_event_id / fixtures.espn_event_id to a database created
+    before they existed, returning the tables altered -- automatic in init_db()
+    for the same reason as ensure_group_name_columns."""
+    engine = engine or get_engine()
+    altered = []
+    for table in ("matches", "fixtures"):
+        columns = {col["name"] for col in inspect(engine).get_columns(table)}
+        if "espn_event_id" in columns:
+            continue
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN espn_event_id VARCHAR"))
+        altered.append(table)
+    return altered
+
+
 def ensure_prediction_probability_columns(engine=None) -> list[str]:
     """Adds prediction_records.p_home/p_draw/p_away to a database created before
     they existed, returning the columns that were added -- automatic in
@@ -98,6 +114,7 @@ def ensure_prediction_probability_columns(engine=None) -> list[str]:
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
     ensure_group_name_columns()
+    ensure_espn_event_id_columns()
     ensure_prediction_probability_columns()
 
 

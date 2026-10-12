@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 import requests
 
 from soccer_predictor.config import DATA_DIR, football_data_org_api_key
+from soccer_predictor.ingest import http_session
 
 BASE_URL = "https://api.football-data.org/v4"
 CACHE_DIR = DATA_DIR / "cache" / "football_data_org"
@@ -49,15 +51,21 @@ class RateLimiter:
     def __init__(self, max_per_minute: int = MAX_REQUESTS_PER_MINUTE):
         self.max_per_minute = max_per_minute
         self._timestamps: deque[float] = deque()
+        # The live banner (ingest/live_scores.py) fetches from several threads
+        # at once; the lock keeps the shared timestamp window consistent (a
+        # caller that has to sleep makes the others queue behind it, which is
+        # exactly the throttling wanted).
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        now = time.monotonic()
-        while self._timestamps and now - self._timestamps[0] > 60:
-            self._timestamps.popleft()
-        if len(self._timestamps) >= self.max_per_minute:
-            sleep_for = 60 - (now - self._timestamps[0]) + 0.1
-            time.sleep(max(sleep_for, 0))
-        self._timestamps.append(time.monotonic())
+        with self._lock:
+            now = time.monotonic()
+            while self._timestamps and now - self._timestamps[0] > 60:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self.max_per_minute:
+                sleep_for = 60 - (now - self._timestamps[0]) + 0.1
+                time.sleep(max(sleep_for, 0))
+            self._timestamps.append(time.monotonic())
 
 
 _rate_limiter = RateLimiter()
@@ -85,7 +93,7 @@ def get(path: str, params: dict | None = None, cache_ttl_seconds: int = 6 * 3600
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
     _rate_limiter.wait()
-    response = requests.get(
+    response = http_session.get(
         f"{BASE_URL}{path}",
         params=params,
         headers={"X-Auth-Token": api_key},

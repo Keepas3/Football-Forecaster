@@ -30,6 +30,7 @@ from soccer_predictor.dashboard.components import (
     timezone_selector,
     youtube_search_url,
 )
+from soccer_predictor.dashboard.views.match_detail import render_match_detail_button
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
@@ -272,6 +273,10 @@ def render() -> None:
             selected = schedule_event.selection.rows if schedule_event and schedule_event.selection else []
             if selected:
                 sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]
+                if league is not None:
+                    render_match_detail_button(
+                        league, sel_home_id, sel_away_id, sel_date, key=f"match_detail_btn_fixture_{team_id}"
+                    )
                 is_this_team_home = sel_home_id == team_id
                 opponent_id = sel_away_id if is_this_team_home else sel_home_id
                 opponent_name = sel_away_name if is_this_team_home else sel_home_name
@@ -295,6 +300,7 @@ def render() -> None:
         st.caption("No historical results on record for this team.")
     else:
         result_rows = []
+        result_meta = []  # parallel to result_rows: (date, home_id, away_id)
         for row in recent_df.head(10).itertuples(index=False):
             is_home = row.home_team_id == team_id
             opponent_id = row.away_team_id if is_home else row.home_team_id
@@ -314,11 +320,24 @@ def render() -> None:
                     "Watch": youtube_search_url(home_name, away_name, row.date),
                 }
             )
-        st.dataframe(
+            result_meta.append((row.date, row.home_team_id, row.away_team_id))
+        has_match_detail = league is not None and bool(league.espn_league_slug)
+        results_event = st.dataframe(
             style_match_results(result_rows),
             use_container_width=True,
             column_config={"Watch": st.column_config.LinkColumn("Watch", display_text="▶ Highlights")},
+            on_select="rerun" if has_match_detail else "ignore",
+            selection_mode="single-row",
+            key=f"team_detail_results_table_{team_id}",
         )
+        if has_match_detail:
+            st.caption("Click a result's row for lineups, team stats and the goals/cards timeline.")
+            selected_result = results_event.selection.rows if results_event and results_event.selection else []
+            if selected_result:
+                result_date, result_home_id, result_away_id = result_meta[selected_result[0]]
+                render_match_detail_button(
+                    league, result_home_id, result_away_id, result_date, key=f"match_detail_btn_{team_id}"
+                )
 
     st.subheader("Squad")
     if league is None:

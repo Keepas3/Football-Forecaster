@@ -40,6 +40,7 @@ from soccer_predictor.dashboard.components import (
     style_fixture_predictions,
     timezone_selector,
 )
+from soccer_predictor.dashboard.views.match_detail import render_match_detail_button
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
 from soccer_predictor.ingest.live_scores import LiveMatch, fetch_all_live_matches
 from soccer_predictor.ingest.news import league_news_query
@@ -152,6 +153,7 @@ def _render_live_banner(leagues: dict[str, League]) -> None:
                     home_score=None,
                     away_score=None,
                     clock_label="",
+                    match_date=row.kickoff_utc.date(),
                 )
             )
         # Same layout and Google links as the real banner, just with no score.
@@ -346,6 +348,9 @@ def render() -> None:
                 selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
                 if selected:
                     home_id, away_id, home_name, away_name, fixture_date = fixture_meta[selected[0]]
+                    render_match_detail_button(
+                        league, home_id, away_id, fixture_date, key=f"match_detail_btn_{league.code}"
+                    )
 
                     with session_scope() as session:
                         home_matches = matches_for_team(session, home_id)

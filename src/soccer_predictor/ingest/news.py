@@ -29,6 +29,7 @@ from pathlib import Path
 import requests
 
 from soccer_predictor.config import DATA_DIR, League
+from soccer_predictor.ingest import http_session
 
 FEED_URL = "https://news.google.com/rss/search"
 CACHE_DIR = DATA_DIR / "cache" / "news"
@@ -83,7 +84,7 @@ def _fetch_feed_text(query: str, window: str) -> str:
     if cache_file.exists() and time.time() - cache_file.stat().st_mtime < CACHE_TTL_SECONDS:
         return cache_file.read_text(encoding="utf-8")
 
-    response = requests.get(
+    response = http_session.get(
         FEED_URL,
         params={"q": full_query, "hl": "en-GB", "gl": "GB", "ceid": "GB:en"},
         headers={"User-Agent": "Mozilla/5.0"},

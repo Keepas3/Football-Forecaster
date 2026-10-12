@@ -4,6 +4,8 @@ score, marked FT) for FINISHED_LINGER after the estimated end, then dropped."""
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 
 import pytest
 import requests
@@ -176,8 +178,8 @@ def _lm(home, away, finished, kickoff=KICKOFF, league="NL"):
 
 
 def test_all_matches_lists_live_first_then_finished_most_recent_first(session, monkeypatch):
-    monkeypatch.setattr(live_scores, "fetch_live_matches_football_data_org", lambda s: [])
-    monkeypatch.setattr(live_scores, "fetch_recent_finished_football_data_org", lambda s: [])
+    monkeypatch.setattr(live_scores, "fetch_live_matches_football_data_org", lambda s, *a, **k: [])
+    monkeypatch.setattr(live_scores, "fetch_recent_finished_football_data_org", lambda s, *a, **k: [])
     earlier = _lm("A", "B", True, kickoff=KICKOFF - dt.timedelta(hours=3))
     later = _lm("C", "D", True, kickoff=KICKOFF)
     live = _lm("E", "F", False)
@@ -190,8 +192,8 @@ def test_all_matches_lists_live_first_then_finished_most_recent_first(session, m
 
 def test_a_match_both_feeds_report_appears_once_as_finished(session, monkeypatch):
     # Around the final whistle a cached "live" copy and a "finished" copy can coexist.
-    monkeypatch.setattr(live_scores, "fetch_live_matches_football_data_org", lambda s: [_lm("A", "B", False)])
-    monkeypatch.setattr(live_scores, "fetch_recent_finished_football_data_org", lambda s: [_lm("A", "B", True)])
+    monkeypatch.setattr(live_scores, "fetch_live_matches_football_data_org", lambda s, *a, **k: [_lm("A", "B", False)])
+    monkeypatch.setattr(live_scores, "fetch_recent_finished_football_data_org", lambda s, *a, **k: [_lm("A", "B", True)])
 
     results = live_scores.fetch_all_live_matches(session, {})
 
@@ -223,3 +225,86 @@ def test_banner_without_a_score_reads_home_vs_away_with_no_empty_parentheses():
 def test_finished_matches_are_still_google_links():
     markup = live_scores_banner_html([_lm("Greece", "Germany", True)], {"NL": NL})
     assert 'href="https://www.google.com/search?q=Greece+vs+Germany+UEFA+Nations+League"' in markup
+
+
+# --- the banner's network calls run side by side ---------------------------------------------
+
+ESPN_LEAGUES = {
+    code: League(code=code, name=code, seasons=["2627"], data_source="espn", espn_league_slug=slug)
+    for code, slug in (("MLS", "usa.1"), ("NL", "uefa.nations"), ("ASIA", "afc.asian.cup"))
+}
+
+
+def test_fetch_all_waits_for_the_slowest_call_not_the_sum_and_keeps_db_work_on_the_main_thread(session, monkeypatch):
+    delay = 0.3
+    main_thread = threading.get_ident()
+    resolved_on = []
+
+    def slow_api_get(*args, **kwargs):
+        time.sleep(delay)
+        return {"matches": []}
+
+    def slow_day_matches(*args, **kwargs):
+        time.sleep(delay)
+        return []
+
+    def spy_resolve(session, api_name, league_code):
+        resolved_on.append(threading.get_ident())
+        return api_name, None
+
+    monkeypatch.setattr(live_scores.api_client, "get", slow_api_get)
+    monkeypatch.setattr(espn_client, "fetch_day_matches", slow_day_matches)
+    monkeypatch.setattr(live_scores, "_resolve_display_name", spy_resolve)
+    monkeypatch.setattr(live_scores, "load_leagues", lambda: {})
+
+    started = time.perf_counter()
+    live_scores.fetch_all_live_matches(session, ESPN_LEAGUES)
+    elapsed = time.perf_counter() - started
+
+    # 2 football-data calls + 3 leagues x 2 days = 8 calls; run one after another
+    # that's 2.4s, side by side it's about the 0.6s of the slowest league.
+    assert elapsed < delay * 4
+
+    # Resolving team names uses the database session, which isn't thread-safe.
+    payload_with_match = {
+        "matches": [
+            {
+                "competition": {"id": 2021},
+                "homeTeam": {"name": "A"},
+                "awayTeam": {"name": "B"},
+                "score": {"fullTime": {"home": 1, "away": 0}},
+                "status": "IN_PLAY",
+                "minute": 5,
+            }
+        ]
+    }
+    monkeypatch.setattr(live_scores.api_client, "get", lambda *a, **k: payload_with_match)
+    monkeypatch.setattr(live_scores, "load_leagues", lambda: {"EPL": League(code="EPL", name="E", api_competition_id=2021, seasons=["2627"])})
+    monkeypatch.setattr(espn_client, "fetch_day_matches", lambda *a, **k: [])
+    live_scores.fetch_all_live_matches(session, {})
+    assert resolved_on and set(resolved_on) == {main_thread}
+
+
+def test_a_failing_feed_does_not_stop_the_others(session, monkeypatch):
+    def broken_api_get(*args, **kwargs):
+        raise requests.RequestException("down")
+
+    live_espn = _lm("X", "Y", False)
+    monkeypatch.setattr(live_scores.api_client, "get", broken_api_get)
+    monkeypatch.setattr(live_scores, "fetch_live_matches_espn", lambda league: [live_espn] if league.code == "NL" else [])
+
+    results = live_scores.fetch_all_live_matches(session, ESPN_LEAGUES)
+
+    assert [m.home_name for m in results] == ["X"]
+
+
+def test_rate_limiters_record_every_concurrent_caller():
+    from soccer_predictor.ingest import api_client
+
+    for limiter in (espn_client.RateLimiter(max_per_minute=100), api_client.RateLimiter(max_per_minute=100)):
+        threads = [threading.Thread(target=limiter.wait) for _ in range(20)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(limiter._timestamps) == 20

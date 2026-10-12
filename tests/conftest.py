@@ -23,3 +23,13 @@ def _no_real_year_scoreboard_requests(request, monkeypatch):
     from soccer_predictor.ingest import espn_client
 
     monkeypatch.setattr(espn_client, "fetch_year_fixtures", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
+def _clear_in_memory_caches():
+    """ttl_memo results would otherwise carry one test's patched data into the next."""
+    from soccer_predictor.ingest import memo
+
+    memo.clear_all()
+    yield
+    memo.clear_all()

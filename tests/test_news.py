@@ -40,7 +40,7 @@ def _serve(monkeypatch, text, calls=None):
             calls.append(k.get("params"))
         return _Resp(text)
 
-    monkeypatch.setattr(news.requests, "get", fake_get)
+    monkeypatch.setattr(news.http_session, "get", fake_get)
 
 
 def test_parses_fields_and_strips_source_suffix(monkeypatch):
@@ -99,7 +99,7 @@ def test_network_error_returns_empty_list(monkeypatch):
     def boom(*a, **k):
         raise requests.RequestException("down")
 
-    monkeypatch.setattr(news.requests, "get", boom)
+    monkeypatch.setattr(news.http_session, "get", boom)
     assert news.fetch_news("x") == []
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pandas as pd
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from soccer_predictor.storage.models import (
@@ -155,8 +155,10 @@ def upsert_match(
     source: str = "football-data.co.uk",
     group_name: str | None = None,
     group_is_fallback: bool = False,
+    espn_event_id: str | None = None,
 ) -> None:
-    """`group_name` is only ever set, never cleared: a re-sync from a source
+    """`espn_event_id`, like `group_name`, is only ever set, never cleared.
+    `group_name` is only ever set, never cleared: a re-sync from a source
     that doesn't know the group (e.g. ESPN's team-schedule endpoint) must
     not wipe a group an earlier pass already filled in. A `group_is_fallback`
     name (one derived from the match graph, see
@@ -177,6 +179,8 @@ def upsert_match(
         existing.season = season
         if group_name is not None and not (group_is_fallback and existing.group_name is not None):
             existing.group_name = group_name
+        if espn_event_id is not None:
+            existing.espn_event_id = espn_event_id
         return
     session.add(
         Match(
@@ -189,6 +193,7 @@ def upsert_match(
             away_goals=away_goals,
             source=source,
             group_name=group_name,
+            espn_event_id=espn_event_id,
         )
     )
 
@@ -361,6 +366,12 @@ def matches_for_league(session: Session, league_code: str) -> pd.DataFrame:
     )
 
 
+def match_count_for_season(session: Session, league_code: str, season: str) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Match).where(Match.league_code == league_code, Match.season == season)
+    ) or 0
+
+
 def matches_for_team(session: Session, team_id: int) -> pd.DataFrame:
     """Newest-first: this feeds a "recent results" display, unlike
     matches_for_league (which feeds the trainer and doesn't care about order).
@@ -408,6 +419,7 @@ def upsert_fixture(
     status: str,
     kickoff_utc: dt.datetime | None = None,
     group_name: str | None = None,
+    espn_event_id: str | None = None,
 ) -> None:
     existing = session.scalar(
         select(Fixture).where(
@@ -425,6 +437,8 @@ def upsert_fixture(
             existing.kickoff_utc = kickoff_utc
         if group_name is not None:
             existing.group_name = group_name
+        if espn_event_id is not None:
+            existing.espn_event_id = espn_event_id
         return
     session.add(
         Fixture(
@@ -436,8 +450,47 @@ def upsert_fixture(
             fetched_at=now,
             kickoff_utc=kickoff_utc,
             group_name=group_name,
+            espn_event_id=espn_event_id,
         )
     )
+
+
+def match_exists(
+    session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
+) -> bool:
+    """Whether this exact match is stored, as a result or as a fixture."""
+    for model in (Match, Fixture):
+        found = session.scalar(
+            select(model.id).where(
+                model.league_code == league_code,
+                model.date == date,
+                model.home_team_id == home_team_id,
+                model.away_team_id == away_team_id,
+            )
+        )
+        if found is not None:
+            return True
+    return False
+
+
+def espn_event_id_for_match(
+    session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
+) -> str | None:
+    """The stored ESPN event id for this match, whether it's still a fixture or
+    already a result (a fixture row is removed/superseded once played, so both
+    tables are checked). None when ESPN's id was never recorded."""
+    for model in (Match, Fixture):
+        event_id = session.scalar(
+            select(model.espn_event_id).where(
+                model.league_code == league_code,
+                model.date == date,
+                model.home_team_id == home_team_id,
+                model.away_team_id == away_team_id,
+            )
+        )
+        if event_id:
+            return event_id
+    return None
 
 
 def team_group_names_for_season(session: Session, league_code: str, season: str) -> dict[int, str]:

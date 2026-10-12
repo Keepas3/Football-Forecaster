@@ -21,6 +21,7 @@
 leagues:
   - code: EPL
     name: English Premier League
+    espn_league_slug: eng.1  # match detail only (lineups/stats); data still comes from the source below
     news_query: Premier League
     csv_code: E0
     api_competition_id: 2021
@@ -32,6 +33,7 @@ leagues:
       - {start: 18, end: 20, kind: relegation, label: "Relegation"}
   - code: LALIGA
     name: La Liga
+    espn_league_slug: esp.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: SP1
     api_competition_id: 2014
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
@@ -42,6 +44,7 @@ leagues:
       - {start: 18, end: 20, kind: relegation, label: "Relegation"}
   - code: BUNDESLIGA
     name: Bundesliga
+    espn_league_slug: ger.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: D1
     api_competition_id: 2002
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
@@ -53,6 +56,7 @@ leagues:
       - {start: 17, end: 18, kind: relegation, label: "Relegation"}
   - code: SERIEA
     name: Serie A
+    espn_league_slug: ita.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: I1
     api_competition_id: 2019
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
@@ -63,6 +67,7 @@ leagues:
       - {start: 18, end: 20, kind: relegation, label: "Relegation"}
   - code: LIGUE1
     name: Ligue 1
+    espn_league_slug: fra.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: F1
     api_competition_id: 2015
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
@@ -82,6 +87,7 @@ leagues:
   # none of them is a single nation's competition.
   - code: WC
     name: FIFA World Cup
+    espn_league_slug: fifa.world  # match detail only (lineups/stats); data still comes from the source below
     api_competition_id: 2000
     # Historical match + goal-scorer data (1930-2022) comes from a static
     # archive (see ingest/worldcup_archive.py -- jfjelstul/worldcup,
@@ -109,6 +115,7 @@ leagues:
     flag_emoji: "🇺🇳"
   - code: UCL
     name: UEFA Champions League
+    espn_league_slug: uefa.champions  # match detail only (lineups/stats); data still comes from the source below
     api_competition_id: 2001
     # Scoped to the 2024/25+ 36-team single league-phase table format --
     # older seasons used an 8-group format that a flat table can't represent
@@ -122,6 +129,7 @@ leagues:
       - {start: 25, end: 36, kind: relegation, label: "Eliminated"}
   - code: EURO
     name: European Championship
+    espn_league_slug: uefa.euro  # match detail only (lineups/stats); data still comes from the source below
     news_query: UEFA European Championship
     api_competition_id: 2018
     # Historical match data (1960-2024) comes from a static archive (see

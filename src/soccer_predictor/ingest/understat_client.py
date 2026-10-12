@@ -38,6 +38,8 @@ import requests
 from rapidfuzz import fuzz, process
 
 from soccer_predictor.config import DATA_DIR
+from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest.memo import ttl_memo
 
 BASE_URL = "https://understat.com"
 CACHE_DIR = DATA_DIR / "cache" / "understat"
@@ -45,6 +47,8 @@ CACHE_DIR = DATA_DIR / "cache" / "understat"
 # Short -- the whole point of this source is that it reflects the CURRENT
 # season, which changes match to match, not a frozen past season.
 CACHE_TTL_SECONDS = 24 * 3600
+# How long a parsed whole-league result is kept in memory (see ingest/memo.py).
+TOTALS_MEMO_SECONDS = 300
 
 TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as this app's other team-name matching (e.g. asa_client.py)
 
@@ -104,7 +108,7 @@ def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
         if age < CACHE_TTL_SECONDS:
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    response = requests.post(
+    response = http_session.post(
         f"{BASE_URL}/main/getPlayersStats/",
         headers={
             "User-Agent": "Mozilla/5.0",
@@ -186,6 +190,7 @@ def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list
         return []
 
 
+@ttl_memo(TOTALS_MEMO_SECONDS)
 def fetch_all_teams_totals(league_code: str, season: int) -> dict[str, list[UnderstatPlayerStats]]:
     """Every Understat-tracked team's full player list for `league_code`/
     `season`, keyed by Understat's own `team_title` -- lets a caller build a

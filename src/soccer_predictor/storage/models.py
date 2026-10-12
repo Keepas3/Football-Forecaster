@@ -94,6 +94,10 @@ class Match(Base):
     # leagues, knockout/playoff matches), which is also how knockout results
     # are kept out of the per-group tables (see model/standings.py).
     group_name: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # ESPN's id for this match (ESPN-backed leagues only) -- lets the match
+    # detail page ask ESPN for lineups/stats directly. None when unknown;
+    # the page then looks it up from ESPN's day scoreboard instead.
+    espn_event_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
 
 class Fixture(Base):
@@ -118,6 +122,8 @@ class Fixture(Base):
     # Same meaning as Match.group_name -- lets a group with no results yet
     # still list its teams.
     group_name: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # Same meaning as Match.espn_event_id.
+    espn_event_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
 
 class Injury(Base):

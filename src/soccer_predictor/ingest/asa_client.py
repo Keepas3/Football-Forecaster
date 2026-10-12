@@ -38,6 +38,8 @@ import requests
 from rapidfuzz import fuzz, process
 
 from soccer_predictor.config import DATA_DIR
+from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest.memo import ttl_memo
 
 BASE_URL = "https://app.americansocceranalysis.com/api/v1"
 CACHE_DIR = DATA_DIR / "cache" / "asa"
@@ -45,6 +47,8 @@ CACHE_DIR = DATA_DIR / "cache" / "asa"
 # Same reasoning as understat_client.py's TTL: reflects the in-progress
 # season, so a day-old cache is as stale as this app tolerates anywhere else.
 CACHE_TTL_SECONDS = 24 * 3600
+# How long a parsed whole-league result is kept in memory (see ingest/memo.py).
+TOTALS_MEMO_SECONDS = 300
 
 TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as the other clients' team matching
 
@@ -88,7 +92,7 @@ def _get_cached_json(cache_key: str, url: str, params: dict) -> list[dict]:
         if age < CACHE_TTL_SECONDS:
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    response = requests.get(url, params=params, timeout=15)
+    response = http_session.get(url, params=params, timeout=15)
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, list):
@@ -170,6 +174,7 @@ def _parse_stat_row(row: dict, bio: dict) -> AsaPlayerStats:
     )
 
 
+@ttl_memo(TOTALS_MEMO_SECONDS)
 def fetch_all_teams_totals(season: int) -> dict[str, list[AsaPlayerStats]]:
     """Every ASA-tracked MLS team's players for `season`, keyed by ASA's own
     `team_name` -- lets a caller build a league-wide baseline (see

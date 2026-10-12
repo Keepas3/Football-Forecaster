@@ -22,6 +22,7 @@ time.
 from __future__ import annotations
 
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import requests
@@ -57,6 +58,11 @@ class LiveMatch:
     clock_label: str  # "63'", "HT", "45+2'", "Live" if unknown, or "FT" once finished
     finished: bool = False
     kickoff_utc: dt.datetime | None = None  # naive UTC
+    # What the banner's link needs to open this match's detail page: ESPN's own
+    # event id when the match came from ESPN, else the match's (UTC) date so the
+    # page can find it on ESPN by team names.
+    event_id: str | None = None
+    match_date: dt.date | None = None
 
 
 def _resolve_display_name(session: Session, api_name: str, league_code: str) -> tuple[str, str | None]:
@@ -70,6 +76,14 @@ def _resolve_display_name(session: Session, api_name: str, league_code: str) -> 
     return api_name, None
 
 
+def _utc_date(utc_date: str | None) -> dt.date | None:
+    """The date part of football-data.org's `utcDate` ("2026-10-11T19:00:00Z")."""
+    try:
+        return dt.date.fromisoformat(utc_date[:10])
+    except (TypeError, ValueError):
+        return None
+
+
 def _clock_label(status: str, minute, injury_time) -> str:
     if status == "PAUSED":
         return "HT"
@@ -80,15 +94,43 @@ def _clock_label(status: str, minute, injury_time) -> str:
     return f"{minute}'"
 
 
-def fetch_live_matches_football_data_org(session: Session) -> list[LiveMatch]:
-    """One global call covers every football-data.org-backed league this
-    app tracks at once. Empty list on any failure or when nothing's live.
-    """
+# "Not fetched yet" marker for the football-data.org parsers' `payload`
+# argument -- None can't serve, since it already means "the fetch failed".
+_UNFETCHED = object()
+
+
+def _football_data_live_payload() -> dict | None:
     try:
-        data = api_client.get(
-            "/matches", params={"status": "LIVE"}, cache_ttl_seconds=LIVE_SCORE_CACHE_TTL_SECONDS
+        return api_client.get("/matches", params={"status": "LIVE"}, cache_ttl_seconds=LIVE_SCORE_CACHE_TTL_SECONDS)
+    except (api_client.MissingApiKey, requests.RequestException):
+        return None
+
+
+def _football_data_finished_payload(now: dt.datetime) -> dict | None:
+    today = now.date()
+    try:
+        return api_client.get(
+            "/matches",
+            params={
+                "status": "FINISHED",
+                "dateFrom": (today - dt.timedelta(days=1)).isoformat(),
+                "dateTo": (today + dt.timedelta(days=1)).isoformat(),
+            },
+            cache_ttl_seconds=FINISHED_CACHE_TTL_SECONDS,
         )
     except (api_client.MissingApiKey, requests.RequestException):
+        return None
+
+
+def fetch_live_matches_football_data_org(session: Session, payload=_UNFETCHED) -> list[LiveMatch]:
+    """One global call covers every football-data.org-backed league this
+    app tracks at once. Empty list on any failure or when nothing's live.
+    `payload` is the already-fetched response (see fetch_all_live_matches,
+    which fetches it on a worker thread -- a session can't be shared across
+    threads, so only the network call moves off the main one).
+    """
+    data = _football_data_live_payload() if payload is _UNFETCHED else payload
+    if data is None:
         return []
 
     competition_id_to_league = {
@@ -118,6 +160,7 @@ def fetch_live_matches_football_data_org(session: Session) -> list[LiveMatch]:
                     home_score=full_time.get("home") or 0,
                     away_score=full_time.get("away") or 0,
                     clock_label=_clock_label(match.get("status", ""), match.get("minute"), match.get("injuryTime")),
+                    match_date=_utc_date(match.get("utcDate")),
                 )
             )
         except (KeyError, TypeError):
@@ -132,7 +175,7 @@ def _recently_finished(kickoff_utc: dt.datetime, now: dt.datetime) -> bool:
 
 
 def fetch_recent_finished_football_data_org(
-    session: Session, now: dt.datetime | None = None
+    session: Session, now: dt.datetime | None = None, payload=_UNFETCHED
 ) -> list[LiveMatch]:
     """Matches from the football-data.org competitions this app tracks that
     finished within the last FINISHED_LINGER -- kept on the banner as final
@@ -141,18 +184,8 @@ def fetch_recent_finished_football_data_org(
     on any failure.
     """
     now = now if now is not None else dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    today = now.date()
-    try:
-        data = api_client.get(
-            "/matches",
-            params={
-                "status": "FINISHED",
-                "dateFrom": (today - dt.timedelta(days=1)).isoformat(),
-                "dateTo": (today + dt.timedelta(days=1)).isoformat(),
-            },
-            cache_ttl_seconds=FINISHED_CACHE_TTL_SECONDS,
-        )
-    except (api_client.MissingApiKey, requests.RequestException):
+    data = _football_data_finished_payload(now) if payload is _UNFETCHED else payload
+    if data is None:
         return []
 
     competition_id_to_league = {
@@ -185,6 +218,7 @@ def fetch_recent_finished_football_data_org(
                     clock_label="FT",
                     finished=True,
                     kickoff_utc=kickoff,
+                    match_date=kickoff.date(),
                 )
             )
         except (KeyError, TypeError, ValueError):
@@ -232,6 +266,8 @@ def fetch_live_matches_espn(league: League, now: dt.datetime | None = None) -> l
                 clock_label=(match.clock_label or "Live") if is_live else "FT",
                 finished=not is_live,
                 kickoff_utc=match.kickoff_utc,
+                event_id=match.event_id,
+                match_date=match.date,
             )
         )
     return results
@@ -243,11 +279,19 @@ def fetch_all_live_matches(session: Session, leagues: dict[str, League]) -> list
     both feeds briefly report (cached live and finished copies around the
     final whistle) appears once, as finished.
     """
-    results = fetch_live_matches_football_data_org(session)
-    results.extend(fetch_recent_finished_football_data_org(session))
-    for league in leagues.values():
-        if league.data_source == "espn":
-            results.extend(fetch_live_matches_espn(league))
+    # Every network call is independent and each takes ~0.5-2.5s, so they run
+    # side by side (the banner waits for the slowest one, not the sum). The
+    # database work -- resolving team names -- stays on this thread.
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    espn_leagues = [league for league in leagues.values() if league.data_source == "espn"]
+    with ThreadPoolExecutor(max_workers=2 + len(espn_leagues)) as pool:
+        live_payload = pool.submit(_football_data_live_payload)
+        finished_payload = pool.submit(_football_data_finished_payload, now)
+        espn_futures = [pool.submit(fetch_live_matches_espn, league) for league in espn_leagues]
+        results = fetch_live_matches_football_data_org(session, live_payload.result())
+        results.extend(fetch_recent_finished_football_data_org(session, now, finished_payload.result()))
+        for future in espn_futures:
+            results.extend(future.result())
 
     finished_keys = {(m.league_code, m.home_name, m.away_name) for m in results if m.finished}
     results = [m for m in results if m.finished or (m.league_code, m.home_name, m.away_name) not in finished_keys]

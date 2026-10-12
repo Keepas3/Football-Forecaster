@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from soccer_predictor.dashboard.views import admin, home, players, predictor, team_detail
+from soccer_predictor.dashboard.views import admin, home, match_detail, players, predictor, team_detail
 
 
 def home_page() -> st.Page:
@@ -34,6 +34,14 @@ def team_detail_page() -> st.Page:
     # hidden page; only its sidebar link disappears.
     return st.Page(
         team_detail.render, title="Team Detail", icon="👕", url_path="team_detail", visibility="hidden"
+    )
+
+
+def match_detail_page() -> st.Page:
+    # Hidden like team_detail_page: only ever opened from a match row's
+    # "Match details" button, which supplies the league/teams/date in the URL.
+    return st.Page(
+        match_detail.render, title="Match Detail", icon="📋", url_path="match_detail", visibility="hidden"
     )
 
 

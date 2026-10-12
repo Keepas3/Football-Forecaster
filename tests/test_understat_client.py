@@ -183,7 +183,7 @@ def test_fetch_league_players_serves_from_disk_cache(tmp_path, monkeypatch):
         calls.append(1)
         return FakeResponse()
 
-    monkeypatch.setattr(understat_client.requests, "post", fake_post)
+    monkeypatch.setattr(understat_client.http_session, "post", fake_post)
 
     first = understat_client._fetch_league_players("EPL", 2026)
     second = understat_client._fetch_league_players("EPL", 2026)
@@ -203,7 +203,7 @@ def test_fetch_league_players_returns_empty_when_success_false(tmp_path, monkeyp
         def json(self):
             return {"success": False}
 
-    monkeypatch.setattr(understat_client.requests, "post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(understat_client.http_session, "post", lambda *a, **k: FakeResponse())
 
     assert understat_client._fetch_league_players("EPL", 2026) == []
 
