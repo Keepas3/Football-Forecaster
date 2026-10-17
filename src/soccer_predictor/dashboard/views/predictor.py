@@ -270,8 +270,8 @@ def render() -> None:
         st.divider()
         st.header("Track Record")
         st.caption(
-            "Across every league - predictions locked in before kickoff, graded once the match is played. "
-            "\"Right outcome\" means the result the model rated most likely (win, draw or loss) happened."
+            "All leagues. Predictions are locked in before kickoff and graded after the match. "
+            "Right outcome = the model's most likely result (win, draw or loss) happened."
         )
         with session_scope() as session:
             accuracy = compute_prediction_accuracy(session)
@@ -283,15 +283,10 @@ def render() -> None:
         if accuracy.hit_rate is None:
             st.caption("No graded predictions yet.")
         else:
-            st.caption(
-                f"{accuracy.hit_rate:.0%} hit rate ({accuracy.graded_total} graded, "
-                f"{accuracy.pending} still pending)."
-            )
+            st.caption(f"{accuracy.hit_rate:.2%} success rate ({accuracy.graded_total} graded)")
         if accuracy.scored:
             st.caption(
-                f"Probability score (RPS, lower is better): {accuracy.mean_rps:.3f} vs "
-                f"{accuracy.baseline_rps:.3f} for just guessing the usual win/draw/loss rates, "
-                f"over {accuracy.scored} matches."
+                f""
             )
 
     league = leagues[league_code]
