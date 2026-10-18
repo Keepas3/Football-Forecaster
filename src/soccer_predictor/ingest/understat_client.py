@@ -149,6 +149,26 @@ def _parse_player(row: dict) -> UnderstatPlayerStats:
     )
 
 
+@ttl_memo(TOTALS_MEMO_SECONDS)
+def fetch_league_players(league_code: str, season: int) -> list[UnderstatPlayerStats]:
+    """Every player Understat tracks in `league_code`/`season`, from the same
+    single cached league-wide call as everything else here. A player who moved
+    mid-season has a combined "TeamA,TeamB" title; it is cut down to the club
+    he is at now (the last one). Empty list on any failure or unmapped league."""
+    league_slug = UNDERSTAT_LEAGUE_SLUG.get(league_code)
+    if league_slug is None:
+        return []
+    try:
+        players = []
+        for row in _fetch_league_players(league_slug, season):
+            player = _parse_player(row)
+            player.team_title = player.team_title.split(",")[-1]
+            players.append(player)
+        return players
+    except (requests.RequestException, ValueError, KeyError):
+        return []
+
+
 def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list[UnderstatPlayerStats]:
     """Every Understat-tracked player for `our_team_name` in `season` (a
     start-year int, e.g. 2026 for the 2026/27 season -- Understat's own

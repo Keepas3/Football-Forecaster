@@ -26,6 +26,20 @@ from soccer_predictor.ingest.player_importance import (
     resolve_team_historical_stats,
 )
 from soccer_predictor.ingest.squad import PlayerSearchResult, search_players_in_league
+from soccer_predictor.ingest.top_players import (
+    METRIC_LABELS,
+    MIN_MINUTES_PER_90,
+    SALARY,
+    XG_XA_PER_90,
+    available_metrics,
+    fetch_top_players,
+    find_top_player,
+    format_metric,
+    league_rankings,
+    normalize_name,
+    per_90,
+    table_rows,
+)
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import team_crests_for_league
 
@@ -51,6 +65,142 @@ def _age_from_date_of_birth(date_of_birth: str | None) -> int | None:
         return None
     today = dt.date.today()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+_normalized = normalize_name
+
+
+def find_squad_entry(session, league, name: str, team: str) -> PlayerSearchResult | None:
+    """The squad entry for a top-players row, so the usual player detail opens.
+    Tries the full name, then the surname alone (sources spell first names
+    differently); among several hits prefers the same-named player at the
+    same club."""
+    surname = name.split()[-1] if name.split() else name
+    for query in dict.fromkeys((name, surname)):
+        results = search_players_in_league(session, league, query)
+        exact = [r for r in results if _normalized(r.player.name) == _normalized(name)]
+        same_club = [r for r in (exact or results) if _normalized(r.team_name) == _normalized(team)]
+        for candidates in (same_club, exact, results if query == surname else []):
+            if candidates:
+                return candidates[0]
+    return None
+
+
+def _metric_rows(items: list[tuple[str, str | int]]) -> None:
+    """`items` as rows of up to four st.metric tiles."""
+    for start in range(0, len(items), 4):
+        chunk = items[start : start + 4]
+        for column, (label, value) in zip(st.columns(4), chunk):
+            column.metric(label, value)
+
+
+def _render_current_season(league, row, source: str, name: str, team_name: str) -> None:
+    """The player's numbers this season: the headline four, then the volume
+    stats, the per-90 rates, the source's extras and where he stands in the
+    league. Everything comes from rows already fetched (the team's stats from
+    Understat/ASA and the cached whole-league listing), so nothing extra is
+    requested."""
+    _metric_rows(
+        [
+            ("Goals", row.goals),
+            ("Assists", row.assists),
+            ("xG", f"{row.xg:.2f}"),
+            ("xA", f"{row.xa:.2f}"),
+        ]
+    )
+    volume = []
+    if getattr(row, "appearances", 0):
+        volume.append(("Appearances", row.appearances))
+    volume += [("Shots", row.shots), ("Key passes", row.key_passes)]
+    _metric_rows(volume)
+
+    rates = []
+    for label, value in (
+        ("Goals per 90", row.goals),
+        ("Assists per 90", row.assists),
+        ("xG + xA per 90", row.xg + row.xa),
+    ):
+        rate = per_90(value, row.minutes)
+        if rate is not None:
+            rates.append((label, f"{rate:.2f}"))
+    # Scoring more than the chances warranted (+) or fewer (-): a finishing
+    # read, and a hint of which way the goals tally may move.
+    rates.append(("Goals minus xG", f"{row.goals - row.xg:+.2f}"))
+    _metric_rows(rates)
+
+    extras = []
+    if source == "Understat":
+        extras += [
+            ("Non-penalty goals", row.non_penalty_goals),
+            ("npxG", f"{row.non_penalty_xg:.2f}"),
+            ("Yellow cards", row.yellow_cards),
+            ("Red cards", row.red_cards),
+        ]
+    else:
+        extras.append(("Points added", f"{row.points_added:.2f}"))
+    top = fetch_top_players(league)
+    entry = find_top_player(top.players, name, team_name)
+    if entry is not None and entry.salary is not None:
+        extras.append(("Guaranteed salary", format_metric(SALARY, entry.salary)))
+    _metric_rows(extras)
+
+    if entry is not None:
+        standing = " · ".join(
+            f"{label} #{rank} of {total}" for label, rank, total in league_rankings(top.players, entry)
+        )
+        st.caption(f"League standing: {standing}.")
+
+
+def _render_top_players(league, selected_key: str) -> None:
+    """The default view when nothing is searched: the league's top players.
+    See ingest/top_players.py for where each league's numbers come from."""
+    top = fetch_top_players(league)
+    if not top.players:
+        st.caption("Type a player name to search across every team in this league.")
+        return
+
+    metrics = available_metrics(top.players)
+    st.subheader("Top players")
+    metric = st.segmented_control(
+        "Rank by",
+        options=metrics,
+        format_func=METRIC_LABELS.get,
+        default=metrics[0],
+        key=f"players_metric_{league.code}",
+    )
+    if metric not in metrics:
+        metric = metrics[0]
+
+    rows = table_rows(top.players, metric)
+    if not rows:
+        st.info("No player has enough minutes yet for that ranking.")
+    else:
+        event = st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            height=35 * (len(rows) + 1) + 3,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"players_top_{league.code}_{metric}",
+        )
+        selected_rows = event.selection.rows if event and event.selection else []
+        if selected_rows:
+            row = rows[selected_rows[0]]
+            with session_scope() as session:
+                found = find_squad_entry(session, league, row["Player"], row["Club"])
+            if found is not None:
+                st.session_state[selected_key] = found
+            else:
+                st.caption(f"No squad entry found for {row['Player']}.")
+
+    season = f", {_season_label(top.season, league.season_display == "single_year")} season" if top.season else ""
+    notes = [f"Source: {top.source}{season}. Click a row for the player's page, or search by name above."]
+    if SALARY not in metrics:
+        notes.append("Ratings and contract values aren't available from any free source for this league.")
+    if metric == XG_XA_PER_90:
+        notes.append(f"Players with fewer than {MIN_MINUTES_PER_90} minutes are left out.")
+    st.caption(" ".join(notes))
 
 
 def render() -> None:
@@ -103,7 +253,7 @@ def render() -> None:
             if selected_rows:
                 st.session_state[selected_key] = results[selected_rows[0]]
     else:
-        st.caption("Type a player name to search across every team in this league.")
+        _render_top_players(league, selected_key)
 
     selection: PlayerSearchResult | None = st.session_state.get(selected_key)
     if selection is None:
@@ -165,11 +315,7 @@ def render() -> None:
                 "may not be matched in it."
             )
     else:
-        stat_cols = st.columns(4)
-        stat_cols[0].metric("Goals", current_season_row.goals)
-        stat_cols[1].metric("Assists", current_season_row.assists)
-        stat_cols[2].metric("xG", f"{current_season_row.xg:.2f}")
-        stat_cols[3].metric("xA", f"{current_season_row.xa:.2f}")
+        _render_current_season(league, current_season_row, current_season_source, player.name, selection.team_name)
         st.caption(f"{current_season_row.minutes} minutes played this season ({current_season_source}).")
 
     st.markdown("**Player Stats (Historical)**")

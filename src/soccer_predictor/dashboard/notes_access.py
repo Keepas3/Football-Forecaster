@@ -13,6 +13,8 @@ from __future__ import annotations
 import secrets
 from collections.abc import MutableMapping
 
+from soccer_predictor.limits import SlidingWindow
+
 UNLOCKED_KEY = "notes_unlocked"
 FAILED_ATTEMPTS_KEY = "notes_failed_attempts"
 PARSE_COUNT_KEY = "notes_parse_count"
@@ -26,6 +28,17 @@ MAX_NOTE_LENGTH = 1000
 # Parses (new notes + edits re-parsed) one unlocked session may run -- a
 # ceiling on spend if the password is shared or a session is left open.
 MAX_PARSES_PER_SESSION = 40
+
+# Server-wide: the per-session limit above does nothing against someone who
+# opens a fresh session for every few guesses, so failed attempts from every
+# visitor also count against one shared window per gate. When it is full the
+# gate refuses everyone, even the right password, until it clears -- the cost
+# is that an attacker can briefly lock the owner out, which beats leaving the
+# password open to guessing (and the notes gate spends the owner's AI credits).
+MAX_FAILED_ATTEMPTS_ALL_SESSIONS = 10
+LOCKOUT_WINDOW_SECONDS = 15 * 60
+NOTES_LIMITER = SlidingWindow(MAX_FAILED_ATTEMPTS_ALL_SESSIONS, LOCKOUT_WINDOW_SECONDS)
+ADMIN_LIMITER = SlidingWindow(MAX_FAILED_ATTEMPTS_ALL_SESSIONS, LOCKOUT_WINDOW_SECONDS)
 
 OK = "ok"
 WRONG = "wrong"
@@ -41,22 +54,34 @@ def is_unlocked(state: MutableMapping) -> bool:
     return bool(state.get(UNLOCKED_KEY))
 
 
-def attempts_left(state: MutableMapping) -> int:
-    return max(0, MAX_FAILED_ATTEMPTS - state.get(FAILED_ATTEMPTS_KEY, 0))
+def attempts_left(state: MutableMapping, failed_key: str = FAILED_ATTEMPTS_KEY) -> int:
+    return max(0, MAX_FAILED_ATTEMPTS - state.get(failed_key, 0))
 
 
-def try_unlock(state: MutableMapping, entered: str, expected: str) -> str:
+def try_unlock(
+    state: MutableMapping,
+    entered: str,
+    expected: str,
+    limiter: SlidingWindow | None = None,
+    unlocked_key: str = UNLOCKED_KEY,
+    failed_key: str = FAILED_ATTEMPTS_KEY,
+) -> str:
     """OK (and the session is unlocked), WRONG, or LOCKED_OUT once the
     session has used up its attempts -- after which even the right password
-    is refused."""
-    if attempts_left(state) == 0:
+    is refused -- or once `limiter` (the server-wide count of failures) is
+    full. The key arguments let a second gate (the admin page) keep its own
+    counters in the same session."""
+    if state.get(failed_key, 0) >= MAX_FAILED_ATTEMPTS or (limiter is not None and limiter.blocked()):
         return LOCKED_OUT
     if password_matches(entered, expected):
-        state[UNLOCKED_KEY] = True
-        state[FAILED_ATTEMPTS_KEY] = 0
+        state[unlocked_key] = True
+        state[failed_key] = 0
         return OK
-    state[FAILED_ATTEMPTS_KEY] = state.get(FAILED_ATTEMPTS_KEY, 0) + 1
-    return LOCKED_OUT if attempts_left(state) == 0 else WRONG
+    state[failed_key] = state.get(failed_key, 0) + 1
+    if limiter is not None:
+        limiter.record()
+    locked = state[failed_key] >= MAX_FAILED_ATTEMPTS or (limiter is not None and limiter.blocked())
+    return LOCKED_OUT if locked else WRONG
 
 
 def lock(state: MutableMapping) -> None:

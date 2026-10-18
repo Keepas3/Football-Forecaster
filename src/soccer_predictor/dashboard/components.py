@@ -456,6 +456,9 @@ def news_results_html(
     return "<div>" + "".join(rows) + "</div>"
 
 
+MAX_NEWS_SEARCHES_PER_SESSION = 30
+
+
 def render_news_section(
     base_query: str,
     scope_key: str,
@@ -479,6 +482,12 @@ def render_news_section(
     )
     if not search_text.strip():
         return
+    # Per-session cap on different searches (repeats are free: they are cached).
+    searched = st.session_state.setdefault("news_searches", set())
+    if search_text not in searched and len(searched) >= MAX_NEWS_SEARCHES_PER_SESSION:
+        st.caption("Search limit reached for this session - reload the page to search again.")
+        return
+    searched.add(search_text)
     results = search_news(base_query, search_text)
     markup = news_results_html(results, crest_by_team_name, default_icon)
     if markup:

@@ -159,6 +159,85 @@ def fetch_team_season(our_team_name: str, season: int) -> list[AsaPlayerStats]:
         return []
 
 
+def _last_team_id(team_id):
+    """ASA's whole-league rows give `team_id` as a list for a player with
+    several clubs in the season (oldest first); everywhere else it is a string."""
+    if isinstance(team_id, list):
+        return team_id[-1] if team_id else None
+    return team_id
+
+
+@dataclass
+class AsaLeaguePlayer:
+    """One player of the whole-league listing (see fetch_league_players)."""
+
+    name: str
+    team: str
+    position: str | None
+    minutes: int
+    goals: int
+    assists: int
+    xg: float
+    xa: float
+    points_added: float
+    # Guaranteed compensation in USD, from the MLS Players Association's public
+    # salary release; None when the player isn't in it.
+    salary: float | None = None
+
+
+@ttl_memo(TOTALS_MEMO_SECONDS)
+def fetch_league_players(season: int) -> list[AsaLeaguePlayer]:
+    """Every MLS player with minutes in `season`, with team name and salary --
+    THREE requests in all, however many players: ASA's `/players/xgoals`
+    answers for the whole league when no team id is given (587 rows for 2026),
+    plus the cached player and team lists for names, plus `/players/salaries`
+    (base salary and guaranteed compensation, MLSPA release). Empty list on any
+    failure."""
+    try:
+        stat_rows = _get_cached_json(
+            f"league-xgoals:{season}",
+            f"{BASE_URL}/mls/players/xgoals",
+            {"season_name": season, "minimum_minutes": 1},
+        )
+        if not stat_rows:
+            return []
+        players_by_id = {p["player_id"]: p for p in _fetch_all_players()}
+        team_names = {t["team_id"]: t["team_name"] for t in _fetch_all_teams()}
+        salary_rows = _get_cached_json(
+            f"league-salaries:{season}", f"{BASE_URL}/mls/players/salaries", {"season_name": season}
+        )
+        salaries = {
+            row["player_id"]: float(row["guaranteed_compensation"])
+            for row in salary_rows
+            if row.get("player_id") and row.get("guaranteed_compensation") is not None
+        }
+
+        results = []
+        for row in stat_rows:
+            bio = players_by_id.get(row.get("player_id"))
+            if bio is None:
+                continue
+            stats = _parse_stat_row(row, bio)
+            results.append(
+                AsaLeaguePlayer(
+                    name=stats.name,
+                    # A player traded mid-season lists every club he played for.
+                    team=team_names.get(_last_team_id(row.get("team_id")), ""),
+                    position=stats.position,
+                    minutes=stats.minutes,
+                    goals=stats.goals,
+                    assists=stats.assists,
+                    xg=stats.xg,
+                    xa=stats.xa,
+                    points_added=stats.points_added,
+                    salary=salaries.get(row["player_id"]),
+                )
+            )
+        return results
+    except (requests.RequestException, ValueError, KeyError):
+        return []
+
+
 def _parse_stat_row(row: dict, bio: dict) -> AsaPlayerStats:
     return AsaPlayerStats(
         name=bio["player_name"],

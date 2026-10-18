@@ -1,0 +1,10 @@
+# Streamlit settings (read from the project folder, so they apply locally and on
+# Streamlit Community Cloud alike).
+
+[client]
+# What a visitor sees when the app crashes. "full" shows the whole traceback --
+# file paths, code lines and whatever the exception message holds (a failed
+# request's URL, an API error body). "none" shows only a generic notice; the
+# details still go to the server log. To see tracebacks while developing, run
+# with the environment variable STREAMLIT_CLIENT_SHOWERRORDETAILS=full.
+showErrorDetails = "none"

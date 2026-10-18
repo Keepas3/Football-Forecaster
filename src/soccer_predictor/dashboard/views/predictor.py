@@ -135,19 +135,19 @@ def _render_notes_gate() -> bool:
         "🔒 Adding notes uses the site owner's AI credits, so it needs a password. "
         "Anyone can read the saved notes below."
     )
-    if na.attempts_left(state) == 0:
-        st.error("Too many wrong passwords in this session.")
+    if na.attempts_left(state) == 0 or na.NOTES_LIMITER.blocked():
+        st.error("Too many wrong passwords. Try again later.")
         return False
     with st.form("notes_unlock_form"):
         entered = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Unlock")
     if submitted:
-        result = na.try_unlock(state, entered, password)
+        result = na.try_unlock(state, entered, password, limiter=na.NOTES_LIMITER)
         if result == na.OK:
             st.rerun()
         time.sleep(1)  # slows down guessing
         if result == na.LOCKED_OUT:
-            st.error("Too many wrong passwords in this session.")
+            st.error("Too many wrong passwords. Try again later.")
         else:
             st.error(f"Incorrect password ({na.attempts_left(state)} attempt(s) left).")
     return False

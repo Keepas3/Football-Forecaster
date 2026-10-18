@@ -9,17 +9,19 @@ automatically; every action here is an explicit button click.
 
 from __future__ import annotations
 
-import secrets
+import time
 
 import streamlit as st
 
 from soccer_predictor.config import admin_password, load_leagues
+from soccer_predictor.dashboard import notes_access as na
 from soccer_predictor.dashboard.components import league_option_label
 from soccer_predictor.ingest.refresh import refresh_league
 from soccer_predictor.prediction.training import train_league
 from soccer_predictor.storage.db import session_scope
 
 AUTH_SESSION_KEY = "admin_authenticated"
+ADMIN_FAILED_KEY = "admin_failed_attempts"
 
 
 def _render_refresh_result(result) -> None:
@@ -50,13 +52,23 @@ def render() -> None:
         return
 
     if not st.session_state.get(AUTH_SESSION_KEY):
+        if na.attempts_left(st.session_state, ADMIN_FAILED_KEY) == 0 or na.ADMIN_LIMITER.blocked():
+            st.error("Too many wrong passwords. Try again later.")
+            return
         entered = st.text_input("Password", type="password")
         if st.button("Unlock"):
-            if secrets.compare_digest(entered, password):
-                st.session_state[AUTH_SESSION_KEY] = True
+            result = na.try_unlock(
+                st.session_state,
+                entered,
+                password,
+                limiter=na.ADMIN_LIMITER,
+                unlocked_key=AUTH_SESSION_KEY,
+                failed_key=ADMIN_FAILED_KEY,
+            )
+            if result == na.OK:
                 st.rerun()
-            else:
-                st.error("Incorrect password.")
+            time.sleep(1)  # slows down guessing
+            st.error("Too many wrong passwords. Try again later." if result == na.LOCKED_OUT else "Incorrect password.")
         return
 
     leagues = load_leagues()

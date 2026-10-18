@@ -132,6 +132,22 @@ class ParsedNotes:
     form_notes: list[ParsedFormNote]
 
 
+MAX_NAME_LENGTH = 100
+MAX_TEXT_LENGTH = 300
+# No injury or form note is worth predicting two years out.
+MAX_WEEKS = 104.0
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    if value != value:  # NaN
+        raise ValueError("not a number")
+    return max(low, min(high, value))
+
+
+def _text(value, max_length: int) -> str:
+    return str(value or "").strip()[:max_length]
+
+
 def _resolve_team_name(raw_name: str, team_names: dict[int, str]) -> int | None:
     """Fuzzy-matches `raw_name` against known team names for this league.
 
@@ -191,39 +207,48 @@ def parse_note(
 
     data = tool_use_blocks[0].input
 
+    # The model's output is only as trustworthy as the note it was given (a note
+    # can try to instruct it), so nothing from it is taken as-is: numbers are
+    # clamped to the ranges the schema promises, choices to their allowed
+    # values, text to a sane length, and an entry that can't be read is dropped.
     injuries = []
-    for entry in data.get("injury_entries", []):
-        team_id = _resolve_team_name(entry["team_name"], team_names)
-        weeks = entry.get("estimated_weeks_until_return")
-        expected_return_date = (
-            reference_date + dt.timedelta(weeks=weeks) if weeks is not None else None
-        )
-        injuries.append(
-            ParsedInjuryNote(
-                player_name=entry["player_name"],
-                team_name_raw=entry["team_name"],
-                team_id=team_id,
-                position=entry["position"],
-                importance_weight=float(entry["importance_weight"]),
-                expected_return_date=expected_return_date,
-                rationale=entry.get("rationale", ""),
+    for entry in data.get("injury_entries") or []:
+        try:
+            weeks = entry.get("estimated_weeks_until_return")
+            injuries.append(
+                ParsedInjuryNote(
+                    player_name=_text(entry["player_name"], MAX_NAME_LENGTH),
+                    team_name_raw=_text(entry["team_name"], MAX_NAME_LENGTH),
+                    team_id=_resolve_team_name(_text(entry["team_name"], MAX_NAME_LENGTH), team_names),
+                    position=entry["position"] if entry.get("position") in ("attack", "defense") else "attack",
+                    importance_weight=_clamp(float(entry["importance_weight"]), 0.0, 1.0),
+                    expected_return_date=(
+                        reference_date + dt.timedelta(weeks=_clamp(float(weeks), 0.0, MAX_WEEKS))
+                        if weeks is not None
+                        else None
+                    ),
+                    rationale=_text(entry.get("rationale"), MAX_TEXT_LENGTH),
+                )
             )
-        )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
 
     form_notes = []
-    for entry in data.get("form_entries", []):
-        team_id = _resolve_team_name(entry["team_name"], team_names)
-        expires_on = reference_date + dt.timedelta(weeks=float(entry["fade_out_weeks"]))
-        form_notes.append(
-            ParsedFormNote(
-                team_name_raw=entry["team_name"],
-                team_id=team_id,
-                magnitude=float(entry["magnitude"]),
-                affects=entry["affects"],
-                expires_on=expires_on,
-                summary=entry.get("summary", ""),
-                rationale=entry.get("rationale", ""),
+    for entry in data.get("form_entries") or []:
+        try:
+            form_notes.append(
+                ParsedFormNote(
+                    team_name_raw=_text(entry["team_name"], MAX_NAME_LENGTH),
+                    team_id=_resolve_team_name(_text(entry["team_name"], MAX_NAME_LENGTH), team_names),
+                    magnitude=_clamp(float(entry["magnitude"]), -1.0, 1.0),
+                    affects=entry["affects"] if entry.get("affects") in ("attack", "defense", "both") else "both",
+                    expires_on=reference_date
+                    + dt.timedelta(weeks=_clamp(float(entry["fade_out_weeks"]), 0.0, MAX_WEEKS)),
+                    summary=_text(entry.get("summary"), MAX_TEXT_LENGTH),
+                    rationale=_text(entry.get("rationale"), MAX_TEXT_LENGTH),
+                )
             )
-        )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
 
     return ParsedNotes(injuries=injuries, form_notes=form_notes)

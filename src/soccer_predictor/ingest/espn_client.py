@@ -48,6 +48,7 @@ from rapidfuzz import fuzz
 
 from soccer_predictor.config import DATA_DIR
 from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest.memo import ttl_memo
 
 BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 # The standings endpoint lives under a different path (/apis/v2, not
@@ -82,6 +83,7 @@ ROSTER_CACHE_TTL_SECONDS = 24 * 3600
 # A finished match's lineups/stats never change; a live one's change every
 # minute; a not-yet-started one only gains lineups about an hour before kickoff.
 MATCH_DETAIL_CACHE_TTL_SECONDS = {"post": 24 * 3600, "in": 30, "pre": 300}
+STAT_LEADERS_CACHE_TTL_SECONDS = 6 * 3600
 
 # ESPN's position.abbreviation -> this app's attack/defense bucket, same
 # "midfielders count as attack" rationale already documented in
@@ -741,3 +743,45 @@ def find_event_by_names(
         if best is not None:
             break
     return (best[1], best[2]) if best else None
+
+
+@dataclass
+class StatLeader:
+    name: str
+    team: str
+    goals: int
+    assists: int
+
+
+@ttl_memo(300)
+def fetch_stat_leaders(league_slug: str, season: int | None = None) -> list[StatLeader]:
+    """The league's top scorers and assist makers (50 of each) in ONE request to
+    ESPN's statistics endpoint, merged by player. ESPN gives no minutes or xG
+    here. `season` is the edition's start year; without it ESPN serves the
+    current edition, which is empty for a tournament that has not started
+    (the Asian Cup between editions). Empty list on any failure."""
+    try:
+        data = get(
+            f"/{league_slug}/statistics",
+            params={"season": season} if season else None,
+            cache_ttl_seconds=STAT_LEADERS_CACHE_TTL_SECONDS,
+        )
+    except (requests.RequestException, ValueError):
+        return []
+
+    players: dict[str, StatLeader] = {}
+    for category in data.get("stats") or []:
+        field_name = {"goalsLeaders": "goals", "assistsLeaders": "assists"}.get(category.get("name"))
+        if field_name is None:
+            continue
+        for leader in category.get("leaders") or []:
+            athlete = leader.get("athlete") or {}
+            name = athlete.get("displayName")
+            if not name or athlete.get("id") is None:
+                continue
+            entry = players.setdefault(
+                str(athlete["id"]),
+                StatLeader(name=name, team=(athlete.get("team") or {}).get("displayName") or "", goals=0, assists=0),
+            )
+            setattr(entry, field_name, _to_int(leader.get("value")) or 0)
+    return list(players.values())

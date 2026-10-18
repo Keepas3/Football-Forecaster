@@ -30,6 +30,7 @@ import requests
 
 from soccer_predictor.config import DATA_DIR, League
 from soccer_predictor.ingest import http_session
+from soccer_predictor.limits import SlidingWindow
 
 FEED_URL = "https://news.google.com/rss/search"
 CACHE_DIR = DATA_DIR / "cache" / "news"
@@ -44,6 +45,18 @@ DEFAULT_LIMIT = 8
 SEARCH_RECENCY_WINDOW = "365d"
 SEARCH_LIMIT = 25
 MAX_SEARCH_TEXT_LENGTH = 100
+# The search box is open to every visitor and every different search is a fresh
+# trip to Google plus a file on disk. Cap the server-wide rate of those trips
+# (cached searches are free) and the number of cached files, so it can't be
+# used to get this server's IP blocked or to fill its disk.
+UNCACHED_SEARCHES_PER_MINUTE = 20
+_search_budget = SlidingWindow(UNCACHED_SEARCHES_PER_MINUTE, 60)
+MAX_CACHE_FILES = 400
+
+
+class SearchBusy(OSError):
+    """Too many uncached searches just now (an OSError so fetch_news's existing
+    failure handling turns it into "no results")."""
 
 
 @dataclass
@@ -76,13 +89,22 @@ def _cache_path(full_query: str) -> Path:
     return CACHE_DIR / f"{hashlib.sha256(full_query.encode()).hexdigest()}.xml"
 
 
-def _fetch_feed_text(query: str, window: str) -> str:
+def _prune_cache() -> None:
+    """Deletes the oldest cached feeds once there are more than MAX_CACHE_FILES."""
+    files = sorted(CACHE_DIR.glob("*.xml"), key=lambda f: f.stat().st_mtime)
+    for stale in files[: max(0, len(files) - MAX_CACHE_FILES)]:
+        stale.unlink(missing_ok=True)
+
+
+def _fetch_feed_text(query: str, window: str, budgeted: bool = False) -> str:
     # Keyed on the full query including the window, so the same words with a
     # different time window never share a cache entry.
     full_query = f"{query} when:{window}"
     cache_file = _cache_path(full_query)
     if cache_file.exists() and time.time() - cache_file.stat().st_mtime < CACHE_TTL_SECONDS:
         return cache_file.read_text(encoding="utf-8")
+    if budgeted and not _search_budget.allow():
+        raise SearchBusy("too many uncached news searches")
 
     response = http_session.get(
         FEED_URL,
@@ -97,6 +119,7 @@ def _fetch_feed_text(query: str, window: str) -> str:
     ET.fromstring(text)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(text, encoding="utf-8")
+    _prune_cache()
     return text
 
 
@@ -120,13 +143,15 @@ def _parse_item(item: ET.Element) -> NewsArticle | None:
     return NewsArticle(title=title, url=url, source=source or "Unknown", published_at=published_at)
 
 
-def fetch_news(query: str, limit: int = DEFAULT_LIMIT, window: str = RECENCY_WINDOW) -> list[NewsArticle]:
+def fetch_news(
+    query: str, limit: int = DEFAULT_LIMIT, window: str = RECENCY_WINDOW, budgeted: bool = False
+) -> list[NewsArticle]:
     """The `limit` most recent articles matching `query` within `window`
     (Google's "when:" syntax, e.g. "14d"), newest first, de-duplicated by
     headline. Empty list on any failure.
     """
     try:
-        root = ET.fromstring(_fetch_feed_text(query, window))
+        root = ET.fromstring(_fetch_feed_text(query, window, budgeted))
     except (requests.RequestException, ET.ParseError, OSError):
         return []
 
@@ -157,4 +182,4 @@ def search_news(base_query: str, text: str, limit: int = SEARCH_LIMIT) -> list[N
     text = " ".join(text.split())[:MAX_SEARCH_TEXT_LENGTH]
     if not text:
         return []
-    return fetch_news(f"{base_query} {text}", limit=limit, window=SEARCH_RECENCY_WINDOW)
+    return fetch_news(f"{base_query} {text}", limit=limit, window=SEARCH_RECENCY_WINDOW, budgeted=True)
