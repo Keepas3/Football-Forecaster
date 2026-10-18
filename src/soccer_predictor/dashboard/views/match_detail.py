@@ -23,8 +23,18 @@ from soccer_predictor.config import League, load_leagues
 from soccer_predictor.ingest import espn_client
 from soccer_predictor.ingest.espn_client import PLAYER_STAT_CHIPS, LineupPlayer, MatchDetail, TeamMatchInfo
 from soccer_predictor.ingest.news import match_search_url
+from soccer_predictor.ingest.top_players import normalize_name
 from soccer_predictor.storage.db import session_scope
-from soccer_predictor.storage.repository import espn_event_id_for_match, match_exists, team_by_id
+from soccer_predictor.prediction.service import load_latest_params, predict_fixture
+from soccer_predictor.storage.repository import (
+    espn_event_id_for_match,
+    find_team_by_alias,
+    match_exists,
+    prediction_record_scoreline,
+    team_by_espn_id,
+    team_by_id,
+    teams_for_league,
+)
 
 # Team stats worth showing, in order (ESPN's own stat names; the label shown
 # is ESPN's, so a new wording from ESPN carries through).
@@ -176,6 +186,60 @@ def team_stats_frame(detail: MatchDetail) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=[detail.home.name, "Stat", detail.away.name])
 
 
+# Stats where the lower number is the better one.
+LOWER_IS_BETTER = {"foulsCommitted", "yellowCards", "redCards", "offsides"}
+# Stats that say as much about being under pressure as about quality, so
+# neither side is marked better.
+NOT_COMPARED = {"saves", "totalClearance"}
+BETTER_STYLE = "color: #2ea043; font-weight: 600"
+WORSE_STYLE = "color: #f85149; font-weight: 600"
+EQUAL_STYLE = "color: #8b949e"
+
+
+def _number(text: str) -> float | None:
+    try:
+        return float(text.replace("%", "").strip())
+    except (AttributeError, ValueError):
+        return None
+
+
+def compare_stat(stat_name: str, home_text: str, away_text: str) -> tuple[str | None, str | None]:
+    """("better"|"worse"|"equal"|None, ...) for the home and away value of one
+    stat: the stronger side is "better", the other "worse", a tie "equal". None
+    for both when the stat isn't compared or a value isn't a number."""
+    home, away = _number(home_text), _number(away_text)
+    if stat_name in NOT_COMPARED or home is None or away is None:
+        return None, None
+    if home == away:
+        return "equal", "equal"
+    home_wins = home < away if stat_name in LOWER_IS_BETTER else home > away
+    return ("better", "worse") if home_wins else ("worse", "better")
+
+
+def team_stats_styled(detail: MatchDetail):
+    """The team stats table with each team's number coloured green (the stronger
+    side of that stat), red (the weaker) or grey (level)."""
+    names, rows = [], []
+    for name in TEAM_STAT_ORDER:
+        home_stat, away_stat = detail.home.stats.get(name), detail.away.stats.get(name)
+        if home_stat is None or away_stat is None:
+            continue
+        names.append(name)
+        rows.append({detail.home.name: home_stat[1], "Stat": home_stat[0], detail.away.name: away_stat[1]})
+    frame = pd.DataFrame(rows, columns=[detail.home.name, "Stat", detail.away.name])
+    shade = {"better": BETTER_STYLE, "worse": WORSE_STYLE, "equal": EQUAL_STYLE, None: ""}
+
+    def style(_: pd.DataFrame) -> pd.DataFrame:
+        styles = pd.DataFrame("", index=frame.index, columns=frame.columns)
+        for i, name in enumerate(names):
+            home_result, away_result = compare_stat(name, rows[i][detail.home.name], rows[i][detail.away.name])
+            styles.iloc[i, 0] = shade[home_result]
+            styles.iloc[i, 2] = shade[away_result]
+        return styles
+
+    return frame.style.apply(style, axis=None)
+
+
 def timeline_frame(detail: MatchDetail) -> pd.DataFrame:
     team_name = {detail.home.espn_id: detail.home.name, detail.away.espn_id: detail.away.name}
     return pd.DataFrame(
@@ -191,15 +255,26 @@ def timeline_frame(detail: MatchDetail) -> pd.DataFrame:
     )
 
 
+ROW_HEIGHT_PX = 35
+MAX_TABLE_HEIGHT_PX = 1000
+
+
+def full_height(rows: int) -> int:
+    """Pixel height that shows every row (header included) without the table's
+    own scroll bar -- a table left at Streamlit's default stops at ~400px and
+    then scrolls inside the page, which on a phone is a second thing to scroll."""
+    return min(ROW_HEIGHT_PX * (rows + 1) + 3, MAX_TABLE_HEIGHT_PX)
+
+
 def _render_lineup(team: TeamMatchInfo) -> None:
     st.markdown(f"**{plain(team.name)}**" + (f" · {plain(team.formation)}" if team.formation else ""))
     starters = [p for p in team.players if p.starter]
     bench = [p for p in team.players if not p.starter]
     if starters:
-        st.dataframe(lineup_frame(starters), hide_index=True, use_container_width=True)
+        st.dataframe(lineup_frame(starters), hide_index=True, use_container_width=True, height=full_height(len(starters)))
     if bench:
         st.caption("Substitutes")
-        st.dataframe(lineup_frame(bench), hide_index=True, use_container_width=True)
+        st.dataframe(lineup_frame(bench), hide_index=True, use_container_width=True, height=full_height(len(bench)))
 
 
 @dataclass
@@ -213,6 +288,8 @@ class ResolvedMatch:
     match_date: dt.date | None = None
     event_id: str | None = None
     state: str = "in"  # cache lifetime hint only, see _state_hint
+    home_team_id: int | None = None  # set when the link named our own teams
+    away_team_id: int | None = None
 
 
 def resolve_match(session, league: League) -> ResolvedMatch | None:
@@ -243,6 +320,8 @@ def resolve_match(session, league: League) -> ResolvedMatch | None:
             away_crest=away.crest_url,
             match_date=match_date,
             state=_state_hint(match_date),
+            home_team_id=home_id,
+            away_team_id=away_id,
         )
         resolved.event_id = espn_event_id_for_match(session, league.code, match_date, home_id, away_id)
         if resolved.event_id is None and home.espn_team_id is not None and away.espn_team_id is not None:
@@ -275,7 +354,51 @@ def resolve_match(session, league: League) -> ResolvedMatch | None:
     return None
 
 
-def _render_header(detail: MatchDetail | None, resolved: ResolvedMatch) -> None:
+def _find_team(session, league: League, name: str | None, espn_id: str | None):
+    """Our Team row for a side of the match: by ESPN's team id where we have
+    one, else by name (exact, ignoring accents and case), else by a known alias."""
+    if espn_id and espn_id.isdigit():
+        team = team_by_espn_id(session, league.code, int(espn_id))
+        if team is not None:
+            return team
+    if not name:
+        return None
+    wanted = normalize_name(name)
+    for team_id, team_name in teams_for_league(session, league.code).items():
+        if normalize_name(team_name) == wanted:
+            return team_by_id(session, team_id)
+    return find_team_by_alias(session, name, "api", league.code)
+
+
+def predicted_scoreline(session, league: League, resolved: ResolvedMatch, detail: MatchDetail | None):
+    """(home goals, away goals) our model predicted for this match, or None.
+    The prediction locked in before kickoff when there is one (so a live or
+    finished match shows what was forecast, not a figure that has since moved);
+    otherwise the model's current top scoreline."""
+    home = team_by_id(session, resolved.home_team_id) if resolved.home_team_id else _find_team(
+        session, league, resolved.home_name or (detail.home.name if detail else None), detail.home.espn_id if detail else None
+    )
+    away = team_by_id(session, resolved.away_team_id) if resolved.away_team_id else _find_team(
+        session, league, resolved.away_name or (detail.away.name if detail else None), detail.away.espn_id if detail else None
+    )
+    if home is None or away is None:
+        return None
+    date = resolved.match_date or (detail.match_date if detail else None) or dt.datetime.now(dt.UTC).date()
+    locked_in = prediction_record_scoreline(session, league.code, date, home.id, away.id)
+    if locked_in is not None:
+        return locked_in
+    params = load_latest_params(session, league.code)
+    if params is None or home.id not in params.attack or away.id not in params.attack:
+        return None
+    prediction = predict_fixture(
+        session, params, home.id, away.id, home.canonical_name, away.canonical_name, fixture_date=date
+    )
+    return prediction.top_scorelines[0][:2] if prediction.top_scorelines else None
+
+
+def _render_header(
+    detail: MatchDetail | None, resolved: ResolvedMatch, predicted: tuple[int, int] | None = None
+) -> None:
     home_name = resolved.home_name or (detail.home.name if detail else "Home")
     away_name = resolved.away_name or (detail.away.name if detail else "Away")
     home_crest = resolved.home_crest or (detail.home.logo if detail else None)
@@ -289,6 +412,8 @@ def _render_header(detail: MatchDetail | None, resolved: ResolvedMatch) -> None:
         cols[1].markdown(f"## {detail.home_score} - {detail.away_score}")
     else:
         cols[1].markdown("## vs")
+    if predicted is not None:
+        cols[1].caption(f"Predicted score: {predicted[0]} - {predicted[1]}")
     if detail is not None:
         cols[1].caption(plain(detail.status_label))
     elif resolved.match_date is not None:
@@ -325,7 +450,9 @@ def render() -> None:
         if resolved.event_id
         else None
     )
-    _render_header(detail, resolved)
+    with session_scope() as session:
+        predicted = predicted_scoreline(session, league, resolved, detail)
+    _render_header(detail, resolved, predicted)
 
     home_name = resolved.home_name or (detail.home.name if detail else None)
     away_name = resolved.away_name or (detail.away.name if detail else None)
@@ -351,11 +478,14 @@ def render() -> None:
         if stats.empty:
             st.caption("Team stats appear once the match is under way.")
         else:
-            st.dataframe(stats, hide_index=True, use_container_width=True)
+            st.dataframe(
+                team_stats_styled(detail), hide_index=True, use_container_width=True, height=full_height(len(stats))
+            )
+            st.caption("Green: stronger on that stat, red: weaker, grey: level. Fewer fouls, cards and offsides count as stronger.")
     with timeline_tab:
         timeline = timeline_frame(detail)
         if timeline.empty:
             st.caption("No goals, cards or substitutions yet.")
         else:
-            st.dataframe(timeline, hide_index=True, use_container_width=True)
+            st.dataframe(timeline, hide_index=True, use_container_width=True, height=full_height(len(timeline)))
     st.caption("Match data via ESPN.")

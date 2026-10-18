@@ -269,6 +269,22 @@ def goals_for_team_season(
     )
 
 
+def prediction_record_scoreline(
+    session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
+) -> tuple[int, int] | None:
+    """The predicted (home, away) score locked in for this match before it was
+    played, if one was recorded."""
+    record = session.scalar(
+        select(PredictionRecord).where(
+            PredictionRecord.league_code == league_code,
+            PredictionRecord.date == date,
+            PredictionRecord.home_team_id == home_team_id,
+            PredictionRecord.away_team_id == away_team_id,
+        )
+    )
+    return (record.predicted_home_goals, record.predicted_away_goals) if record else None
+
+
 def has_prediction_record(
     session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
 ) -> bool:

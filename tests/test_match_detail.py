@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 import requests
@@ -293,3 +294,33 @@ def test_match_detail_query_params_round_trip():
         "away": "9",
         "date": "2026-10-04",
     }
+
+
+def test_tables_are_tall_enough_to_show_every_row_up_to_a_cap():
+    assert view.full_height(0) == 38
+    assert view.full_height(17) == 35 * 18 + 3  # the whole team-stats table, no inner scrolling
+    assert view.full_height(500) == view.MAX_TABLE_HEIGHT_PX
+
+
+def test_compare_stat_marks_the_stronger_side_and_flips_for_fouls_and_cards():
+    assert view.compare_stat("possessionPct", "58.1", "41.9") == ("better", "worse")
+    assert view.compare_stat("totalShots", "5", "9") == ("worse", "better")
+    assert view.compare_stat("wonCorners", "4", "4") == ("equal", "equal")
+    assert view.compare_stat("foulsCommitted", "14", "9") == ("worse", "better")  # fewer fouls is better
+    assert view.compare_stat("yellowCards", "0", "2") == ("better", "worse")
+    assert view.compare_stat("saves", "5", "1") == (None, None)  # says nothing about who is stronger
+    assert view.compare_stat("totalShots", "", "9") == (None, None)
+
+
+def test_team_stats_table_colours_each_teams_number():
+    detail = espn_client.parse_match_detail("1", _summary())
+    html = view.team_stats_styled(detail).to_html()
+
+    def cells_shaded(colour: str) -> set[str]:
+        # Pandas writes one CSS rule per distinct style listing every cell that has it.
+        rule = next(r for r in html.split("}") if colour in r)
+        return set(re.findall(r"row\d+_col\d+", rule))
+
+    # Rows: possession (Azerbaijan 41.9 v Lithuania 58.1), shots (9 v 5); columns 0 = home, 2 = away.
+    assert cells_shaded("color: #2ea043") == {"row0_col2", "row1_col0"}  # the stronger side of each
+    assert cells_shaded("color: #f85149") == {"row0_col0", "row1_col2"}

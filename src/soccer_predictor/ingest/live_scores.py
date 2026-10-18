@@ -84,14 +84,48 @@ def _utc_date(utc_date: str | None) -> dt.date | None:
         return None
 
 
-def _clock_label(status: str, minute, injury_time) -> str:
+HALF_TIME_BREAK_MINUTES = 15
+
+
+def estimated_minute_label(kickoff_utc: dt.datetime, now: dt.datetime) -> str | None:
+    """The match minute worked out from the clock, for feeds that give none
+    (football-data.org's free tier sends `minute: null` for matches in play):
+    45 minutes, a ~15 minute interval, then the second half. Stoppage time
+    isn't known, so it can be a few minutes out, and anything past 90 reads
+    "90+'". None before kickoff."""
+    elapsed = (now - kickoff_utc).total_seconds() / 60
+    if elapsed < 0:
+        return None
+    if elapsed < 45:
+        return f"{int(elapsed) + 1}'"
+    if elapsed < 45 + HALF_TIME_BREAK_MINUTES:
+        return "45+'"
+    minute = 45 + int(elapsed - 45 - HALF_TIME_BREAK_MINUTES) + 1
+    return f"{minute}'" if minute <= 90 else "90+'"
+
+
+def _clock_label(
+    status: str, minute, injury_time, kickoff_utc: dt.datetime | None = None, now: dt.datetime | None = None
+) -> str:
     if status == "PAUSED":
         return "HT"
     if not isinstance(minute, int):
+        if kickoff_utc is not None:
+            now = now if now is not None else dt.datetime.now(dt.UTC).replace(tzinfo=None)
+            estimate = estimated_minute_label(kickoff_utc, now)
+            if estimate is not None:
+                return estimate
         return "Live"
     if injury_time:
         return f"{minute}+{injury_time}'"
     return f"{minute}'"
+
+
+def _utc_datetime(utc_date: str | None) -> dt.datetime | None:
+    try:
+        return dt.datetime.fromisoformat(utc_date.replace("Z", "+00:00")).replace(tzinfo=None)
+    except (AttributeError, ValueError):
+        return None
 
 
 # "Not fetched yet" marker for the football-data.org parsers' `payload`
@@ -159,7 +193,12 @@ def fetch_live_matches_football_data_org(session: Session, payload=_UNFETCHED) -
                     away_crest=away_crest,
                     home_score=full_time.get("home") or 0,
                     away_score=full_time.get("away") or 0,
-                    clock_label=_clock_label(match.get("status", ""), match.get("minute"), match.get("injuryTime")),
+                    clock_label=_clock_label(
+                        match.get("status", ""),
+                        match.get("minute"),
+                        match.get("injuryTime"),
+                        kickoff_utc=_utc_datetime(match.get("utcDate")),
+                    ),
                     match_date=_utc_date(match.get("utcDate")),
                 )
             )
@@ -263,7 +302,7 @@ def fetch_live_matches_espn(league: League, now: dt.datetime | None = None) -> l
                 away_crest=None,
                 home_score=match.home_score,
                 away_score=match.away_score,
-                clock_label=(match.clock_label or "Live") if is_live else "FT",
+                clock_label=(match.clock_label or _clock_label("", None, None, match.kickoff_utc, now)) if is_live else "FT",
                 finished=not is_live,
                 kickoff_utc=match.kickoff_utc,
                 event_id=match.event_id,

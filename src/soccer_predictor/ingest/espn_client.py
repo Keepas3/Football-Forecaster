@@ -527,6 +527,7 @@ class MatchDetail:
     city: str | None
     attendance: int | None
     events: list[MatchEvent] = field(default_factory=list)
+    match_date: dt.date | None = None  # UTC kickoff date
 
     @property
     def has_lineups(self) -> bool:
@@ -607,6 +608,13 @@ def _parse_match_events(key_events: list[dict] | None) -> list[MatchEvent]:
     return events
 
 
+def _utc_date(iso: str | None) -> dt.date | None:
+    try:
+        return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).date()
+    except (AttributeError, ValueError):
+        return None
+
+
 def _team_logo(team: dict) -> str | None:
     if team.get("logo"):
         return team["logo"]
@@ -663,6 +671,7 @@ def parse_match_detail(event_id: str, data: dict) -> MatchDetail | None:
         city=(venue.get("address") or {}).get("city"),
         attendance=_to_int(game_info.get("attendance")) or None,
         events=_parse_match_events(data.get("keyEvents")),
+        match_date=_utc_date(competition.get("date")),
     )
 
 

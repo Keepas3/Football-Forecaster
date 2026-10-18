@@ -4,6 +4,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from types import SimpleNamespace
 
 from soccer_predictor.config import League
 from soccer_predictor.dashboard.components import (
@@ -206,11 +207,11 @@ def test_fixture_prediction_row_uses_plain_english_percent_columns():
     )
     row = fixture_prediction_row("Arsenal", "Chelsea", prediction)
 
-    assert row["Home win %"] == 45.2
-    assert row["Draw %"] == 26.1
-    assert row["Away win %"] == 28.7
-    assert row["Over 2.5 goals %"] == 57.1
-    assert row["Both teams score %"] == 50.5
+    assert row["Home win %"] == 45.23
+    assert row["Draw %"] == 26.11
+    assert row["Away win %"] == 28.66
+    assert row["Over 2.5 goals %"] == 57.12
+    assert row["Both teams score %"] == 50.49
     assert not any(key.startswith("P(") for key in row)
 
 
@@ -238,3 +239,18 @@ def test_sort_fixtures_by_kickoff_orders_within_a_day_and_puts_unknown_times_las
     ordered = sort_fixtures_by_kickoff(df)["home_team_id"].tolist()
     # 16:00, then the two 18:45s in their original order, then no-time, then next day.
     assert ordered == [2, 1, 5, 3, 4]
+
+
+def test_percentage_columns_show_two_decimals_everywhere():
+    from soccer_predictor.dashboard import components
+
+    prediction = SimpleNamespace(
+        home_win=0.6412345, draw=0.2, away_win=0.1587655, over_2_5=0.5, both_teams_to_score=0.123456,
+        top_scorelines=[(2, 1, 0.1)],
+    )
+    row = components.fixture_prediction_row("A", "B", prediction)
+    assert row[components.HOME_WIN_COLUMN] == 64.12 and row[components.BTTS_COLUMN] == 12.35
+
+    html = components.style_fixture_predictions([row]).to_html()
+    assert ">64.12<" in html and ">20.00<" in html and ">12.35<" in html  # a whole number keeps its zeros
+    assert set(components.fixture_percent_column_config()) == set(components.PERCENT_COLUMNS)

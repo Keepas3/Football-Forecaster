@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from types import SimpleNamespace
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -248,3 +249,47 @@ def test_plain_strips_markdown_from_text_shown_on_the_page():
         # every special character is backslash-escaped, so it renders as itself
         assert escaped.count(ch) == escaped.count("\\" + ch)
     assert view.plain(None) == "" and view.plain("Arsenal") == "Arsenal"
+
+
+# --- predicted score on the page -------------------------------------------------------------
+
+
+def _resolved(**kwargs):
+    return view.ResolvedMatch(match_date=dt.date(2026, 10, 11), **kwargs)
+
+
+def test_the_prediction_locked_in_before_kickoff_is_shown_when_there_is_one(session, monkeypatch):
+    from soccer_predictor.storage.repository import insert_prediction_record
+
+    home, away = get_or_create_team(session, "Arsenal", "EPL"), get_or_create_team(session, "Chelsea", "EPL")
+    insert_prediction_record(session, "EPL", dt.date(2026, 10, 11), home.id, away.id, 2, 1)
+    session.commit()
+    monkeypatch.setattr(view, "load_latest_params", lambda *a: pytest.fail("the locked-in prediction should win"))
+
+    assert view.predicted_scoreline(session, EPL, _resolved(home_team_id=home.id, away_team_id=away.id), None) == (2, 1)
+
+
+def test_without_a_locked_in_prediction_the_current_model_is_used(session, monkeypatch):
+    home, away = get_or_create_team(session, "Arsenal", "EPL"), get_or_create_team(session, "Chelsea", "EPL")
+    session.commit()
+    params = SimpleNamespace(attack={home.id: 1.0, away.id: 1.0})
+    monkeypatch.setattr(view, "load_latest_params", lambda *a: params)
+    monkeypatch.setattr(view, "predict_fixture", lambda *a, **k: SimpleNamespace(top_scorelines=[(1, 1, 0.12), (2, 1, 0.1)]))
+
+    # Found by name, ignoring accents and case, when the link carries no team ids.
+    assert view.predicted_scoreline(session, EPL, _resolved(home_name="ARSENAL", away_name="chelsea"), None) == (1, 1)
+
+
+def test_no_prediction_for_unknown_teams_or_an_untrained_league(session, monkeypatch):
+    home, away = get_or_create_team(session, "Arsenal", "EPL"), get_or_create_team(session, "Chelsea", "EPL")
+    session.commit()
+    assert view.predicted_scoreline(session, EPL, _resolved(home_name="Nobody FC", away_name="Chelsea"), None) is None
+    monkeypatch.setattr(view, "load_latest_params", lambda *a: None)
+    assert view.predicted_scoreline(session, EPL, _resolved(home_team_id=home.id, away_team_id=away.id), None) is None
+
+
+def test_espn_team_ids_find_our_team_even_when_the_names_differ(session):
+    team = get_or_create_team(session, "Türkiye", "NL")
+    team.espn_team_id = 465
+    session.commit()
+    assert view._find_team(session, NL, "Turkey", "465").id == team.id

@@ -179,3 +179,29 @@ def test_espn_live_fetch_bypasses_the_six_hour_scoreboard_cache(monkeypatch):
     live_scores.fetch_live_matches_espn(league)
 
     assert seen["ttl"] == live_scores.LIVE_SCORE_CACHE_TTL_SECONDS
+
+
+# --- minute estimated from kickoff when the feed gives none ---------------------------------
+
+import datetime as dt
+
+_KICKOFF = dt.datetime(2026, 10, 18, 14, 0)
+
+
+@pytest.mark.parametrize(
+    "minutes_after_kickoff, expected",
+    [(-5, None), (0.5, "1'"), (20, "21'"), (44.9, "45'"), (47, "45+'"), (59, "45+'"), (60, "46'"),
+     (75, "61'"), (104, "90'"), (110, "90+'")],
+)
+def test_estimated_minute_from_kickoff(minutes_after_kickoff, expected):
+    now = _KICKOFF + dt.timedelta(minutes=minutes_after_kickoff)
+    assert live_scores.estimated_minute_label(_KICKOFF, now) == expected
+
+
+def test_a_match_with_no_minute_in_the_feed_shows_the_estimated_one():
+    now = _KICKOFF + dt.timedelta(minutes=70)
+    assert live_scores._clock_label("IN_PLAY", None, None, _KICKOFF, now) == "56'"
+    assert live_scores._clock_label("PAUSED", None, None, _KICKOFF, now) == "HT"
+    assert live_scores._clock_label("IN_PLAY", 63, None, _KICKOFF, now) == "63'"  # a real minute wins
+    assert live_scores._clock_label("IN_PLAY", None, None, None, now) == "Live"  # nothing to estimate from
+    assert live_scores._utc_datetime("2026-10-18T14:00:00Z") == _KICKOFF

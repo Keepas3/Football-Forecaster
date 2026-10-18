@@ -793,18 +793,20 @@ OVER_2_5_COLUMN = "Over 2.5 goals %"
 BTTS_COLUMN = "Both teams score %"
 
 
+PERCENT_COLUMNS = (HOME_WIN_COLUMN, DRAW_COLUMN, AWAY_WIN_COLUMN, OVER_2_5_COLUMN, BTTS_COLUMN)
+
+
 def fixture_percent_column_config() -> dict:
-    """column_config for the five percentage columns above -- without it, a
-    pandas Styler-backed st.dataframe renders them as e.g. "64.000000".
+    """column_config for the five percentage columns above, two decimals --
+    without it a pandas Styler-backed st.dataframe renders them as
+    e.g. "64.000000". (style_fixture_predictions formats them too, which is
+    what covers st.table and tables with no column_config.)
     """
-    return {
-        name: st.column_config.NumberColumn(format="%.1f")
-        for name in (HOME_WIN_COLUMN, DRAW_COLUMN, AWAY_WIN_COLUMN, OVER_2_5_COLUMN, BTTS_COLUMN)
-    }
+    return {name: st.column_config.NumberColumn(format="%.2f") for name in PERCENT_COLUMNS}
 
 
 def _as_percent(probability: float) -> float:
-    return round(probability * 100, 1)
+    return round(probability * 100, 2)
 
 
 def fixture_prediction_row(
@@ -904,6 +906,9 @@ def style_fixture_predictions(rows: list[dict]):
     """
     df = pd.DataFrame(rows)
     styler = df.style.apply(_predicted_outcome_styles, axis=1)
+    percent_columns = [c for c in PERCENT_COLUMNS if c in df.columns]
+    if percent_columns:
+        styler = styler.format("{:.2f}", subset=percent_columns)
     present = [c for c in _HIDDEN_FIXTURE_COLUMNS if c in df.columns]
     if present:
         styler = styler.hide(axis="columns", subset=present)
