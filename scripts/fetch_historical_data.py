@@ -19,6 +19,7 @@ to repair a past season that ESPN has since corrected).
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -51,11 +52,33 @@ BASE_URL = "https://www.football-data.co.uk/mmz4281"
 RAW_DIR = DATA_DIR / "raw"
 
 
+# football-data.co.uk is a small hobby site that now and then answers slowly
+# (a 30s read timeout once failed a whole scheduled refresh). A download is tried
+# a few times, with a longer wait each, before it is given up on.
+CSV_DOWNLOAD_ATTEMPTS = 3
+CSV_TIMEOUT_SECONDS = 60
+CSV_RETRY_PAUSE_SECONDS = 5
+
+
+class CsvDownloadFailed(Exception):
+    """A season file could not be downloaded even after retrying."""
+
+
+def _worth_retrying(exc: requests.RequestException) -> bool:
+    """Timeouts, dropped connections, server errors and "slow down" are
+    temporary; any other HTTP error (a 404 for a file that doesn't exist) is
+    not, and retrying it only wastes time."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return True
+    return response.status_code >= 500 or response.status_code == 429
+
+
 def download_season_csv(csv_code: str, season: str, force: bool = False) -> Path:
     """`force=True` re-downloads even if a local copy exists -- needed for
     the current in-progress season, whose remote CSV keeps growing as games
     are played (unlike a fully-concluded season, which never changes once
-    downloaded).
+    downloaded). Raises CsvDownloadFailed if every attempt fails.
     """
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     dest = RAW_DIR / f"{csv_code}_{season}.csv"
@@ -64,10 +87,19 @@ def download_season_csv(csv_code: str, season: str, force: bool = False) -> Path
         return dest
     url = f"{BASE_URL}/{season}/{csv_code}.csv"
     print(f"  downloading {url}")
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    dest.write_bytes(response.content)
-    return dest
+    for attempt in range(1, CSV_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            response = requests.get(url, timeout=CSV_TIMEOUT_SECONDS)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            if attempt == CSV_DOWNLOAD_ATTEMPTS or not _worth_retrying(exc):
+                raise CsvDownloadFailed(f"{url}: {type(exc).__name__}") from exc
+            print(f"  attempt {attempt} failed ({type(exc).__name__}); retrying")
+            time.sleep(CSV_RETRY_PAUSE_SECONDS * attempt)
+            continue
+        dest.write_bytes(response.content)
+        return dest
+    raise CsvDownloadFailed(url)  # unreachable; keeps the return type honest
 
 
 def _sync_worldcup_archive_season(
@@ -168,6 +200,8 @@ def main() -> None:
     # refresh_live_data.py --quick already keeps current.
     current_season_only = "--current-season-only" in sys.argv[1:]
     all_seasons = "--all-seasons" in sys.argv[1:]
+    csv_downloads = 0  # season files fetched or already on disk
+    download_failures: list[str] = []
     requested = [a for a in sys.argv[1:] if not a.startswith("--")] or list(leagues.keys())
 
     for code in requested:
@@ -234,11 +268,26 @@ def main() -> None:
         csv_seasons = league.seasons[-1:] if current_season_only else league.seasons
         for season in csv_seasons:
             is_current_season = season == league.seasons[-1]
-            csv_path = download_season_csv(league.csv_code, season, force=is_current_season)
+            try:
+                csv_path = download_season_csv(league.csv_code, season, force=is_current_season)
+            except CsvDownloadFailed as exc:
+                # One slow file must not stop every other league: keep what is
+                # already stored for this one and carry on.
+                download_failures.append(f"{league.code} {season}")
+                print(f"::warning::{league.code} {season}: download failed ({exc}); keeping the existing data")
+                continue
+            csv_downloads += 1
             df = parse_csv(csv_path)
             with session_scope() as session:
                 ingested, skipped = ingest_into_db(session, league.code, season, df)
             print(f"  season {season}: {ingested} matches ingested, {skipped} skipped (unresolved teams)")
+
+    if download_failures:
+        print(f"Could not download: {', '.join(download_failures)}")
+        if csv_downloads == 0:
+            # Nothing at all came down -- that is an outage, not a slow file, and
+            # the job should say so rather than report a clean (empty) refresh.
+            sys.exit(1)
 
 
 if __name__ == "__main__":
