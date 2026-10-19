@@ -324,3 +324,20 @@ def test_team_stats_table_colours_each_teams_number():
     # Rows: possession (Azerbaijan 41.9 v Lithuania 58.1), shots (9 v 5); columns 0 = home, 2 = away.
     assert cells_shaded("color: #2ea043") == {"row0_col2", "row1_col0"}  # the stronger side of each
     assert cells_shaded("color: #f85149") == {"row0_col0", "row1_col2"}
+
+
+def test_substitution_minutes_come_from_the_players_plays_and_show_only_for_those_players():
+    plays = [
+        {"clock": {"displayValue": "25'"}, "scoringPlay": True, "substitution": False},
+        {"clock": {"displayValue": "64'"}, "substitution": True},
+    ]
+    entries = [
+        {"athlete": {"displayName": "Starter Off"}, "starter": True, "subbedOut": True, "plays": plays, "jersey": "9"},
+        {"athlete": {"displayName": "Sub On"}, "starter": False, "subbedIn": True, "plays": [{"clock": {"displayValue": "90'+1'"}, "substitution": True}], "jersey": "20"},
+        {"athlete": {"displayName": "Played All"}, "starter": True, "plays": [{"clock": {"displayValue": "40'"}, "substitution": False}], "jersey": "1"},
+    ]
+    off, on, full = espn_client._parse_lineup_players(entries)
+    assert (off.sub_minute, on.sub_minute, full.sub_minute) == ("64'", "90'+1'", None)
+    assert view.player_events_text(off) == "subbed off 64'"
+    assert view.player_events_text(on) == "came on 90'+1'"
+    assert view.player_events_text(full) == ""  # nothing extra for a player who played throughout

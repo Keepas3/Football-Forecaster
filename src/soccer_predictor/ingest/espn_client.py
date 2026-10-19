@@ -489,6 +489,8 @@ class LineupPlayer:
     starter: bool
     subbed_in: bool = False
     subbed_out: bool = False
+    formation_place: int | None = None  # ESPN's slot number in the starting formation (1 = goalkeeper)
+    sub_minute: str | None = None  # when he came on or went off, e.g. "64'" (only for a substitution)
     # ESPN stat name -> count, only for the stats in PLAYER_STAT_CHIPS and only
     # when non-zero.
     stats: dict[str, int] = field(default_factory=dict)
@@ -512,6 +514,9 @@ class MatchEvent:
     kind: str  # "goal" | "yellow" | "red" | "sub"
     text: str
     team_id: str | None
+    # Who it was about (the scorer, the player carded or, for a substitution, the
+    # one coming on). For an own goal, `team_id` is the side that is credited.
+    player: str | None = None
 
 
 @dataclass
@@ -563,6 +568,14 @@ def _to_int(value) -> int | None:
         return None
 
 
+def _sub_minute(plays: list[dict] | None) -> str | None:
+    """The minute of the player's substitution, from his match plays."""
+    for play in plays or []:
+        if play.get("substitution"):
+            return (play.get("clock") or {}).get("displayValue") or None
+    return None
+
+
 def _parse_lineup_players(roster: list[dict] | None) -> list[LineupPlayer]:
     players = []
     for entry in roster or []:
@@ -584,25 +597,42 @@ def _parse_lineup_players(roster: list[dict] | None) -> list[LineupPlayer]:
                 starter=bool(entry.get("starter")),
                 subbed_in=bool(entry.get("subbedIn")),
                 subbed_out=bool(entry.get("subbedOut")),
+                formation_place=_to_int(entry.get("formationPlace")),
+                sub_minute=_sub_minute(entry.get("plays")),
                 stats=stats,
             )
         )
     return players
 
 
+def _event_kind(event: dict) -> str | None:
+    event_type = (event.get("type") or {}).get("type") or ""
+    kind = _EVENT_KIND.get(event_type)
+    # ESPN has many goal types ("goal---header", "goal---free-kick", ...); every
+    # one of them is flagged as a scoring play, so go by that rather than a list.
+    if kind is None and (event.get("scoringPlay") or event_type.startswith("goal")):
+        kind = "goal"
+    return kind
+
+
 def _parse_match_events(key_events: list[dict] | None) -> list[MatchEvent]:
     events = []
     for event in key_events or []:
-        kind = _EVENT_KIND.get((event.get("type") or {}).get("type"))
+        if event.get("shootout"):  # penalty shoot-out kicks aren't goals in the match
+            continue
+        kind = _event_kind(event)
         if kind is None:
             continue
         team_id = (event.get("team") or {}).get("id")
+        participants = event.get("participants") or []
+        player = ((participants[0] if participants else {}).get("athlete") or {}).get("displayName")
         events.append(
             MatchEvent(
                 minute=(event.get("clock") or {}).get("displayValue") or "",
                 kind=kind,
                 text=event.get("text") or event.get("shortText") or "",
                 team_id=str(team_id) if team_id else None,
+                player=player,
             )
         )
     return events

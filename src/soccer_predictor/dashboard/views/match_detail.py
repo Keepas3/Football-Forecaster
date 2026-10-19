@@ -20,6 +20,8 @@ import pandas as pd
 import streamlit as st
 
 from soccer_predictor.config import League, load_leagues
+from soccer_predictor.dashboard.goal_chart import goal_timeline_figure
+from soccer_predictor.dashboard.pitch import pitch_svg
 from soccer_predictor.ingest import espn_client
 from soccer_predictor.ingest.espn_client import PLAYER_STAT_CHIPS, LineupPlayer, MatchDetail, TeamMatchInfo
 from soccer_predictor.ingest.news import match_search_url
@@ -161,10 +163,11 @@ def _stat_chip(name: str, value: int) -> str:
 
 def player_events_text(player: LineupPlayer) -> str:
     parts = [_stat_chip(name, value) for name, value in player.stats.items()]
+    when = f" {player.sub_minute}" if player.sub_minute else ""
     if player.subbed_out:
-        parts.append("subbed off")
+        parts.append(f"subbed off{when}")
     if player.subbed_in and not player.starter:
-        parts.append("came on")
+        parts.append(f"came on{when}")
     return ", ".join(parts)
 
 
@@ -256,6 +259,8 @@ def timeline_frame(detail: MatchDetail) -> pd.DataFrame:
 
 
 ROW_HEIGHT_PX = 35
+# Each team's pitch is shown this wide (pixels); the column it sits in is about 450.
+PITCH_WIDTH_PX = 360
 MAX_TABLE_HEIGHT_PX = 1000
 
 
@@ -270,6 +275,9 @@ def _render_lineup(team: TeamMatchInfo) -> None:
     st.markdown(f"**{plain(team.name)}**" + (f" · {plain(team.formation)}" if team.formation else ""))
     starters = [p for p in team.players if p.starter]
     bench = [p for p in team.players if not p.starter]
+    pitch = pitch_svg(team)
+    if pitch:
+        st.image(pitch, width=PITCH_WIDTH_PX)  # an image, so the SVG can never run script
     if starters:
         st.dataframe(lineup_frame(starters), hide_index=True, use_container_width=True, height=full_height(len(starters)))
     if bench:
@@ -487,5 +495,9 @@ def render() -> None:
         if timeline.empty:
             st.caption("No goals, cards or substitutions yet.")
         else:
+            figure = goal_timeline_figure(detail)
+            if figure is not None:
+                st.plotly_chart(figure, use_container_width=True)
+                st.caption("Goals over time (hover a marker for the details). Squares are cards; substitutions are in the table below.")
             st.dataframe(timeline, hide_index=True, use_container_width=True, height=full_height(len(timeline)))
     st.caption("Match data via ESPN.")
