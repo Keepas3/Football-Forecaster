@@ -25,6 +25,7 @@ from soccer_predictor.dashboard.chat_notes import (
 from soccer_predictor.dashboard.components import (
     LEADERBOARD_DISPLAY_COLUMNS,
     fixture_columns_with_kickoff_first,
+    PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
     format_kickoff,
     leaderboard_dataframe,
@@ -51,6 +52,7 @@ from soccer_predictor.storage.repository import (
     delete_form_note,
     delete_injury,
     fixtures_for_league,
+    locked_predictions_for_league,
     teams_for_league,
 )
 
@@ -270,7 +272,7 @@ def render() -> None:
         st.divider()
         st.header("Track Record")
         st.caption(
-            "All leagues. Predictions are locked in before kickoff and graded after the match. "
+            "All leagues. Predictions are locked in within 48 hours of kickoff and graded after the match. "
             "Right outcome = the model's most likely result (win, draw or loss) happened."
         )
         with session_scope() as session:
@@ -337,6 +339,7 @@ def render() -> None:
             rows = []
             row_meta = []  # parallel to rows: (home_id, away_id, home_name, away_name, date)
             with session_scope() as session:
+                locked_predictions = locked_predictions_for_league(session, league.code)
                 for row in fixtures_df.sort_values("date").itertuples(index=False):
                     home_name = team_names[row.home_team_id]
                     away_name = team_names[row.away_team_id]
@@ -349,7 +352,12 @@ def render() -> None:
                         away_name,
                         fixture_date=row.date,
                     )
-                    row_dict = fixture_prediction_row(home_name, away_name, prediction)
+                    row_dict = fixture_prediction_row(
+                        home_name,
+                        away_name,
+                        prediction,
+                        locked_predictions.get((row.date, row.home_team_id, row.away_team_id)),
+                    )
                     row_dict["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
                     rows.append(row_dict)
                     row_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
@@ -362,7 +370,10 @@ def render() -> None:
                 selection_mode="single-row",
                 key=f"predictor_fixtures_table_{league.code}",
             )
-            st.caption("Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction.")
+            st.caption(
+                "Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction. "
+                + PREDICTION_STATUS_NOTE
+            )
             selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
             if selected:
                 sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]

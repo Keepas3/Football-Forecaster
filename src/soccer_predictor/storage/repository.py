@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 
 import pandas as pd
 from sqlalchemy import func, or_, select
@@ -283,6 +284,42 @@ def prediction_record_scoreline(
         )
     )
     return (record.predicted_home_goals, record.predicted_away_goals) if record else None
+
+
+def delete_prediction_records_after(session: Session, league_code: str, after: dt.date) -> int:
+    """Deletes the league's prediction records for matches dated `after` or later
+    (matches that cannot have been played yet). Returns how many were removed."""
+    records = session.scalars(
+        select(PredictionRecord).where(PredictionRecord.league_code == league_code, PredictionRecord.date >= after)
+    ).all()
+    for record in records:
+        session.delete(record)
+    return len(records)
+
+
+@dataclass
+class LockedPrediction:
+    home_goals: int
+    away_goals: int
+    p_home: float | None
+    p_draw: float | None
+    p_away: float | None
+
+
+def locked_predictions_for_league(
+    session: Session, league_code: str, from_date: dt.date | None = None
+) -> dict[tuple[dt.date, int, int], LockedPrediction]:
+    """The predictions locked in for a league, keyed by (date, home id, away id) --
+    what the upcoming-matches tables show as "Locked in" instead of "Early"."""
+    query = select(PredictionRecord).where(PredictionRecord.league_code == league_code)
+    if from_date is not None:
+        query = query.where(PredictionRecord.date >= from_date)
+    return {
+        (r.date, r.home_team_id, r.away_team_id): LockedPrediction(
+            r.predicted_home_goals, r.predicted_away_goals, r.p_home, r.p_draw, r.p_away
+        )
+        for r in session.scalars(query)
+    }
 
 
 def has_prediction_record(

@@ -15,6 +15,7 @@ from soccer_predictor.dashboard.components import (
     compute_top_scorer_and_assister,
     fixture_columns_with_kickoff_first,
     fixture_percent_column_config,
+    PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
     format_kickoff,
     live_sync_requirement_note,
@@ -56,6 +57,7 @@ from soccer_predictor.prediction.service import (
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import (
     fixtures_for_team,
+    locked_predictions_for_league,
     matches_for_team,
     team_by_id,
     teams_for_league,
@@ -238,6 +240,7 @@ def render() -> None:
         rows = []
         row_meta = []  # parallel to rows: (home_id, away_id, home_name, away_name, date)
         with session_scope() as session:
+            locked_predictions = locked_predictions_for_league(session, team_league_code)
             for row in fixtures_df.sort_values("date").itertuples(index=False):
                 home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
                 away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
@@ -251,7 +254,12 @@ def render() -> None:
                         away_name,
                         fixture_date=row.date,
                     )
-                    fixture_row = fixture_prediction_row(home_name, away_name, prediction)
+                    fixture_row = fixture_prediction_row(
+                        home_name,
+                        away_name,
+                        prediction,
+                        locked_predictions.get((row.date, row.home_team_id, row.away_team_id)),
+                    )
                 else:
                     fixture_row = {"Home": home_name, "Away": away_name}
                 fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
@@ -269,7 +277,10 @@ def render() -> None:
             key=f"team_detail_schedule_table_{team_id}",
         )
         if has_predictions:
-            st.caption("Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction.")
+            st.caption(
+                "Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction. "
+                + PREDICTION_STATUS_NOTE
+            )
             selected = schedule_event.selection.rows if schedule_event and schedule_event.selection else []
             if selected:
                 sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]

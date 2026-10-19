@@ -809,17 +809,38 @@ def _as_percent(probability: float) -> float:
     return round(probability * 100, 2)
 
 
+PREDICTION_STATUS_NOTE = (
+    "Early: the model's forecast today, which can still change as the teams play. "
+    "Locked in: the final forecast, saved within 48 hours of kickoff and the one the Track Record grades."
+)
+STATUS_COLUMN = "Prediction"
+LOCKED_LABEL = "🔒 Locked in"
+EARLY_LABEL = "Early"
+
+
 def fixture_prediction_row(
-    home_name: str, away_name: str, prediction: MatchPrediction
+    home_name: str, away_name: str, prediction: MatchPrediction, locked=None
 ) -> dict:
+    """One upcoming-match row. `locked` is the prediction locked in for this
+    match (storage.repository.LockedPrediction) once it is within 48 hours of
+    kickoff, else None. A locked match shows the locked-in score and win/draw/
+    loss figures -- the forecast that is graded on the Track Record -- and is
+    marked "Locked in"; any other shows the model's current forecast, marked
+    "Early", which can still change as teams play before it."""
     top_home, top_away, _ = prediction.top_scorelines[0]
+    home_win, draw, away_win = prediction.home_win, prediction.draw, prediction.away_win
+    if locked is not None:
+        top_home, top_away = locked.home_goals, locked.away_goals
+        if None not in (locked.p_home, locked.p_draw, locked.p_away):
+            home_win, draw, away_win = locked.p_home, locked.p_draw, locked.p_away
     return {
         "Home": home_name,
         "Away": away_name,
-        HOME_WIN_COLUMN: _as_percent(prediction.home_win),
-        DRAW_COLUMN: _as_percent(prediction.draw),
-        AWAY_WIN_COLUMN: _as_percent(prediction.away_win),
+        HOME_WIN_COLUMN: _as_percent(home_win),
+        DRAW_COLUMN: _as_percent(draw),
+        AWAY_WIN_COLUMN: _as_percent(away_win),
         "Predicted score": f"{top_home}-{top_away}",
+        STATUS_COLUMN: LOCKED_LABEL if locked is not None else EARLY_LABEL,
         OVER_2_5_COLUMN: _as_percent(prediction.over_2_5),
         BTTS_COLUMN: _as_percent(prediction.both_teams_to_score),
         # Hidden (never in a display column_order): styling keys off these,

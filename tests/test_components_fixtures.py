@@ -254,3 +254,24 @@ def test_percentage_columns_show_two_decimals_everywhere():
     html = components.style_fixture_predictions([row]).to_html()
     assert ">64.12<" in html and ">20.00<" in html and ">12.35<" in html  # a whole number keeps its zeros
     assert set(components.fixture_percent_column_config()) == set(components.PERCENT_COLUMNS)
+
+
+def test_a_locked_in_match_shows_the_locked_forecast_and_an_early_one_the_current_model():
+    from soccer_predictor.dashboard import components
+    from soccer_predictor.storage.repository import LockedPrediction
+
+    live = SimpleNamespace(
+        home_win=0.50, draw=0.25, away_win=0.25, over_2_5=0.55, both_teams_to_score=0.5, top_scorelines=[(1, 0, 0.12)],
+    )
+    early = components.fixture_prediction_row("A", "B", live)
+    assert early[components.STATUS_COLUMN] == components.EARLY_LABEL
+    assert early["Predicted score"] == "1-0" and early[components.HOME_WIN_COLUMN] == 50.0
+
+    locked = components.fixture_prediction_row("A", "B", live, LockedPrediction(2, 2, 0.30, 0.40, 0.30))
+    assert locked[components.STATUS_COLUMN] == components.LOCKED_LABEL
+    assert locked["Predicted score"] == "2-2" and locked[components.DRAW_COLUMN] == 40.0
+    assert locked["_predicted_home_goals"] == 2  # the row colouring follows the locked score too
+    # An old record with no stored probabilities keeps the locked score but the live percentages.
+    old = components.fixture_prediction_row("A", "B", live, LockedPrediction(0, 1, None, None, None))
+    assert old["Predicted score"] == "0-1" and old[components.HOME_WIN_COLUMN] == 50.0
+    assert components.STATUS_COLUMN in components.fixture_columns_with_kickoff_first({**locked, "Kickoff": "x"})

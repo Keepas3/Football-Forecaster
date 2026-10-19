@@ -28,6 +28,7 @@ from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.prediction.service import predict_fixture
 from soccer_predictor.storage.repository import (
     all_prediction_records,
+    delete_prediction_records_after,
     fixtures_for_league,
     has_prediction_record,
     insert_prediction_record,
@@ -36,9 +37,16 @@ from soccer_predictor.storage.repository import (
     teams_for_league,
 )
 
-# Wide enough to mean "every upcoming fixture currently known," not the
-# dashboard's usual 14-day display window -- this just needs to find rows
-# to snapshot, not decide what's worth showing on a page.
+# How far ahead of kickoff a prediction is locked in. Football-data.org lists
+# the whole remaining season, so locking each fixture in the first time it was
+# seen meant forecasting games months ahead from ratings that knew nothing of
+# the teams' games in between. Locking in only the last 48 hours uses ratings
+# that include their latest results (the model is refit daily and the frequent
+# refresh runs every few hours, so every match is still caught before it
+# starts). Until then the dashboard shows the prediction as "Early".
+LOCK_IN_HOURS = 48
+# Wide enough to mean "every upcoming fixture currently known" -- used where a
+# lookup just has to find the rows, not decide what gets locked in.
 SNAPSHOT_WINDOW_DAYS = 365
 
 
@@ -57,8 +65,16 @@ def _is_missing(value) -> bool:
 
 
 def snapshot_upcoming_predictions(session: Session, league: League, params: DixonColesParams) -> int:
-    """Locks in a prediction for every fixture in `league` that doesn't
-    already have one. Returns how many new snapshots were created.
+    """Locks in a prediction for every fixture in `league` that kicks off within
+    LOCK_IN_HOURS and doesn't already have one. Returns how many new snapshots
+    were created.
+
+    Also clears out predictions that were locked in too early (the old rule
+    locked a fixture in as soon as it was known): any record for a match more
+    than a day beyond the lock-in window has not been played, so it carries no
+    result to grade, and is simply made again once the match is close. Records
+    inside the window, and every graded one, are never touched.
+
     predict_fixture may fetch current-season stats (Understat/American
     Soccer Analysis, see model/current_form_adjustment.py) for leagues
     those cover -- disk-cached 24h, so only the first fixture per league
@@ -67,14 +83,17 @@ def snapshot_upcoming_predictions(session: Session, league: League, params: Dixo
     that fetch fails, same contract as every other adjustment here.
     """
     team_names = teams_for_league(session, league.code)
-    today = dt.date.today()
-    upcoming = fixtures_for_league(session, league.code, today, today + dt.timedelta(days=SNAPSHOT_WINDOW_DAYS))
-
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    horizon = now + dt.timedelta(hours=LOCK_IN_HOURS)
+    delete_prediction_records_after(session, league.code, horizon.date() + dt.timedelta(days=1))
+    upcoming = fixtures_for_league(session, league.code, now.date(), horizon.date())
+
     created = 0
     for row in upcoming.itertuples(index=False):
         if _already_kicked_off(row.kickoff_utc, now):
             continue
+        if not _is_missing(row.kickoff_utc) and row.kickoff_utc is not None and row.kickoff_utc > horizon:
+            continue  # a late kickoff on the last day of the window is still too far off
         if has_prediction_record(session, league.code, row.date, row.home_team_id, row.away_team_id):
             continue
         home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")

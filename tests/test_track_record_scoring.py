@@ -189,7 +189,7 @@ def test_no_skill_guess_is_a_valid_distribution():
 
 def test_new_snapshots_save_the_probabilities(session):
     a, b = _teams(session)
-    upsert_fixture(session, "EPL", dt.date.today() + dt.timedelta(days=5), a, b, "SCHEDULED")
+    upsert_fixture(session, "EPL", dt.date.today() + dt.timedelta(days=1), a, b, "SCHEDULED")
     session.commit()
 
     snapshot_upcoming_predictions(session, LEAGUE, _params(a, b))
