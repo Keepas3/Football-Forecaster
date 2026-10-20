@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import re
 import urllib.parse
 from zoneinfo import ZoneInfo
 
@@ -807,6 +808,27 @@ def fixture_percent_column_config() -> dict:
 
 def _as_percent(probability: float) -> float:
     return round(probability * 100, 2)
+
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+!|<>~$:-])")
+
+
+def _escape_markdown(text: str) -> str:
+    """`text` with markdown stripped of its meaning, so names and news from
+    outside render as plain text."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", text or "")
+
+
+def injury_line(entry, source: str, return_date, note: str = "") -> str:
+    """One injury bullet: who, how much he matters, where it came from, any news.
+    Plain text (the callers pass it to st.write, which renders markdown, so the
+    parts that come from outside are escaped)."""
+    return_note = f", est. return {return_date}" if return_date else ""
+    news = f" - {_escape_markdown(note)}" if note else ""
+    return (
+        f"- {_escape_markdown(entry.player_name)} ({entry.position}, weight={entry.importance_weight:.2f}) "
+        f"- source: {source}{return_note}{news}"
+    )
 
 
 PREDICTION_STATUS_NOTE = (

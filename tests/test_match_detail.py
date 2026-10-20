@@ -341,3 +341,52 @@ def test_substitution_minutes_come_from_the_players_plays_and_show_only_for_thos
     assert view.player_events_text(off) == "subbed off 64'"
     assert view.player_events_text(on) == "came on 90'+1'"
     assert view.player_events_text(full) == ""  # nothing extra for a player who played throughout
+
+
+def test_a_link_from_a_team_page_carries_the_team_so_back_can_return_to_it():
+    day = dt.date(2026, 10, 4)
+    assert view.match_detail_query_params("NL", 5, 9, day, from_team_id=441, season="2627") == {
+        "league": "NL", "home": "5", "away": "9", "date": "2026-10-04", "team": "441", "season": "2627",
+    }
+    # From the Leagues page (no team) the URL is unchanged, and Back goes to the league.
+    assert "team" not in view.match_detail_query_params("NL", 5, 9, day)
+    assert "season" not in view.match_detail_query_params("NL", 5, 9, day, from_team_id=441)
+
+
+def _match_page_with_back(monkeypatch, team_param):
+    from types import SimpleNamespace
+
+    from streamlit.testing.v1 import AppTest
+
+    teams = {
+        441: SimpleNamespace(canonical_name="Switzerland", league_code="NL"),
+        1: SimpleNamespace(canonical_name="Arsenal", league_code="EPL"),
+    }
+    monkeypatch.setattr(view, "team_by_id", lambda session, team_id: teams.get(team_id))
+    monkeypatch.setattr(view, "resolve_match", lambda session, league: None)  # the page stops after the Back button
+
+    def app(team_param):
+        import streamlit as st
+
+        from soccer_predictor.dashboard.views import match_detail
+
+        if team_param:
+            st.query_params["team"] = team_param
+        match_detail.render()
+
+    at = AppTest.from_function(app, kwargs={"team_param": team_param}, default_timeout=60)
+    at.query_params["league"] = "NL"
+    return at.run()
+
+
+def test_the_back_button_names_the_team_page_when_the_visit_came_from_one(monkeypatch):
+    at = _match_page_with_back(monkeypatch, "441")
+    assert not at.exception
+    labels = [b.label for b in at.button]
+    assert "← Back to Switzerland" in labels and not any("UEFA Nations League" in label for label in labels)
+
+
+def test_the_back_button_goes_to_the_league_when_there_is_no_team_or_it_is_from_another_league(monkeypatch):
+    for team in (None, "1", "999"):  # none; an EPL team; an unknown team
+        labels = [b.label for b in _match_page_with_back(monkeypatch, team).button]
+        assert "← Back to UEFA Nations League" in labels, team

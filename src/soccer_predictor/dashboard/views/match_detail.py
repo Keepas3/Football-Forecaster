@@ -105,13 +105,36 @@ def _recent_enough_for_name_lookup(match_date: dt.date) -> bool:
     return today - dt.timedelta(days=NAME_LOOKUP_DAYS_BACK) <= match_date <= today + dt.timedelta(days=NAME_LOOKUP_DAYS_AHEAD)
 
 
-def match_detail_query_params(league_code: str, home_id: int, away_id: int, date: dt.date) -> dict[str, str]:
-    return {"league": league_code, "home": str(home_id), "away": str(away_id), "date": date.isoformat()}
+def match_detail_query_params(
+    league_code: str,
+    home_id: int,
+    away_id: int,
+    date: dt.date,
+    from_team_id: int | None = None,
+    season: str | None = None,
+) -> dict[str, str]:
+    """The page's URL parameters. `from_team_id` (and the `season` that team's page
+    was showing) is the team page the visitor came from, so Back can return there."""
+    params = {"league": league_code, "home": str(home_id), "away": str(away_id), "date": date.isoformat()}
+    if from_team_id is not None:
+        params["team"] = str(from_team_id)
+        if season:
+            params["season"] = season
+    return params
 
 
-def render_match_detail_button(league: League, home_id: int, away_id: int, date: dt.date, key: str) -> None:
+def render_match_detail_button(
+    league: League,
+    home_id: int,
+    away_id: int,
+    date: dt.date,
+    key: str,
+    from_team_id: int | None = None,
+    season: str | None = None,
+) -> None:
     """A "Match details" button that opens this page for the given match.
-    Does nothing for leagues with no ESPN slug."""
+    Does nothing for leagues with no ESPN slug. Pass `from_team_id` when the
+    button sits on a team's page so Back returns to that team."""
     if not league.espn_league_slug:
         return
     # Imported here, not at module level: navigation imports every view (this
@@ -121,7 +144,7 @@ def render_match_detail_button(league: League, home_id: int, away_id: int, date:
     if st.button("Match details →", key=key):
         st.switch_page(
             navigation.match_detail_page(),
-            query_params=match_detail_query_params(league.code, home_id, away_id, date),
+            query_params=match_detail_query_params(league.code, home_id, away_id, date, from_team_id, season),
         )
 
 
@@ -444,7 +467,17 @@ def render() -> None:
             st.switch_page(navigation.home_page())
         st.stop()
 
-    if st.button(f"← Back to {league.name}"):
+    # Came from a team's page? Go back there, not to the league's page.
+    with session_scope() as session:
+        back_team = team_by_id(session, _int_param("team")) if _int_param("team") is not None else None
+        back_team_name = back_team.canonical_name if back_team and back_team.league_code == league.code else None
+    if back_team_name is not None:
+        if st.button(f"← Back to {plain(back_team_name)}"):
+            back_params = {"league": league.code, "team": str(_int_param("team"))}
+            if st.query_params.get("season"):
+                back_params["season"] = st.query_params["season"]
+            st.switch_page(navigation.team_detail_page(), query_params=back_params)
+    elif st.button(f"← Back to {league.name}"):
         st.switch_page(navigation.home_page(), query_params={"league": league.code})
 
     with session_scope() as session:

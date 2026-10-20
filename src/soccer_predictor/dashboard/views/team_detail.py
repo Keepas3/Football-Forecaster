@@ -17,6 +17,7 @@ from soccer_predictor.dashboard.components import (
     fixture_percent_column_config,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
+    injury_line,
     format_kickoff,
     live_sync_requirement_note,
     render_head_to_head,
@@ -62,6 +63,10 @@ from soccer_predictor.storage.repository import (
     team_by_id,
     teams_for_league,
 )
+
+# How many past results a team's page lists, and how many the "Show more" button reveals.
+RECENT_RESULTS_DEFAULT = 10
+RECENT_RESULTS_MAX = 25
 
 # football-data.org's position strings, ordered goalkeeper-out rather than
 # alphabetically, with a fallback for any value not seen before.
@@ -286,7 +291,13 @@ def render() -> None:
                 sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]
                 if league is not None:
                     render_match_detail_button(
-                        league, sel_home_id, sel_away_id, sel_date, key=f"match_detail_btn_fixture_{team_id}"
+                        league,
+                        sel_home_id,
+                        sel_away_id,
+                        sel_date,
+                        key=f"match_detail_btn_fixture_{team_id}",
+                        from_team_id=team_id,
+                        season=st.query_params.get("season"),
                     )
                 is_this_team_home = sel_home_id == team_id
                 opponent_id = sel_away_id if is_this_team_home else sel_home_id
@@ -312,7 +323,10 @@ def render() -> None:
     else:
         result_rows = []
         result_meta = []  # parallel to result_rows: (date, home_id, away_id)
-        for row in recent_df.head(10).itertuples(index=False):
+        more_key = f"team_results_more_{team_id}"
+        show_more = bool(st.session_state.get(more_key))
+        shown_count = RECENT_RESULTS_MAX if show_more else RECENT_RESULTS_DEFAULT
+        for row in recent_df.head(shown_count).itertuples(index=False):
             is_home = row.home_team_id == team_id
             opponent_id = row.away_team_id if is_home else row.home_team_id
             opponent_name = team_names.get(opponent_id, f"team#{opponent_id}")
@@ -341,13 +355,28 @@ def render() -> None:
             selection_mode="single-row",
             key=f"team_detail_results_table_{team_id}",
         )
+        if len(recent_df) > RECENT_RESULTS_DEFAULT:
+            toggle_label = (
+                f"Show fewer results"
+                if show_more
+                else f"Show more results (up to {min(len(recent_df), RECENT_RESULTS_MAX)})"
+            )
+            if st.button(toggle_label, key=f"team_results_toggle_{team_id}"):
+                st.session_state[more_key] = not show_more
+                st.rerun()
         if has_match_detail:
             st.caption("Click a result's row for lineups, team stats and the goals/cards timeline.")
             selected_result = results_event.selection.rows if results_event and results_event.selection else []
             if selected_result:
                 result_date, result_home_id, result_away_id = result_meta[selected_result[0]]
                 render_match_detail_button(
-                    league, result_home_id, result_away_id, result_date, key=f"match_detail_btn_{team_id}"
+                    league,
+                    result_home_id,
+                    result_away_id,
+                    result_date,
+                    key=f"match_detail_btn_{team_id}",
+                    from_team_id=team_id,
+                    season=st.query_params.get("season"),
                 )
 
     st.subheader("Squad")
@@ -552,14 +581,13 @@ def render() -> None:
     if not team_injuries.entries:
         st.caption("No injuries on record.")
     else:
-        for entry, source, return_date in zip(
-            team_injuries.entries, team_injuries.sources, team_injuries.expected_return_dates
+        for entry, source, return_date, note in zip(
+            team_injuries.entries,
+            team_injuries.sources,
+            team_injuries.expected_return_dates,
+            team_injuries.notes,
         ):
-            return_note = f", est. return {return_date}" if return_date else ""
-            st.write(
-                f"- {entry.player_name} ({entry.position}, weight={entry.importance_weight:.2f}) "
-                f"- source: {source}{return_note}"
-            )
+            st.write(injury_line(entry, source, return_date, note))
         if params is not None:
             adj_attack, adj_defense = adjust_strength(
                 params.attack[team_id], params.defense[team_id], team_injuries.entries

@@ -113,7 +113,7 @@ def test_importance_weight_falls_back_to_default_when_no_stats(session, monkeypa
 
 
 def test_non_espn_league_is_a_no_op(session):
-    non_espn_league = League(code="EPL", name="English Premier League", seasons=["2526"], csv_code="E0")
+    non_espn_league = League(code="LALIGA", name="La Liga", seasons=["2526"], csv_code="SP1")  # no automatic injury source
 
     synced, skipped = injuries.sync_injuries_to_db(session, non_espn_league, 2026)
 

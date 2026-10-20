@@ -8,7 +8,7 @@ injury/note updates never require re-running the slower league-wide fit.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,6 +33,7 @@ class TeamInjuries:
     entries: list[InjuryEntry]
     sources: list[str]  # parallel list: "manual" | "api" | "chat" per entry, for dashboard display
     expected_return_dates: list[dt.date | None]  # parallel list, for display
+    notes: list[str] = field(default_factory=list)  # parallel list: e.g. "FPL: Ankle injury - Expected back 24 Oct"
 
 
 def load_latest_params(session: Session, league_code: str) -> DixonColesParams | None:
@@ -72,6 +73,7 @@ def get_injuries_for_team(
     entries: list[InjuryEntry] = []
     sources: list[str] = []
     expected_return_dates: list[dt.date | None] = []
+    notes: list[str] = []
     for m in manual:
         entries.append(
             InjuryEntry(
@@ -82,6 +84,7 @@ def get_injuries_for_team(
         )
         sources.append("manual")
         expected_return_dates.append(None)
+        notes.append(m.note or "")
     for row in other_rows:
         entries.append(
             InjuryEntry(
@@ -92,9 +95,10 @@ def get_injuries_for_team(
         )
         sources.append(row.source)
         expected_return_dates.append(row.expected_return_date)
+        notes.append(row.note or "")
 
     return TeamInjuries(
-        entries=entries, sources=sources, expected_return_dates=expected_return_dates
+        entries=entries, sources=sources, expected_return_dates=expected_return_dates, notes=notes
     )
 
 

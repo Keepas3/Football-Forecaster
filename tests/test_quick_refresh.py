@@ -185,11 +185,26 @@ def test_full_refresh_of_an_espn_league_is_unchanged(monkeypatch):
 
 def test_quick_refresh_of_a_football_data_league_skips_only_injuries(monkeypatch):
     calls = _record_calls(monkeypatch)
+    laliga = League(code="LALIGA", name="La Liga", csv_code="SP1", seasons=["2627"])
 
-    result = refresh.refresh_league(CSV_LEAGUE, quick=True)
+    result = refresh.refresh_league(laliga, quick=True)
 
     assert [n for n, _ in calls] == ["fixtures_fd"]
     assert result.fixtures_synced == 7 and result.injuries_synced == 0
+
+
+def test_quick_refresh_of_the_premier_league_also_pulls_its_injuries_before_locking_in_predictions(monkeypatch):
+    _record_calls(monkeypatch)
+    order = []
+    monkeypatch.setattr(refresh, "load_latest_params", lambda *a, **k: order.append("predictions") or None)
+    monkeypatch.setattr(
+        refresh.injuries_module, "sync_injuries_to_db", lambda *a, **k: order.append("injuries") or (20, 0)
+    )
+
+    result = refresh.refresh_league(CSV_LEAGUE, quick=True)  # CSV_LEAGUE is the Premier League
+
+    assert result.injuries_synced == 20
+    assert order == ["injuries", "predictions"]
 
 
 # --- the change fingerprint -------------------------------------------------------------

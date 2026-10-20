@@ -59,7 +59,7 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
     `quick=True` is the light version for the frequent GitHub Actions run
     that keeps results and the Track Record current: ESPN leagues read the
     scoreboard for recent results and a short fixture window (a few requests
-    instead of one per team), and the slow injury sync is skipped. The
+    instead of one per team), and the slow injury sync is skipped (the Premier League's single-request feed still runs). The
     football-data.org leagues are already one request each, so they run as
     usual. The daily full refresh still does everything.
     """
@@ -109,16 +109,23 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
             except (MissingApiKey, requests.RequestException) as exc:
                 result.results_error = str(exc)
 
+    # Injuries first, so predictions locked in below already count them. The slow
+    # per-team ESPN sync is for the full refresh only; the Premier League's feed
+    # is a single cached request, so it runs in the quick refresh too (injury
+    # news moves through the week, not once a day).
+    if not quick or league.code in injuries_module.FPL_LEAGUES:
+        try:
+            with session_scope() as session:
+                result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
+                    session, league, season_year=dt.date.today().year
+                )
+        except requests.RequestException as exc:
+            result.injuries_error = str(exc)
+
     with session_scope() as session:
         params = load_latest_params(session, league.code)
         if params is not None:
             result.snapshots_created = snapshot_upcoming_predictions(session, league, params)
             result.probabilities_backfilled = backfill_prediction_probabilities(session, league, params)
-
-    if not quick:
-        with session_scope() as session:
-            result.injuries_synced, result.injuries_skipped = injuries_module.sync_injuries_to_db(
-                session, league, season_year=dt.date.today().year
-            )
 
     return result

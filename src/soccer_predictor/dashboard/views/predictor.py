@@ -27,6 +27,7 @@ from soccer_predictor.dashboard.components import (
     fixture_columns_with_kickoff_first,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
+    injury_line,
     format_kickoff,
     leaderboard_dataframe,
     league_option_label,
@@ -442,14 +443,13 @@ def render() -> None:
 
             any_injuries_shown = True
             st.markdown(f"**{team_name}**")
-            for entry, source, return_date in zip(
-                team_injuries.entries, team_injuries.sources, team_injuries.expected_return_dates
+            for entry, source, return_date, note in zip(
+                team_injuries.entries,
+                team_injuries.sources,
+                team_injuries.expected_return_dates,
+                team_injuries.notes,
             ):
-                return_note = f", est. return {return_date}" if return_date else ""
-                st.write(
-                    f"- {entry.player_name} ({entry.position}, weight={entry.importance_weight:.2f}) "
-                    f"- source: {source}{return_note}"
-                )
+                st.write(injury_line(entry, source, return_date, note))
             adj_attack, adj_defense = adjust_strength(
                 params.attack[team_id], params.defense[team_id], team_injuries.entries
             )
@@ -459,17 +459,7 @@ def render() -> None:
             )
 
         if not any_injuries_shown:
-            if league.data_source == "espn":
-                st.info(
-                    "No injuries on record. Add entries to config/injuries.yaml, or run "
-                    f"`uv run python scripts/refresh_live_data.py {league.code}` to pull "
-                    "best-effort data from ESPN."
-                )
-            else:
-                st.info(
-                    "No injuries on record. This competition has no automatic injury source "
-                    "-- add entries to config/injuries.yaml, or use the Notes tab below."
-                )
+            st.caption("No injuries on record.")
 
     with notes_tab:
         st.caption(
