@@ -296,10 +296,51 @@ def test_match_detail_query_params_round_trip():
     }
 
 
-def test_tables_are_tall_enough_to_show_every_row_up_to_a_cap():
-    assert view.full_height(0) == 38
-    assert view.full_height(17) == 35 * 18 + 3  # the whole team-stats table, no inner scrolling
-    assert view.full_height(500) == view.MAX_TABLE_HEIGHT_PX
+def test_match_tables_are_plain_page_tables_that_keep_all_their_text():
+    from streamlit.testing.v1 import AppTest
+
+    def app():
+        import pandas as pd
+
+        from soccer_predictor.dashboard.views import match_detail
+
+        long_text = "3 shots on target, 1 goal, 2 assists, 4 fouls, 1 yellow card, subbed off 67'"
+        frame = pd.DataFrame([{"#": 9, "Player": "A. Striker", "Pos": "F", "Match": long_text}])
+        match_detail.render_table(frame)  # a DataFrame
+        match_detail.render_table(frame.style.apply(lambda _: frame.map(lambda v: ""), axis=None))  # and a Styler
+
+    at = AppTest.from_function(app, default_timeout=60).run()
+    assert not at.exception
+    # Not st.dataframe (a canvas that clips long cells and can't be scrolled on a phone).
+    assert len(at.dataframe) == 0 and len(at.table) == 2
+    assert all("3 shots on target, 1 goal" in t.value["Match"].iloc[0] for t in at.table)
+
+
+def test_match_tables_show_feed_text_as_text_not_markdown():
+    import pandas as pd
+
+    hostile = "[free money](http://evil.example) ![x](http://evil.example/p.png) **bold**"
+    frame = pd.DataFrame([{"#": 7, "Player": hostile, "Pos": None, "Match": "1 goal"}])
+    shown = view.table_styler(frame).to_html()  # the text st.table is given to draw
+    # Every markdown character is escaped, "#" (a heading in markdown) survives as a column title,
+    # a missing value is blank rather than "None", and the index column is gone.
+    assert "\\[free money\\]\\(http" in shown and "\\!\\[x\\]" in shown and "\\*\\*bold\\*\\*" in shown
+    assert ">\\#<" in shown and "None" not in shown and "nan" not in shown
+    assert shown.count("<th ") == 4  # the four column titles, no index
+    # Short columns can be kept on one line ("CD-L" must not break after the hyphen).
+    one_line = view.table_styler(frame, one_line=("#", "Pos")).to_html()
+    assert one_line.count("white-space: nowrap") >= 1 and "white-space" not in shown
+    # A Styler (the team stats colouring) keeps its colours and has its cells escaped too.
+    coloured = frame.style.apply(lambda _: pd.DataFrame("color: red", index=frame.index, columns=frame.columns), axis=None)
+    assert "color: red" in view.table_styler(coloured).to_html() and "\\[free money\\]" in view.table_styler(coloured).to_html()
+
+
+def test_team_stats_titles_are_escaped_because_they_are_team_names_from_espn():
+    detail = espn_client.parse_match_detail("1", _summary())
+    detail.home.name = "St. Pauli [live](http://evil.example)"
+    html = view.table_styler(view.team_stats_styled(detail)).to_html()
+    assert "\\[live\\]\\(http" in html and "[live](" not in html
+    assert "color: #2ea043" in html  # still coloured
 
 
 def test_compare_stat_marks_the_stronger_side_and_flips_for_fouls_and_cards():
@@ -386,7 +427,41 @@ def test_the_back_button_names_the_team_page_when_the_visit_came_from_one(monkey
     assert "← Back to Switzerland" in labels and not any("UEFA Nations League" in label for label in labels)
 
 
-def test_the_back_button_goes_to_the_league_when_there_is_no_team_or_it_is_from_another_league(monkeypatch):
-    for team in (None, "1", "999"):  # none; an EPL team; an unknown team
+def test_the_back_button_goes_to_the_league_when_there_is_no_known_team(monkeypatch):
+    for team in (None, "999"):  # none; an unknown team
         labels = [b.label for b in _match_page_with_back(monkeypatch, team).button]
         assert "← Back to UEFA Nations League" in labels, team
+
+
+def test_the_back_button_returns_to_a_team_from_another_competition(monkeypatch):
+    # A La Liga club's Champions League match: the team (EPL here) is not in the match's league.
+    labels = [b.label for b in _match_page_with_back(monkeypatch, "1").button]
+    assert "← Back to Arsenal" in labels
+
+
+def test_a_players_plays_give_the_minute_of_each_goal_assist_card_and_substitution():
+    def play(minute, *flags):
+        return {"clock": {"displayValue": minute}, **{flag: True for flag in flags}}
+
+    entries = [
+        {
+            "athlete": {"displayName": "Busy Player"}, "starter": True, "jersey": "9",
+            "plays": [
+                play("23'", "scoringPlay", "didScore"),
+                play("45'", "scoringPlay", "didScore", "penaltyKick"),
+                play("61'", "scoringPlay", "didAssist"),
+                play("70'", "yellowCard"),
+                play("90'+2'", "redCard"),
+                play("90'+3'", "substitution"),
+                play("30'", "scoringPlay", "didScore", "ownGoal"),  # an own goal is not one of his goals
+                play("12'", "penaltyKick"),  # a missed penalty is nothing to mark
+                {"clock": {}, "didScore": True},  # no minute, nothing to show
+            ],
+        },
+        {"athlete": {"displayName": "Quiet Player"}, "starter": True, "jersey": "1", "plays": []},
+    ]
+    busy, quiet = espn_client._parse_lineup_players(entries)
+    assert busy.event_minutes == {
+        "goal": ["23'", "45'"], "assist": ["61'"], "yellow": ["70'"], "red": ["90'+2'"], "sub": ["90'+3'"],
+    }
+    assert quiet.event_minutes == {}

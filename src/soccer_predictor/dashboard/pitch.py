@@ -99,29 +99,52 @@ def _label(name: str) -> str:
     return (words[-1] if words else name).upper()[:12]
 
 
-def _badges(player: LineupPlayer) -> str:
-    """Tiny markers on a player's circle: goals, assists, cards, and coming off. The
-    subbed-off arrow is bigger and a strong red with a white outline so it
-    stays readable against the grass."""
-    marks = []  # (text, colour, font size, extra attributes)
+def short_minute(label: str) -> str:
+    """ESPN's "90'+3'" as "90+3'"."""
+    return label.replace("'+", "+")
+
+
+MINUTE_CHAR_WIDTH = 6.9  # about how wide one character of the minute text is
+MINUTE_GAP = RADIUS + 7  # from the player's centre to where the minutes start
+
+
+def _badges(player: LineupPlayer, x: float) -> str:
+    """Tiny markers beside a player's circle (centred at `x` across the pitch): goals,
+    assists, cards, and coming off, each with the minute it happened when ESPN gave one.
+    The subbed-off arrow is bigger and a strong red with a white outline so it stays
+    readable against the grass. Normally on the right; on the left for a player so near the
+    right edge that the minutes would run off the pitch."""
+    marks = []  # (icon, colour, font size, extra attributes, minute labels)
+    minutes = player.event_minutes
     if player.stats.get("totalGoals"):
-        goals = player.stats["totalGoals"]
-        marks.append(("⚽" if goals == 1 else f"⚽{goals}", "#ffffff", 12, ""))
+        goals, times = player.stats["totalGoals"], minutes.get("goal", [])
+        marks.append(("⚽" if goals == 1 or len(times) == goals else f"⚽{goals}", "#ffffff", 12, "", times))
     if player.stats.get("goalAssists"):
-        assists = player.stats["goalAssists"]
-        marks.append(("👟" if assists == 1 else f"👟{assists}", "#ffffff", 12, ""))
+        assists, times = player.stats["goalAssists"], minutes.get("assist", [])
+        marks.append(("👟" if assists == 1 or len(times) == assists else f"👟{assists}", "#ffffff", 12, "", times))
     if player.stats.get("redCards"):
-        marks.append(("■", "#e5342f", 12, ""))
+        marks.append(("■", "#e5342f", 12, "", minutes.get("red", [])))
     elif player.stats.get("yellowCards"):
-        marks.append(("■", "#f2c200", 12, ""))
+        marks.append(("■", "#f2c200", 12, "", minutes.get("yellow", [])))
     if player.subbed_out:
-        marks.append(("↓", "#c62828", 20, ' font-weight="900" stroke="#ffffff" stroke-width="3" paint-order="stroke"'))
+        arrow = ' font-weight="900" stroke="#ffffff" stroke-width="3" paint-order="stroke"'
+        marks.append(("↓", "#c62828", 20, arrow, [player.sub_minute] if player.sub_minute else []))
+    labels = [" ".join(short_minute(time) for time in times) for *_, times in marks]
+    longest = max((len(label) for label in labels), default=0)
+    mirror = x + MINUTE_GAP + longest * MINUTE_CHAR_WIDTH > VIEW_WIDTH - 6
+    sign = -1 if mirror else 1
     parts, y = [], -RADIUS + 8
-    for text, colour, size, extra in marks:
+    for (icon, colour, size, extra, times), label in zip(marks, labels):
         parts.append(
-            f'<text x="{RADIUS - 2}" y="{y}" font-size="{size}" fill="{colour}" text-anchor="middle"{extra}>'
-            f"{html.escape(text)}</text>"
+            f'<text x="{sign * (RADIUS - 2)}" y="{y}" font-size="{size}" fill="{colour}" text-anchor="middle"{extra}>'
+            f"{html.escape(icon)}</text>"
         )
+        if label:
+            parts.append(
+                f'<text x="{sign * MINUTE_GAP}" y="{y - 1 - (size - 12) * 0.4:.1f}" font-size="12" font-weight="700" '
+                f'fill="#ffffff" stroke="#0b1d3a" stroke-width="3" stroke-linejoin="round" paint-order="stroke" '
+                f'text-anchor="{"end" if mirror else "start"}" font-family="sans-serif">{html.escape(label)}</text>'
+            )
         y += size + 3
     return "".join(parts)
 
@@ -153,6 +176,7 @@ def pitch_svg(team: TeamMatchInfo) -> str:
     ]
 
     outfield_lines = len(lines) - 1
+    badge_layers = []  # drawn after every player, so a neighbour's circle never covers a minute
     for row, players in enumerate(lines):
         if row == 0:
             y = GOALKEEPER_Y
@@ -170,8 +194,11 @@ def pitch_svg(team: TeamMatchInfo) -> str:
                 f'font-family="sans-serif">{number}</text>'
                 f'<rect x="-40" y="{RADIUS + 4}" width="80" height="18" rx="9" fill="#e9ecef" opacity="0.92"/>'
                 f'<text y="{RADIUS + 17}" font-size="11" font-weight="700" fill="#2b2f36" text-anchor="middle" '
-                f'font-family="sans-serif">{html.escape(_label(player.name))}</text>'
-                f"{_badges(player)}</g>"
+                f'font-family="sans-serif">{html.escape(_label(player.name))}</text></g>'
             )
+            badges = _badges(player, x)
+            if badges:
+                badge_layers.append(f'<g transform="translate({x:.1f} {y:.1f})">{badges}</g>')
+    parts += badge_layers
     parts.append("</svg>")
     return "".join(parts)

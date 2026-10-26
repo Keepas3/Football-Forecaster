@@ -31,10 +31,9 @@ def team_detail_page() -> st.Page:
     # clicking a team's row (Leagues page) or a fixture's team name, never
     # picked from the nav directly, so a visible sidebar entry was a dead
     # end (no team_id in the URL yet). st.switch_page still works against a
-    # hidden page; only its sidebar link disappears.
-    return st.Page(
-        team_detail.render, title="Team Detail", icon="👕", url_path="team_detail", visibility="hidden"
-    )
+    # hidden page; only its sidebar link disappears. No icon: a page_link to
+    # this page (a team's name on the match page) would otherwise show it.
+    return st.Page(team_detail.render, title="Team Detail", url_path="team_detail", visibility="hidden")
 
 
 def match_detail_page() -> st.Page:

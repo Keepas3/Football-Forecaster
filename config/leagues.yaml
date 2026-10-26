@@ -87,6 +87,7 @@ leagues:
   # none of them is a single nation's competition.
   - code: WC
     name: FIFA World Cup
+    team_type: national
     espn_league_slug: fifa.world  # match detail only (lineups/stats); data still comes from the source below
     api_competition_id: 2000
     # Historical match + goal-scorer data (1930-2022) comes from a static
@@ -129,6 +130,7 @@ leagues:
       - {start: 25, end: 36, kind: relegation, label: "Eliminated"}
   - code: EURO
     name: European Championship
+    team_type: national
     espn_league_slug: uefa.euro  # match detail only (lineups/stats); data still comes from the source below
     news_query: UEFA European Championship
     api_competition_id: 2018
@@ -162,6 +164,7 @@ leagues:
   # edition (same reasoning as the World Cup's missing zones).
   - code: NL
     name: UEFA Nations League
+    team_type: national
     news_query: UEFA Nations League
     data_source: espn
     espn_league_slug: uefa.nations
@@ -187,6 +190,7 @@ leagues:
   # its 51 fixtures and groups listed). ESPN has nothing for 2000/2004.
   - code: ASIA
     name: AFC Asian Cup
+    team_type: national
     news_query: AFC Asian Cup
     data_source: espn
     espn_league_slug: afc.asian.cup

@@ -5,34 +5,36 @@ predictions, recent results, and injuries. Reached from League Detail.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 
+import pandas as pd
 import streamlit as st
 
 from soccer_predictor.config import load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
+    FIXTURE_PARAM,
     HOME_WIN_COLUMN,
+    FixtureRef,
+    align_rows,
     compute_top_scorer_and_assister,
-    fixture_columns_with_kickoff_first,
-    fixture_percent_column_config,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
     injury_line,
+    fixtures_table_html,
     format_kickoff,
     live_sync_requirement_note,
-    render_head_to_head,
+    parse_fixture_key,
     render_news_section,
     render_player_badges,
-    render_prediction_breakdown,
     render_star_players,
     render_team_facts,
     render_team_rating_breakdown,
-    style_fixture_predictions,
-    style_match_results,
+    results_table_html,
     timezone_selector,
     youtube_search_url,
 )
-from soccer_predictor.dashboard.views.match_detail import render_match_detail_button
+from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
@@ -49,13 +51,14 @@ from soccer_predictor.ingest.understat_client import (
 )
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
 from soccer_predictor.model.injury_adjustment import adjust_strength
-from soccer_predictor.model.team_facts import compute_head_to_head, compute_team_facts
+from soccer_predictor.model.team_facts import compute_team_facts
 from soccer_predictor.prediction.service import (
     get_injuries_for_team,
     load_latest_params,
     predict_fixture,
 )
 from soccer_predictor.storage.db import session_scope
+from soccer_predictor.storage.team_links import fixtures_for_teams, linked_teams, matches_for_teams
 from soccer_predictor.storage.repository import (
     fixtures_for_team,
     locked_predictions_for_league,
@@ -99,6 +102,69 @@ def _parse_team_id() -> int | None:
         return int(raw)
     except ValueError:
         return None
+
+
+@dataclass
+class OtherCompetitions:
+    """This team's games in the other competitions the app tracks (see
+    storage/team_links.py), for the page's "Include other competitions" toggle."""
+
+    matches: pd.DataFrame
+    fixtures: pd.DataFrame
+    names_by_league: dict[str, dict[int, str]]
+    names: list[str]  # competition names that have any game, for the toggle's label
+
+    @property
+    def has_games(self) -> bool:
+        return bool(self.names)
+
+
+def _other_competitions(team_id: int, leagues: dict, start: dt.date, end: dt.date) -> OtherCompetitions:
+    with session_scope() as session:
+        team = team_by_id(session, team_id)
+        linked = linked_teams(session, team, leagues) if team is not None else []
+        matches = matches_for_teams(session, linked)
+        fixtures = fixtures_for_teams(session, linked, start, end)
+        codes = sorted(set(matches["league_code"]) | set(fixtures["league_code"]))
+        names_by_league = {code: teams_for_league(session, code) for code in codes}
+    return OtherCompetitions(
+        matches=matches,
+        fixtures=fixtures,
+        names_by_league=names_by_league,
+        names=[leagues[code].name for code in codes if code in leagues],
+    )
+
+
+def _schedule_entries(session, frame, league_code, params, names, locked_predictions, tz, match_details):
+    """(table row, FixtureRef) for each fixture in `frame`, a competition's
+    upcoming matches. Predicted with that competition's own model; a competition
+    with no model (the Champions League) gets the match with the prediction
+    columns left blank. `match_details` says whether that competition has a match
+    details page to link the kickoff to."""
+    entries = []
+    for row in frame.itertuples(index=False):
+        home_name = names.get(row.home_team_id, f"team#{row.home_team_id}")
+        away_name = names.get(row.away_team_id, f"team#{row.away_team_id}")
+        if params is not None:
+            prediction = predict_fixture(
+                session, params, row.home_team_id, row.away_team_id, home_name, away_name, fixture_date=row.date
+            )
+            fixture_row = fixture_prediction_row(
+                home_name,
+                away_name,
+                prediction,
+                locked_predictions.get((row.date, row.home_team_id, row.away_team_id)),
+            )
+        else:
+            fixture_row = {"Home": home_name, "Away": away_name}
+        fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
+        entries.append(
+            (
+                fixture_row,
+                FixtureRef(row.home_team_id, row.away_team_id, home_name, away_name, row.date, league_code, match_details),
+            )
+        )
+    return entries
 
 
 def render() -> None:
@@ -223,12 +289,22 @@ def render() -> None:
         st.write(f"Attack {attack_display} · Defense **{params.defense[team_id]:.2f}** (lower is better)")
         render_team_rating_breakdown(params, team_id, team_canonical_name, recent_df)
 
+    other = _other_competitions(team_id, leagues, dt.date.today(), dt.date.today() + dt.timedelta(days=60))
+    include_other = False
+    if other.has_games:
+        include_other = st.toggle(
+            f"Include other competitions ({', '.join(other.names)})",
+            key=f"team_other_comps_{team_id}",
+            help="Adds this team's games in the other competitions this app tracks to the schedule and results below.",
+        )
+
     st.subheader("Upcoming schedule")
     start, end = dt.date.today(), dt.date.today() + dt.timedelta(days=60)
     with session_scope() as session:
         fixtures_df = fixtures_for_team(session, team_id, start, end)
 
-    if fixtures_df.empty:
+    other_fixtures_df = other.fixtures if include_other else fixtures_df.iloc[0:0]
+    if fixtures_df.empty and other_fixtures_df.empty:
         if league is not None and league.season_display == "single_year":
             st.info(
                 f"No scheduled fixtures in the next 60 days - {league.name} runs as a "
@@ -242,142 +318,137 @@ def render() -> None:
             )
     else:
         tz = timezone_selector()
-        rows = []
-        row_meta = []  # parallel to rows: (home_id, away_id, home_name, away_name, date)
+        entries = []  # (row dict, FixtureRef), in date order
+        params_by_league = {team_league_code: params}
         with session_scope() as session:
-            locked_predictions = locked_predictions_for_league(session, team_league_code)
-            for row in fixtures_df.sort_values("date").itertuples(index=False):
-                home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
-                away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
-                if params is not None:
-                    prediction = predict_fixture(
-                        session,
-                        params,
-                        row.home_team_id,
-                        row.away_team_id,
-                        home_name,
-                        away_name,
-                        fixture_date=row.date,
-                    )
-                    fixture_row = fixture_prediction_row(
-                        home_name,
-                        away_name,
-                        prediction,
-                        locked_predictions.get((row.date, row.home_team_id, row.away_team_id)),
-                    )
-                else:
-                    fixture_row = {"Home": home_name, "Away": away_name}
-                fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
-                rows.append(fixture_row)
-                row_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
-        column_order = fixture_columns_with_kickoff_first(rows[0])
-        has_predictions = HOME_WIN_COLUMN in rows[0]
-        schedule_event = st.dataframe(
-            style_fixture_predictions(rows) if has_predictions else rows,
-            use_container_width=True,
-            column_order=column_order,
-            column_config=fixture_percent_column_config(),
-            on_select="rerun" if has_predictions else "ignore",
-            selection_mode="single-row",
-            key=f"team_detail_schedule_table_{team_id}",
-        )
-        if has_predictions:
-            st.caption(
-                "Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction. "
-                + PREDICTION_STATUS_NOTE
+            entries += _schedule_entries(
+                session, fixtures_df, team_league_code, params, team_names,
+                locked_predictions_for_league(session, team_league_code), tz,
+                bool(league and league.espn_league_slug),
             )
-            selected = schedule_event.selection.rows if schedule_event and schedule_event.selection else []
-            if selected:
-                sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]
-                if league is not None:
-                    render_match_detail_button(
-                        league,
-                        sel_home_id,
-                        sel_away_id,
-                        sel_date,
-                        key=f"match_detail_btn_fixture_{team_id}",
-                        from_team_id=team_id,
-                        season=st.query_params.get("season"),
+            if include_other:
+                for code in sorted(set(other_fixtures_df["league_code"])):
+                    params_by_league[code] = load_latest_params(session, code)
+                    entries += _schedule_entries(
+                        session,
+                        other_fixtures_df[other_fixtures_df["league_code"] == code],
+                        code,
+                        params_by_league[code],
+                        other.names_by_league[code],
+                        locked_predictions_for_league(session, code),
+                        tz,
+                        bool(leagues[code].espn_league_slug),
                     )
-                is_this_team_home = sel_home_id == team_id
-                opponent_id = sel_away_id if is_this_team_home else sel_home_id
-                opponent_name = sel_away_name if is_this_team_home else sel_home_name
+        entries.sort(key=lambda entry: entry[1].date)
+        rows = [entry[0] for entry in entries]
+        refs = [entry[1] for entry in entries]
+        has_predictions = any("Predicted score" in row for row in rows)
+        if include_other:
+            for row, ref in zip(rows, refs):
+                row["Competition"] = leagues[ref.league_code].name
+        rows = align_rows(rows)
 
-                h2h = compute_head_to_head(team_id, opponent_id, recent_df)
-                if h2h is not None:
-                    render_head_to_head(h2h, team_canonical_name, opponent_name)
-                else:
-                    st.caption(f"No history on record against {opponent_name} yet.")
+        # The match whose workings are open: named in the URL by the predicted-score
+        # link, and only ever one of the rows shown that has a prediction.
+        selected_index = None
+        if st.query_params.get(FIXTURE_PARAM) is not None:
+            wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
+            selected_index = next(
+                (
+                    i
+                    for i, ref in enumerate(refs)
+                    if wanted == (ref.home_id, ref.away_id, ref.date) and rows[i].get("Predicted score") is not None
+                ),
+                None,
+            )
+            if selected_index is None:
+                del st.query_params[FIXTURE_PARAM]
 
-                with session_scope() as session:
-                    prediction = predict_fixture(
-                        session, params, sel_home_id, sel_away_id, sel_home_name, sel_away_name, fixture_date=sel_date
-                    )
-                    render_prediction_breakdown(
-                        prediction, sel_home_name, sel_away_name, session, league, sel_home_id, sel_away_id
-                    )
+        st.markdown(
+            fixtures_table_html(
+                rows,
+                refs,
+                team_league_code,
+                season=st.query_params.get("season") or "",
+                tz_name=tz.key,
+                selected=selected_index,
+                team_id=team_id,
+            ),
+            unsafe_allow_html=True,
+        )
+        clicks = ["a team's name for its page"]
+        if any(ref.match_details for ref in refs):
+            clicks.append("the kickoff for the match details")
+        if has_predictions:
+            clicks.append("the predicted score to see how it was calculated")
+        note = "Click " + (", ".join(clicks[:-1]) + " or " + clicks[-1] if len(clicks) > 1 else clicks[0]) + "."
+        st.caption(note + (" " + PREDICTION_STATUS_NOTE if has_predictions else ""))
+        if selected_index is not None:
+            ref = refs[selected_index]
+            render_fixture_workings(
+                ref, params_by_league[ref.league_code], leagues[ref.league_code], f"close_fixture_breakdown_{team_id}"
+            )
 
     st.subheader("Recent results")
-    if recent_df.empty:
+    results_all = recent_df.assign(league_code=team_league_code, team_id_here=team_id)
+    if include_other and not other.matches.empty:
+        results_all = (
+            pd.concat([results_all, other.matches], ignore_index=True)
+            .sort_values("date", ascending=False, kind="stable")
+            .reset_index(drop=True)
+        )
+    if results_all.empty:
         st.caption("No historical results on record for this team.")
     else:
         result_rows = []
-        result_meta = []  # parallel to result_rows: (date, home_id, away_id)
+        result_refs: list[FixtureRef] = []  # parallel to result_rows
         more_key = f"team_results_more_{team_id}"
         show_more = bool(st.session_state.get(more_key))
         shown_count = RECENT_RESULTS_MAX if show_more else RECENT_RESULTS_DEFAULT
-        for row in recent_df.head(shown_count).itertuples(index=False):
-            is_home = row.home_team_id == team_id
+        for row in results_all.head(shown_count).itertuples(index=False):
+            names_here = team_names if row.league_code == team_league_code else other.names_by_league[row.league_code]
+            is_home = row.home_team_id == row.team_id_here
             opponent_id = row.away_team_id if is_home else row.home_team_id
-            opponent_name = team_names.get(opponent_id, f"team#{opponent_id}")
+            opponent_name = names_here.get(opponent_id, f"team#{opponent_id}")
             goals_for = row.home_goals if is_home else row.away_goals
             goals_against = row.away_goals if is_home else row.home_goals
             outcome = "W" if goals_for > goals_against else ("D" if goals_for == goals_against else "L")
             home_name, away_name = (
                 (team_canonical_name, opponent_name) if is_home else (opponent_name, team_canonical_name)
             )
-            result_rows.append(
+            result_row = {"Date": row.date}
+            if include_other:
+                result_row["Competition"] = leagues[row.league_code].name
+            result_row.update(
                 {
-                    "Date": row.date,
                     "Opponent": f"{'vs' if is_home else '@'} {opponent_name}",
                     "Score": f"{goals_for}-{goals_against}",
                     "Result": outcome,
                     "Watch": youtube_search_url(home_name, away_name, row.date),
                 }
             )
-            result_meta.append((row.date, row.home_team_id, row.away_team_id))
-        has_match_detail = league is not None and bool(league.espn_league_slug)
-        results_event = st.dataframe(
-            style_match_results(result_rows),
-            use_container_width=True,
-            column_config={"Watch": st.column_config.LinkColumn("Watch", display_text="▶ Highlights")},
-            on_select="rerun" if has_match_detail else "ignore",
-            selection_mode="single-row",
-            key=f"team_detail_results_table_{team_id}",
+            result_rows.append(result_row)
+            result_refs.append(
+                FixtureRef(
+                    row.home_team_id, row.away_team_id, home_name, away_name, row.date, row.league_code,
+                    bool(getattr(leagues.get(row.league_code), "espn_league_slug", None)),
+                )
+            )
+        st.markdown(
+            results_table_html(result_rows, result_refs, team_id, season=st.query_params.get("season") or ""),
+            unsafe_allow_html=True,
         )
-        if len(recent_df) > RECENT_RESULTS_DEFAULT:
+        if len(results_all) > RECENT_RESULTS_DEFAULT:
             toggle_label = (
                 f"Show fewer results"
                 if show_more
-                else f"Show more results (up to {min(len(recent_df), RECENT_RESULTS_MAX)})"
+                else f"Show more results (up to {min(len(results_all), RECENT_RESULTS_MAX)})"
             )
             if st.button(toggle_label, key=f"team_results_toggle_{team_id}"):
                 st.session_state[more_key] = not show_more
                 st.rerun()
-        if has_match_detail:
-            st.caption("Click a result's row for lineups, team stats and the goals/cards timeline.")
-            selected_result = results_event.selection.rows if results_event and results_event.selection else []
-            if selected_result:
-                result_date, result_home_id, result_away_id = result_meta[selected_result[0]]
-                render_match_detail_button(
-                    league,
-                    result_home_id,
-                    result_away_id,
-                    result_date,
-                    key=f"match_detail_btn_{team_id}",
-                    from_team_id=team_id,
-                    season=st.query_params.get("season"),
-                )
+        if any(ref.match_details for ref in result_refs):
+            st.caption("Click a result for lineups, team stats and the goals/cards timeline.")
 
     st.subheader("Squad")
     if league is None:

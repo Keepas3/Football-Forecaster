@@ -491,6 +491,9 @@ class LineupPlayer:
     subbed_out: bool = False
     formation_place: int | None = None  # ESPN's slot number in the starting formation (1 = goalkeeper)
     sub_minute: str | None = None  # when he came on or went off, e.g. "64'" (only for a substitution)
+    # When each kind of thing happened to him, from his match plays: "goal" (not own
+    # goals), "assist", "yellow", "red", "sub" -> minute labels in order, e.g. ["23'", "90'+2'"].
+    event_minutes: dict[str, list[str]] = field(default_factory=dict)
     # ESPN stat name -> count, only for the stats in PLAYER_STAT_CHIPS and only
     # when non-zero.
     stats: dict[str, int] = field(default_factory=dict)
@@ -576,6 +579,29 @@ def _sub_minute(plays: list[dict] | None) -> str | None:
     return None
 
 
+def _play_minutes(plays: list[dict] | None) -> dict[str, list[str]]:
+    """Minute labels by kind (see LineupPlayer.event_minutes) from a player's match plays."""
+    minutes: dict[str, list[str]] = {}
+    for play in plays or []:
+        label = (play.get("clock") or {}).get("displayValue")
+        if not label:
+            continue
+        kinds = []
+        if play.get("didScore") and not play.get("ownGoal"):
+            kinds.append("goal")
+        if play.get("didAssist"):
+            kinds.append("assist")
+        if play.get("yellowCard"):
+            kinds.append("yellow")
+        if play.get("redCard"):
+            kinds.append("red")
+        if play.get("substitution"):
+            kinds.append("sub")
+        for kind in kinds:
+            minutes.setdefault(kind, []).append(label)
+    return minutes
+
+
 def _parse_lineup_players(roster: list[dict] | None) -> list[LineupPlayer]:
     players = []
     for entry in roster or []:
@@ -599,6 +625,7 @@ def _parse_lineup_players(roster: list[dict] | None) -> list[LineupPlayer]:
                 subbed_out=bool(entry.get("subbedOut")),
                 formation_place=_to_int(entry.get("formationPlace")),
                 sub_minute=_sub_minute(entry.get("plays")),
+                event_minutes=_play_minutes(entry.get("plays")),
                 stats=stats,
             )
         )

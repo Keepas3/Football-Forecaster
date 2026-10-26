@@ -6,6 +6,7 @@ import datetime as dt
 import html
 import re
 import urllib.parse
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -107,6 +108,15 @@ TIMEZONE_CHOICES = {
 }
 DEFAULT_TIMEZONE_LABEL = "Eastern (EST/EDT)"
 _TIMEZONE_SESSION_KEY = "display_timezone_label"
+# The chosen zone also lives in the URL (`tz=Europe/London`): the links in the
+# fixtures table reload the page, which starts a new session, and this is how the
+# choice survives that.
+TIMEZONE_QUERY_KEY = "tz"
+
+
+def _timezone_label_from_url() -> str:
+    zone = st.query_params.get(TIMEZONE_QUERY_KEY)
+    return next((label for label, name in TIMEZONE_CHOICES.items() if name == zone), DEFAULT_TIMEZONE_LABEL)
 
 
 def timezone_selector() -> ZoneInfo:
@@ -117,10 +127,11 @@ def timezone_selector() -> ZoneInfo:
     one control, shared across every fixtures table via session_state, so
     changing it anywhere updates the displayed kickoff time everywhere.
     """
-    st.session_state.setdefault(_TIMEZONE_SESSION_KEY, DEFAULT_TIMEZONE_LABEL)
+    st.session_state.setdefault(_TIMEZONE_SESSION_KEY, _timezone_label_from_url())
     label = st.selectbox(
         "Timezone", options=list(TIMEZONE_CHOICES.keys()), key=_TIMEZONE_SESSION_KEY
     )
+    st.query_params[TIMEZONE_QUERY_KEY] = TIMEZONE_CHOICES[label]
     return ZoneInfo(TIMEZONE_CHOICES[label])
 
 
@@ -159,7 +170,7 @@ MATCH_LINK_DISPLAY_TEXT = "🔎 Search"
 def selected_timezone() -> ZoneInfo:
     """The zone chosen in timezone_selector, without drawing another picker
     (for tables that only need to format dates in the user's zone)."""
-    label = st.session_state.get(_TIMEZONE_SESSION_KEY, DEFAULT_TIMEZONE_LABEL)
+    label = st.session_state.get(_TIMEZONE_SESSION_KEY) or _timezone_label_from_url()
     return ZoneInfo(TIMEZONE_CHOICES.get(label, TIMEZONE_CHOICES[DEFAULT_TIMEZONE_LABEL]))
 
 
@@ -670,6 +681,7 @@ def standings_table_html(
     league_code: str = "",
     name_filter: str = "",
     season: str = "",
+    tz_name: str = "",
 ) -> str:
     """A league table as HTML (a Streamlit dataframe can't put a tooltip on a
     single cell). Hovering a form square shows the game behind it -- "Spain vs
@@ -678,7 +690,8 @@ def standings_table_html(
     Positions come from the full `standings` order, so filtering with
     `name_filter` (case-insensitive substring) keeps each team's real rank.
     `season` is added to each team link so Team Detail's Back button returns to
-    the same season (the link reloads the page, which resets the picker).
+    the same season (the link reloads the page, which resets the picker); `tz_name`
+    likewise carries the chosen display timezone.
     Everything from the database or an API is HTML-escaped.
     """
     needle = name_filter.casefold()
@@ -692,6 +705,8 @@ def standings_table_html(
         team_url = f"/team_detail?league={urllib.parse.quote(league_code)}&team={standing.team_id}"
         if season:
             team_url += f"&season={urllib.parse.quote(season)}"
+        if tz_name:  # the team page shows kickoffs in the zone chosen here
+            team_url += f"&tz={urllib.parse.quote(tz_name, safe='/')}"
         squares = "".join(
             f'<span title="{html.escape(form_game_tooltip(game, result), quote=True)}">{_FORM_EMOJI[result]}</span>'
             for result, game in zip(standing.form, standing.form_games)
@@ -889,6 +904,8 @@ def _predicted_outcome_styles(row: pd.Series) -> pd.Series:
     # each other.
     home_goals = row["_predicted_home_goals"]
     away_goals = row["_predicted_away_goals"]
+    if pd.isna(home_goals) or pd.isna(away_goals):
+        return styles  # a match from a competition with no model: nothing predicted, nothing coloured
     if home_goals > away_goals:
         home_style, away_style = _WINNER_STYLE, _LOSER_STYLE
     elif away_goals > home_goals:
@@ -923,12 +940,26 @@ def style_match_results(rows: list[dict]):
     return df.style.apply(_result_style, axis=1)
 
 
+def align_rows(rows: list[dict]) -> list[dict]:
+    """Gives rows that don't all have the same keys the same columns (in the
+    order first seen), blank where a row lacks one -- used when one table mixes
+    matches that have a prediction with matches that don't."""
+    columns: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+    return [{column: row.get(column) for column in columns} for row in rows]
+
+
 def fixture_columns_with_kickoff_first(row: dict) -> list[str]:
     """Column order for a fixture_prediction_row dict once "Kickoff" has
-    been added: Kickoff first, then everything else -- except any hidden
-    `_`-prefixed key (see style_fixture_predictions), which never displays.
+    been added: Kickoff first (then "Competition", on a team's page that mixes
+    competitions), then everything else -- except any hidden `_`-prefixed key
+    (see style_fixture_predictions), which never displays.
     """
-    return ["Kickoff"] + [c for c in row if c != "Kickoff" and not c.startswith("_")]
+    leading = ["Kickoff"] + (["Competition"] if "Competition" in row else [])
+    return leading + [c for c in row if c not in leading and not c.startswith("_")]
 
 
 _HIDDEN_FIXTURE_COLUMNS = ["_predicted_home_goals", "_predicted_away_goals"]
@@ -951,11 +982,223 @@ def style_fixture_predictions(rows: list[dict]):
     styler = df.style.apply(_predicted_outcome_styles, axis=1)
     percent_columns = [c for c in PERCENT_COLUMNS if c in df.columns]
     if percent_columns:
-        styler = styler.format("{:.2f}", subset=percent_columns)
+        styler = styler.format("{:.2f}", subset=percent_columns, na_rep="-")
     present = [c for c in _HIDDEN_FIXTURE_COLUMNS if c in df.columns]
     if present:
         styler = styler.hide(axis="columns", subset=present)
     return styler
+
+
+class FixtureRef(NamedTuple):
+    """Which match a row of the upcoming-matches table is, for building its links."""
+
+    home_id: int
+    away_id: int
+    home_name: str
+    away_name: str
+    date: dt.date
+    # A team's page can list matches from several competitions: the competition this
+    # match is in ("" = the table's own) and whether it has a match details page
+    # (None = whatever the table says).
+    league_code: str = ""
+    match_details: bool | None = None
+
+
+# The URL parameter that opens one fixture's prediction workings under the table, and a
+# script that scrolls them into view once per page load (the predicted-score link reloads
+# the page at the top, and they sit below the table). Static text, no data in it; it
+# polls briefly because Streamlit draws the page in stages.
+FIXTURE_PARAM = "fixture"
+SCROLL_TO_BREAKDOWN_JS = """
+(function () {
+  var tries = 0;
+  var timer = setInterval(function () {
+    var target = document.querySelector('.st-key-fixture_breakdown');
+    tries += 1;
+    if (target) { target.scrollIntoView({block: 'start'}); clearInterval(timer); }
+    else if (tries > 40) { clearInterval(timer); }
+  }, 150);
+})();
+"""
+
+
+def fixture_key(ref: FixtureRef) -> str:
+    """The `fixture` URL parameter that selects a match: "<home id>-<away id>-<date>"."""
+    return f"{ref.home_id}-{ref.away_id}-{ref.date.isoformat()}"
+
+
+def parse_fixture_key(text: str | None) -> tuple[int, int, dt.date] | None:
+    """(home id, away id, date) from a `fixture` URL parameter, None if it isn't one."""
+    try:
+        home, away, day = (text or "").split("-", 2)
+        return int(home), int(away), dt.date.fromisoformat(day)
+    except ValueError:
+        return None
+
+
+FIXTURES_TABLE_CSS = """<style>
+.fb-fixtures-wrap{overflow-x:auto;margin:0.25rem 0 0.5rem;}
+table.fb-fixtures{width:100%;border-collapse:collapse;font-size:0.85rem;}
+table.fb-fixtures th{font-weight:600;opacity:0.7;text-align:left;padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.35);vertical-align:bottom;}
+table.fb-fixtures td{padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.18);text-align:left;vertical-align:top;}
+table.fb-fixtures th.num,table.fb-fixtures td.num{text-align:right;white-space:nowrap;}
+table.fb-fixtures td.kick{min-width:7rem;}
+table.fb-fixtures tr:hover td{background:rgba(128,128,128,0.10);}
+table.fb-fixtures tr.selected td{background:rgba(128,128,128,0.20);}
+table.fb-fixtures a{color:inherit;}
+table.fb-fixtures a.team{text-decoration:none;font-weight:600;}
+table.fb-fixtures a.team:hover,table.fb-fixtures a.kick:hover{text-decoration:underline;}
+table.fb-fixtures a.kick{text-decoration:none;}
+table.fb-fixtures a.score{white-space:nowrap;font-weight:600;text-decoration:underline dotted;}
+table.fb-fixtures td.nw,table.fb-fixtures a.watch{white-space:nowrap;}
+@media (max-width:640px){table.fb-fixtures{font-size:0.78rem;}table.fb-fixtures th,table.fb-fixtures td{padding:5px 4px;}table.fb-fixtures td.kick{min-width:5.5rem;}}
+</style>"""
+
+
+def _match_detail_href(league_code: str, ref: FixtureRef, team_id: int | None, season_part: str) -> str:
+    """The match details page's URL for `ref`. On a team's page (`team_id`), the page's Back
+    button returns to that team, in the season `season_part` ("&season=..." or "") names."""
+    href = (
+        f"/match_detail?league={urllib.parse.quote(league_code)}&home={ref.home_id}&away={ref.away_id}"
+        f"&date={ref.date.isoformat()}"
+    )
+    if team_id is not None:
+        href += f"&team={team_id}{season_part}"
+    return href
+
+
+def fixtures_table_html(
+    rows: list[dict],
+    refs: list[FixtureRef],
+    league_code: str,
+    season: str = "",
+    tz_name: str = "",
+    match_details: bool = False,
+    selected: int | None = None,
+    team_id: int | None = None,
+) -> str:
+    """The upcoming-matches table as HTML, so long names wrap (a Streamlit
+    dataframe clips them) and cells can be links:
+      * a team's name opens that team's page;
+      * the kickoff opens the match's details page (`match_details`, for leagues
+        that have one; a ref can say otherwise for its own match);
+      * the predicted score reloads this page with `fixture=` set, which shows
+        how that prediction was calculated under the table.
+    `rows` are fixture_prediction_row dicts with a "Kickoff" added, `refs` say which
+    match each one is, `selected` is the row whose details are open. `tz_name`
+    travels in the links so the chosen timezone survives the page reload.
+    `team_id` is set on a team's own page: it stays in the predicted-score links, and
+    the match details page then has a Back button to this team.
+    Everything from the database or an API is HTML-escaped."""
+    quoted_league = urllib.parse.quote(league_code)
+    season_part = f"&season={urllib.parse.quote(season)}" if season else ""
+    tz_part = f"&tz={urllib.parse.quote(tz_name, safe='/')}" if tz_name else ""
+    extra = season_part + tz_part
+    columns = fixture_columns_with_kickoff_first(rows[0])
+    head = "".join(f'<th class="num">{html.escape(c)}</th>' if c in PERCENT_COLUMNS else f"<th>{html.escape(c)}</th>" for c in columns)
+    body = []
+    for index, (row, ref) in enumerate(zip(rows, refs)):
+        home_goals, away_goals = row.get("_predicted_home_goals"), row.get("_predicted_away_goals")
+        if pd.isna(home_goals) or pd.isna(away_goals):
+            styles = ("", "")  # nothing predicted, nothing coloured
+        elif home_goals > away_goals:
+            styles = (_WINNER_STYLE, _LOSER_STYLE)
+        elif away_goals > home_goals:
+            styles = (_LOSER_STYLE, _WINNER_STYLE)
+        else:
+            styles = (_DRAW_STYLE, _DRAW_STYLE)
+        # A match from another competition links to that competition's pages; the page's
+        # season means nothing there, so it isn't carried over.
+        row_league = ref.league_code or league_code
+        quoted_row_league = urllib.parse.quote(row_league)
+        row_extra = extra if row_league == league_code else tz_part
+        row_match_details = match_details if ref.match_details is None else ref.match_details
+        team_href = {
+            "Home": f"/team_detail?league={quoted_row_league}&team={ref.home_id}{row_extra}",
+            "Away": f"/team_detail?league={quoted_row_league}&team={ref.away_id}{row_extra}",
+        }
+        cells = []
+        for column in columns:
+            value = row.get(column)
+            css = ' class="num"' if column in PERCENT_COLUMNS else ""
+            if column == "Kickoff":
+                text = html.escape(str(value))
+                if row_match_details:
+                    href = _match_detail_href(row_league, ref, team_id, season_part)
+                    text = (
+                        f'<a class="kick" href="{html.escape(href)}" target="_self" '
+                        f'title="Match details">{text}</a>'
+                    )
+                css = ' class="kick"'
+            elif column in ("Home", "Away"):
+                style = styles[0] if column == "Home" else styles[1]
+                text = (
+                    f'<a class="team" href="{html.escape(team_href[column])}" target="_self" '
+                    f'style="{style}">{html.escape(str(value))}</a>'
+                )
+            elif column == "Predicted score" and value is not None:
+                team_part = f"&team={team_id}" if team_id is not None else ""
+                href = (
+                    f"?league={quoted_league}{team_part}{extra}"
+                    f"&{FIXTURE_PARAM}={urllib.parse.quote(fixture_key(ref))}"
+                )
+                text = (
+                    f'<a class="score" href="{html.escape(href)}" target="_self" '
+                    f'title="How this was predicted">{html.escape(str(value))}</a>'
+                )
+            elif column in PERCENT_COLUMNS:
+                text = "-" if value is None or pd.isna(value) else f"{value:.2f}"
+            else:
+                text = "" if value is None else html.escape(str(value))
+            cells.append(f"<td{css}>{text}</td>")
+        selected_class = ' class="selected"' if index == selected else ""
+        body.append(f"<tr{selected_class}>{''.join(cells)}</tr>")
+    return (
+        f'{FIXTURES_TABLE_CSS}<div class="fb-fixtures-wrap"><table class="fb-fixtures">'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def results_table_html(rows: list[dict], refs: list[FixtureRef], team_id: int, season: str = "") -> str:
+    """A team's "Recent results" as HTML, so long names wrap and cells can be links: every
+    cell but the last opens that match's details page (lineups, team stats, timeline) -- for
+    a match in a competition that has one (`FixtureRef.match_details`) -- and the "Watch"
+    cell is a YouTube highlights search in a new tab. `rows` have "Date", "Opponent", "Score",
+    "Result" (W/D/L, coloured), optionally "Competition", and "Watch" (the URL); `refs` say
+    which match each is. `team_id` and `season` let the details page's Back button return to
+    this team. Everything from the database or an API is HTML-escaped."""
+    season_part = f"&season={urllib.parse.quote(season)}" if season else ""
+    columns = [c for c in rows[0] if c != "Watch"]
+    head = "".join(f"<th>{html.escape(c)}</th>" for c in columns) + "<th>Watch</th>"
+    body = []
+    for row, ref in zip(rows, refs):
+        href = _match_detail_href(ref.league_code, ref, team_id, season_part) if ref.match_details else None
+        cells = []
+        for column in columns:
+            text = html.escape(str(row.get(column, "")))
+            style = _RESULT_STYLE.get(row.get("Result", ""), "") if column == "Result" else ""
+            style_attr = f' style="{style}"' if style else ""
+            if href is not None:
+                text = (
+                    f'<a class="kick" href="{html.escape(href)}" target="_self" title="Match details"'
+                    f"{style_attr}>{text}</a>"
+                )
+            elif style:
+                text = f"<span{style_attr}>{text}</span>"
+            css = ' class="nw"' if column in ("Date", "Score", "Result") else ""
+            cells.append(f"<td{css}>{text}</td>")
+        watch = row.get("Watch")
+        cells.append(
+            f'<td><a class="watch" href="{html.escape(str(watch))}" target="_blank" rel="noopener noreferrer">'
+            "▶ Highlights</a></td>"
+            if watch
+            else "<td></td>"
+        )
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    return (
+        f'{FIXTURES_TABLE_CSS}<div class="fb-fixtures-wrap"><table class="fb-fixtures">'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
 
 
 _SQUAD_REFERENCE_HEIGHT = 180  # fixed + scrollable, regardless of squad size

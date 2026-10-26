@@ -293,3 +293,83 @@ def test_espn_team_ids_find_our_team_even_when_the_names_differ(session):
     team.espn_team_id = 465
     session.commit()
     assert view._find_team(session, NL, "Turkey", "465").id == team.id
+
+
+# --- team names link to the team's own page --------------------------------------------------
+
+
+def test_each_side_of_a_match_is_found_whichever_way_the_link_named_it(session):
+    home, away = get_or_create_team(session, "Arsenal", "EPL"), get_or_create_team(session, "Chelsea", "EPL")
+    session.commit()
+
+    by_id = view.match_teams(session, EPL, _resolved(home_team_id=home.id, away_team_id=away.id), None)
+    by_name = view.match_teams(session, EPL, _resolved(home_name="arsenal", away_name="CHELSEA"), None)  # live banner link
+    assert [t.id for t in by_id] == [t.id for t in by_name] == [home.id, away.id]
+    # A side we have no row for gets no link, but the other side still does.
+    unknown_home, known_away = view.match_teams(session, EPL, _resolved(home_name="Nobody FC", away_name="Chelsea"), None)
+    assert unknown_home is None and known_away.id == away.id
+
+
+def test_the_team_page_link_names_the_team_and_its_league(session):
+    team = get_or_create_team(session, "Arsenal", "EPL")
+    session.commit()
+    assert view.team_page_params(team) == {"league": "EPL", "team": str(team.id)}
+    assert view.team_page_params(None) is None
+
+
+def test_the_team_link_styling_is_static_text_aimed_at_page_links():
+    assert "stPageLink" in view.TEAM_LINK_CSS and "font-size" in view.TEAM_LINK_CSS
+    assert view.TEAM_LINK_CSS.startswith("<style>") and "<script" not in view.TEAM_LINK_CSS
+
+
+def _page_links(at):
+    return [(el.proto.label, el.proto.query_string) for el in at.get("page_link")]
+
+
+def test_a_team_name_is_a_link_to_its_page_and_plain_text_when_we_have_no_team():
+    from streamlit.testing.v1 import AppTest
+
+    def app():
+        import streamlit as st
+
+        from soccer_predictor.dashboard.views import match_detail
+
+        left, right = st.columns(2)
+        match_detail.render_team_name("Arsenal", {"league": "EPL", "team": "7"}, left)
+        match_detail.render_team_name("Nobody *FC*", None, right)
+
+    at = AppTest.from_function(app, default_timeout=60).run()
+    assert not at.exception
+    assert _page_links(at) == [("**Arsenal**", "league=EPL&team=7")]
+    assert not at.get("page_link")[0].proto.icon  # a page link shows its page's icon; the team page has none
+    assert [m.value for m in at.markdown] == ["**Nobody \\*FC\\***"]  # markdown in the name stays inert
+
+
+def test_the_match_header_and_both_lineups_link_each_team():
+    from streamlit.testing.v1 import AppTest
+
+    def app():
+        from types import SimpleNamespace
+
+        from soccer_predictor.dashboard.views import match_detail
+        from soccer_predictor.ingest.espn_client import TeamMatchInfo
+
+        home = TeamMatchInfo(espn_id="1", name="Arsenal", home_away="home", formation="4-3-3")
+        away = TeamMatchInfo(espn_id="2", name="Chelsea", home_away="away", formation=None)
+        detail = SimpleNamespace(
+            home=home, away=away, home_score=2, away_score=1, status_label="Full time", venue=None, city=None,
+            attendance=None, has_lineups=True, match_date=None,
+        )
+        params = ({"league": "EPL", "team": "1"}, None)  # no team row for the away side
+        resolved = match_detail.ResolvedMatch(home_name="Arsenal", away_name="Chelsea")
+        match_detail._render_header(detail, resolved, None, params)
+        match_detail._render_lineup(home, params[0])
+        match_detail._render_lineup(away, params[1])
+
+    at = AppTest.from_function(app, default_timeout=60).run()
+    assert not at.exception
+    # Arsenal links from the header and its lineup; Chelsea (no team) is plain text in both.
+    assert _page_links(at) == [("**Arsenal**", "league=EPL&team=1")] * 2
+    assert [m.value for m in at.markdown].count("**Chelsea**") == 2
+    # Shown as "4-3-3"; the dashes are escaped like all feed text. Chelsea has no formation line.
+    assert [c.value for c in at.caption if c.value.startswith("Formation")] == ["Formation 4\\-3\\-3"]

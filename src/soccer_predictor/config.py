@@ -108,6 +108,11 @@ class League:
     # `division_prior`: pull each team toward its own division's average
     # instead (Nations League League A-D, read from Match.group_name).
     division_prior: bool = False
+    # What a "team" is in this competition: "club" (domestic leagues, the
+    # Champions League, MLS) or "national" (World Cup, Euros, Nations League,
+    # Asian Cup). Teams are only ever linked to the same club/country in other
+    # competitions of the same kind (storage/team_links.py).
+    team_type: str = "club"
 
     @property
     def supports_predictions(self) -> bool:
@@ -177,6 +182,7 @@ def load_leagues() -> dict[str, League]:
             rating_decay_xi=entry.get("rating_decay_xi"),
             rating_ridge=float(entry.get("rating_ridge", 0.0)),
             division_prior=entry.get("division_prior", False),
+            team_type=entry.get("team_type", "club"),
         )
         for entry in raw["leagues"]
     }

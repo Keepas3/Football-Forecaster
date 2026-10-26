@@ -252,7 +252,10 @@ def team_stats_styled(detail: MatchDetail):
             continue
         names.append(name)
         rows.append({detail.home.name: home_stat[1], "Stat": home_stat[0], detail.away.name: away_stat[1]})
-    frame = pd.DataFrame(rows, columns=[detail.home.name, "Stat", detail.away.name])
+    # The team names title two columns and come from ESPN: escaped for render_table.
+    frame = pd.DataFrame(rows, columns=[detail.home.name, "Stat", detail.away.name]).rename(
+        columns=lambda label: plain(str(label))
+    )
     shade = {"better": BETTER_STYLE, "worse": WORSE_STYLE, "equal": EQUAL_STYLE, None: ""}
 
     def style(_: pd.DataFrame) -> pd.DataFrame:
@@ -281,31 +284,53 @@ def timeline_frame(detail: MatchDetail) -> pd.DataFrame:
     )
 
 
-ROW_HEIGHT_PX = 35
 # Each team's pitch is shown this wide (pixels); the column it sits in is about 450.
 PITCH_WIDTH_PX = 360
-MAX_TABLE_HEIGHT_PX = 1000
 
 
-def full_height(rows: int) -> int:
-    """Pixel height that shows every row (header included) without the table's
-    own scroll bar -- a table left at Streamlit's default stops at ~400px and
-    then scrolls inside the page, which on a phone is a second thing to scroll."""
-    return min(ROW_HEIGHT_PX * (rows + 1) + 3, MAX_TABLE_HEIGHT_PX)
+def table_styler(data, one_line: tuple[str, ...] = ()):
+    """`data` (a DataFrame or Styler) ready for st.table: index hidden, blanks
+    empty, and all text escaped. `one_line` names short columns (a shirt number,
+    a position such as "CD-L") whose cells must not wrap.
+
+    st.table draws every cell and heading as markdown, so the text (player names
+    and events come from ESPN) goes through plain(), as everywhere on this page;
+    without it a "#" heading would vanish. Cell text is escaped here. Column
+    titles are sent as they are, so a DataFrame's are escaped here too, while a
+    Styler must come with its own already escaped (see team_stats_styled)."""
+    if isinstance(data, pd.DataFrame):
+        styler = data.rename(columns=lambda label: plain(str(label))).style
+    else:
+        styler = data
+    styler = styler.hide(axis="index")
+    if one_line:
+        styler = styler.set_properties(subset=[plain(name) for name in one_line], **{"white-space": "nowrap"})
+    return styler.format(lambda value: plain(value) if isinstance(value, str) else value, na_rep="")
 
 
-def _render_lineup(team: TeamMatchInfo) -> None:
-    st.markdown(f"**{plain(team.name)}**" + (f" · {plain(team.formation)}" if team.formation else ""))
+def render_table(data, one_line: tuple[str, ...] = ()) -> None:
+    """A table of the whole of `data` (a DataFrame or Styler). It is a plain page
+    table, not st.dataframe: that one is drawn on a canvas, cuts long text such as
+    "1 on target, 1 goal, 2 fouls" off at the cell edge, and on a phone can't be
+    scrolled sideways or within itself. Here the text wraps, every row is shown
+    and the page scrolls as usual."""
+    st.table(table_styler(data, one_line))
+
+
+def _render_lineup(team: TeamMatchInfo, page_params: dict[str, str] | None = None) -> None:
+    render_team_name(team.name, page_params)
+    if team.formation:
+        st.caption(f"Formation {plain(team.formation)}")
     starters = [p for p in team.players if p.starter]
     bench = [p for p in team.players if not p.starter]
     pitch = pitch_svg(team)
     if pitch:
         st.image(pitch, width=PITCH_WIDTH_PX)  # an image, so the SVG can never run script
     if starters:
-        st.dataframe(lineup_frame(starters), hide_index=True, use_container_width=True, height=full_height(len(starters)))
+        render_table(lineup_frame(starters), one_line=("#", "Pos"))
     if bench:
         st.caption("Substitutes")
-        st.dataframe(lineup_frame(bench), hide_index=True, use_container_width=True, height=full_height(len(bench)))
+        render_table(lineup_frame(bench), one_line=("#", "Pos"))
 
 
 @dataclass
@@ -401,17 +426,52 @@ def _find_team(session, league: League, name: str | None, espn_id: str | None):
     return find_team_by_alias(session, name, "api", league.code)
 
 
-def predicted_scoreline(session, league: League, resolved: ResolvedMatch, detail: MatchDetail | None):
-    """(home goals, away goals) our model predicted for this match, or None.
-    The prediction locked in before kickoff when there is one (so a live or
-    finished match shows what was forecast, not a figure that has since moved);
-    otherwise the model's current top scoreline."""
+def match_teams(session, league: League, resolved: ResolvedMatch, detail: MatchDetail | None):
+    """Our Team rows for the (home, away) sides of the match; None for a side we
+    have no row for (a team from outside the competitions we store)."""
     home = team_by_id(session, resolved.home_team_id) if resolved.home_team_id else _find_team(
         session, league, resolved.home_name or (detail.home.name if detail else None), detail.home.espn_id if detail else None
     )
     away = team_by_id(session, resolved.away_team_id) if resolved.away_team_id else _find_team(
         session, league, resolved.away_name or (detail.away.name if detail else None), detail.away.espn_id if detail else None
     )
+    return home, away
+
+
+def team_page_params(team) -> dict[str, str] | None:
+    """URL parameters for a team's own page (Team Detail), or None without a team."""
+    if team is None:
+        return None
+    return {"league": team.league_code, "team": str(team.id)}
+
+
+# Streamlit draws a page link at body-text size; the team names here are the
+# page's headings, so size them like one. Static text, no data in it.
+TEAM_LINK_CSS = (
+    "<style>[data-testid='stPageLink'] p{font-size:1.6rem !important;font-weight:700 !important;line-height:1.25 !important}</style>"
+)
+
+
+def render_team_name(name: str | None, params: dict[str, str] | None, target=st) -> None:
+    """A team's name that opens the team's page when we have one (full stats,
+    squad and schedule, as from the Leagues page), plain text otherwise.
+    `target` is the column or container to draw it in."""
+    # Imported here, not at module level: navigation imports every view (this
+    # one included), so a top-level import would be circular.
+    from soccer_predictor.dashboard import navigation
+
+    if params is None:
+        target.markdown(f"**{plain(name)}**")
+    else:
+        target.page_link(navigation.team_detail_page(), label=f"**{plain(name)}**", query_params=params)
+
+
+def predicted_scoreline(session, league: League, resolved: ResolvedMatch, detail: MatchDetail | None):
+    """(home goals, away goals) our model predicted for this match, or None.
+    The prediction locked in before kickoff when there is one (so a live or
+    finished match shows what was forecast, not a figure that has since moved);
+    otherwise the model's current top scoreline."""
+    home, away = match_teams(session, league, resolved, detail)
     if home is None or away is None:
         return None
     date = resolved.match_date or (detail.match_date if detail else None) or dt.datetime.now(dt.UTC).date()
@@ -428,17 +488,23 @@ def predicted_scoreline(session, league: League, resolved: ResolvedMatch, detail
 
 
 def _render_header(
-    detail: MatchDetail | None, resolved: ResolvedMatch, predicted: tuple[int, int] | None = None
+    detail: MatchDetail | None,
+    resolved: ResolvedMatch,
+    predicted: tuple[int, int] | None = None,
+    team_params: tuple[dict[str, str] | None, dict[str, str] | None] = (None, None),
 ) -> None:
     home_name = resolved.home_name or (detail.home.name if detail else "Home")
     away_name = resolved.away_name or (detail.away.name if detail else "Away")
     home_crest = resolved.home_crest or (detail.home.logo if detail else None)
     away_crest = resolved.away_crest or (detail.away.logo if detail else None)
     cols = st.columns([3, 2, 3])
-    for col, name, crest in ((cols[0], home_name, home_crest), (cols[2], away_name, away_crest)):
+    for col, name, crest, params in (
+        (cols[0], home_name, home_crest, team_params[0]),
+        (cols[2], away_name, away_crest, team_params[1]),
+    ):
         if crest:
             col.image(crest, width=64)
-        col.subheader(plain(name))
+        render_team_name(name, params, col)
     if detail is not None and detail.home_score is not None and detail.away_score is not None:
         cols[1].markdown(f"## {detail.home_score} - {detail.away_score}")
     else:
@@ -460,6 +526,7 @@ def _render_header(
 def render() -> None:
     from soccer_predictor.dashboard import navigation
 
+    st.html(TEAM_LINK_CSS)
     league = load_leagues().get(st.query_params.get("league", ""))
     if league is None or not league.espn_league_slug:
         st.info("Open a match from the live banner, a team's recent results or a league's upcoming matches.")
@@ -470,7 +537,9 @@ def render() -> None:
     # Came from a team's page? Go back there, not to the league's page.
     with session_scope() as session:
         back_team = team_by_id(session, _int_param("team")) if _int_param("team") is not None else None
-        back_team_name = back_team.canonical_name if back_team and back_team.league_code == league.code else None
+        # Any existing team: a team page can open a match from another competition it plays in
+        # (e.g. a La Liga club's Champions League game), so the team need not be in this league.
+        back_team_name = back_team.canonical_name if back_team else None
     if back_team_name is not None:
         if st.button(f"← Back to {plain(back_team_name)}"):
             back_params = {"league": league.code, "team": str(_int_param("team"))}
@@ -493,7 +562,9 @@ def render() -> None:
     )
     with session_scope() as session:
         predicted = predicted_scoreline(session, league, resolved, detail)
-    _render_header(detail, resolved, predicted)
+        home_team, away_team = match_teams(session, league, resolved, detail)
+        team_params = (team_page_params(home_team), team_page_params(away_team))
+    _render_header(detail, resolved, predicted, team_params)
 
     home_name = resolved.home_name or (detail.home.name if detail else None)
     away_name = resolved.away_name or (detail.away.name if detail else None)
@@ -509,9 +580,9 @@ def render() -> None:
         if detail.has_lineups:
             left, right = st.columns(2)
             with left:
-                _render_lineup(detail.home)
+                _render_lineup(detail.home, team_params[0])
             with right:
-                _render_lineup(detail.away)
+                _render_lineup(detail.away, team_params[1])
         else:
             st.caption("Lineups usually appear about an hour before kickoff.")
     with stats_tab:
@@ -519,9 +590,7 @@ def render() -> None:
         if stats.empty:
             st.caption("Team stats appear once the match is under way.")
         else:
-            st.dataframe(
-                team_stats_styled(detail), hide_index=True, use_container_width=True, height=full_height(len(stats))
-            )
+            render_table(team_stats_styled(detail))
             st.caption("Green: stronger on that stat, red: weaker, grey: level. Fewer fouls, cards and offsides count as stronger.")
     with timeline_tab:
         timeline = timeline_frame(detail)
@@ -532,5 +601,5 @@ def render() -> None:
             if figure is not None:
                 st.plotly_chart(figure, use_container_width=True)
                 st.caption("Goals over time (hover a marker for the details). Squares are cards; substitutions are in the table below.")
-            st.dataframe(timeline, hide_index=True, use_container_width=True, height=full_height(len(timeline)))
+            render_table(timeline, one_line=("Min",))
     st.caption("Match data via ESPN.")

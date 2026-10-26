@@ -67,3 +67,54 @@ def test_hostile_names_and_numbers_cannot_inject_markup():
     svg = pitch.pitch_svg(team)
     assert "<script" not in svg and "<img" not in svg and "<b>" not in svg
     assert "&lt;" in svg
+
+
+def _squad(**by_index):
+    team = _team("4-4-2", ["G", "LB", "CD-L", "CD-R", "RB", "LM", "CM-L", "CM-R", "RM", "CF-L", "CF-R"])
+    for index, fields in by_index.items():
+        for name, value in fields.items():
+            setattr(team.players[int(index[1:])], name, value)
+    return team
+
+
+def test_each_marker_shows_the_minute_it_happened():
+    team = _squad(
+        p10=dict(stats={"totalGoals": 2, "goalAssists": 1, "yellowCards": 1}, subbed_out=True, sub_minute="78'",
+                 event_minutes={"goal": ["23'", "90'+2'"], "assist": ["61'"], "yellow": ["44'"]}),
+        p9=dict(stats={"redCards": 1}, event_minutes={"red": ["88'"]}),
+    )
+    svg = pitch.pitch_svg(team)
+    assert ">23&#x27; 90+2&#x27;<" in svg  # both goals, stoppage time as 90+2'
+    assert ">61&#x27;<" in svg and ">44&#x27;<" in svg and ">78&#x27;<" in svg and ">88&#x27;<" in svg
+    assert "⚽2" not in svg and ">⚽<" in svg  # the minutes say how many, so no count beside the ball
+
+
+def test_without_minutes_the_markers_are_as_before():
+    team = _squad(p10=dict(stats={"totalGoals": 2, "goalAssists": 1}, subbed_out=True))
+    svg = pitch.pitch_svg(team)
+    assert "⚽2" in svg and ">👟<" in svg and "↓" in svg and "&#x27;" not in svg
+
+
+def test_minutes_that_would_run_off_the_right_edge_go_on_the_left_of_the_player():
+    hat_trick = {"totalGoals": 3}
+    times = {"goal": ["2'", "7'", "21'"]}
+    right_back = _squad(p4=dict(stats=hat_trick, event_minutes=times))  # the right-most of four across
+    keeper = _squad(p0=dict(stats=hat_trick, event_minutes=times))  # in the middle
+    assert 'text-anchor="end"' in pitch.pitch_svg(right_back)
+    assert 'text-anchor="end"' not in pitch.pitch_svg(keeper)
+    # A short minute still fits on the right at the same spot.
+    short = _squad(p4=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["7'"]}))
+    assert 'text-anchor="end"' not in pitch.pitch_svg(short)
+
+
+def test_markers_are_drawn_after_every_player_so_a_neighbour_never_covers_a_minute():
+    team = _squad(p5=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["12'"]}))
+    svg = pitch.pitch_svg(team)
+    last_player = svg.rindex('fill="#2b2f36"')  # the last surname label
+    assert svg.index("12&#x27;") > last_player
+
+
+def test_minutes_are_escaped():
+    team = _squad(p10=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["<b>1'</b>"]}))
+    svg = pitch.pitch_svg(team)
+    assert "<b>" not in svg and "&lt;b&gt;" in svg

@@ -30,8 +30,8 @@ def _page(monkeypatch, matches):
 
 
 def _result_rows(at):
-    tables = [d.value for d in at.dataframe if "Result" in getattr(d.value, "columns", [])]
-    return len(tables[0]) if tables else 0
+    tables = [m.value for m in at.markdown if "<th>Result</th>" in m.value]
+    return tables[0].split("<tbody>")[1].count("<tr>") if tables else 0
 
 
 def _more_button(at):

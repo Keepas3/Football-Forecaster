@@ -16,37 +16,34 @@ import streamlit as st
 from soccer_predictor.config import League, load_leagues
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
-    HOME_WIN_COLUMN,
+    FIXTURE_PARAM,
     LIVE_MATCH_WINDOW,
     ZONE_MARKER,
-    fixture_columns_with_kickoff_first,
-    fixture_percent_column_config,
+    FixtureRef,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
+    fixtures_table_html,
     format_kickoff,
     league_option_label,
     live_sync_requirement_note,
     next_match_labels,
     next_match_links,
-    render_head_to_head,
+    parse_fixture_key,
     render_live_scores_banner,
     render_news_section,
-    render_prediction_breakdown,
     season_already_concluded,
     season_not_yet_scheduled,
     selected_timezone,
     sort_fixtures_by_kickoff,
     inject_standings_sort,
     standings_table_html,
-    style_fixture_predictions,
     timezone_selector,
 )
-from soccer_predictor.dashboard.views.match_detail import render_match_detail_button
+from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
 from soccer_predictor.ingest.league_meta import fetch_competition_emblem
 from soccer_predictor.ingest.live_scores import LiveMatch, fetch_all_live_matches
 from soccer_predictor.ingest.news import league_news_query
 from soccer_predictor.model.standings import compute_group_standings, compute_standings
-from soccer_predictor.model.team_facts import compute_head_to_head
 from soccer_predictor.prediction.service import load_latest_params, predict_fixture
 from soccer_predictor.storage.db import session_scope
 from soccer_predictor.storage.repository import (
@@ -55,7 +52,6 @@ from soccer_predictor.storage.repository import (
     live_fixtures_across_leagues,
     locked_predictions_for_league,
     matches_for_league,
-    matches_for_team,
     team_by_id,
     team_conferences_for_league,
     team_crests_for_league,
@@ -86,6 +82,7 @@ def _render_standings_table(
     search_key: str,
     league_code: str,
     season: str = "",
+    tz_name: str = "",
 ) -> None:
     """One searchable standings table -- shared by the flat single-table case
     and each per-group / per-conference table (see render()). Hovering a form
@@ -105,6 +102,7 @@ def _render_standings_table(
             league_code=league_code,
             name_filter=search_query,
             season=season,
+            tz_name=tz_name,
         ),
         unsafe_allow_html=True,
     )
@@ -298,7 +296,7 @@ def render() -> None:
         else:
             tz = timezone_selector()
             fixture_rows = []
-            fixture_meta = []  # parallel to fixture_rows: (home_id, away_id, home_name, away_name, date)
+            fixture_refs: list[FixtureRef] = []  # parallel to fixture_rows
             with session_scope() as session:
                 locked_predictions = locked_predictions_for_league(session, league.code)
                 for row in sort_fixtures_by_kickoff(upcoming_fixtures_df).itertuples(index=False):
@@ -324,21 +322,30 @@ def render() -> None:
                         fixture_row = {"Home": home_name, "Away": away_name}
                     fixture_row["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
                     fixture_rows.append(fixture_row)
-                    fixture_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
+                    fixture_refs.append(FixtureRef(row.home_team_id, row.away_team_id, home_name, away_name, row.date))
 
-            fixture_columns = fixture_columns_with_kickoff_first(fixture_rows[0])
-            fixtures_height = 35 * (len(fixture_rows) + 1) + 3
-            has_predictions = HOME_WIN_COLUMN in fixture_rows[0]
-            fixtures_event = st.dataframe(
-                style_fixture_predictions(fixture_rows) if has_predictions else fixture_rows,
-                use_container_width=True,
-                hide_index=True,
-                height=fixtures_height,
-                column_order=fixture_columns,
-                column_config=fixture_percent_column_config(),
-                on_select="rerun" if has_predictions else "ignore",
-                selection_mode="single-row",
-                key=f"upcoming_fixtures_table_{league.code}",
+            # The match whose workings are open: named in the URL by the predicted-score
+            # link, and only ever one of the rows shown (anything else is dropped).
+            selected_index = None
+            if params is not None and st.query_params.get(FIXTURE_PARAM) is not None:
+                wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
+                selected_index = next(
+                    (i for i, ref in enumerate(fixture_refs) if wanted == (ref.home_id, ref.away_id, ref.date)), None
+                )
+                if selected_index is None:
+                    del st.query_params[FIXTURE_PARAM]
+
+            st.markdown(
+                fixtures_table_html(
+                    fixture_rows,
+                    fixture_refs,
+                    league.code,
+                    season=season,
+                    tz_name=tz.key,
+                    match_details=bool(league.espn_league_slug),
+                    selected=selected_index,
+                ),
+                unsafe_allow_html=True,
             )
             if params is None:
                 if league.supports_predictions:
@@ -353,31 +360,13 @@ def render() -> None:
                     )
             else:
                 st.caption(
-                    "Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction. "
-                    + PREDICTION_STATUS_NOTE
+                    "Click a team's name for its page, the kickoff for the match details, or the predicted "
+                    "score to see how it was calculated. " + PREDICTION_STATUS_NOTE
                 )
-                selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
-                if selected:
-                    home_id, away_id, home_name, away_name, fixture_date = fixture_meta[selected[0]]
-                    render_match_detail_button(
-                        league, home_id, away_id, fixture_date, key=f"match_detail_btn_{league.code}"
+                if selected_index is not None:
+                    render_fixture_workings(
+                        fixture_refs[selected_index], params, league, f"close_fixture_breakdown_{league.code}"
                     )
-
-                    with session_scope() as session:
-                        home_matches = matches_for_team(session, home_id)
-                    h2h = compute_head_to_head(home_id, away_id, home_matches)
-                    if h2h is not None:
-                        render_head_to_head(h2h, home_name, away_name)
-                    else:
-                        st.caption(f"No history on record between {home_name} and {away_name} yet.")
-
-                    with session_scope() as session:
-                        prediction = predict_fixture(
-                            session, params, home_id, away_id, home_name, away_name, fixture_date=fixture_date
-                        )
-                        render_prediction_breakdown(
-                            prediction, home_name, away_name, session, league, home_id, away_id
-                        )
 
     st.caption("Click a team's name for its schedule, recent results, and injuries. Hover a form square for the game.")
     if league.zones:
@@ -432,4 +421,5 @@ def render() -> None:
             search_key,
             league.code,
             season,
+            selected_timezone().key,
         )
