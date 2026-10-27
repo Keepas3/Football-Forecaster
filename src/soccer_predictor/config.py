@@ -299,3 +299,18 @@ def notes_password() -> str | None:
 
 def claude_model() -> str:
     return os.environ.get("SOCCER_PREDICTOR_CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL
+
+
+# A model on Google's free tier (checked against ai.google.dev's pricing page);
+# set SOCCER_PREDICTOR_GEMINI_MODEL to move to another without a code change.
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+
+def gemini_api_key() -> str | None:
+    """Free-tier Google AI Studio key for the Predictor page's public "AI
+    what-if" tab (ai/whatif_parser.py). Unset (None) turns that tab off."""
+    return os.environ.get("GEMINI_API_KEY") or None
+
+
+def gemini_model() -> str:
+    return os.environ.get("SOCCER_PREDICTOR_GEMINI_MODEL") or DEFAULT_GEMINI_MODEL

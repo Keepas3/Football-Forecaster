@@ -203,6 +203,32 @@ in its card and click Save. The AI's output is never applied
 automatically. Delete a note any time from the active chat-sourced notes
 list, for example if a player recovers early or you made a mistake.
 
+### AI what-if (open to every visitor)
+
+The Predictor page's "AI notes" tab opens with a free what-if section that lets anyone try the same idea without
+a password and without spending the owner's Anthropic credit. A visitor picks
+a match, types a note ("their keeper is injured and the team has been
+struggling to score"), and a free Gemini model reads it. The tab then shows
+the model's forecast with and without the note side by side (win/draw/loss,
+over 2.5, both teams score, likely score, expected goals), with a slider per
+adjustment to count less of what the AI inferred.
+
+It is safe to leave open because nothing is saved: the adjustments live only
+in that visitor's session, are applied to their on-screen numbers through the
+same capped formulas (`prediction/service.py::predict_fixture`'s `extra_*`
+arguments), and never reach other visitors, the locked-in forecasts or the
+Track Record. The AI is held to extraction: fixed instructions, a response
+schema, only the two teams in the chosen match accepted, at most three
+availability and two form entries, and tighter strength caps than the Notes
+chat. The free quota is protected by a per-visit cap and pause plus
+site-wide per-minute and per-day windows (`dashboard/whatif_access.py`).
+
+It is off until `GEMINI_API_KEY` is set (a free key from
+[Google AI Studio](https://aistudio.google.com/apikey)); on Streamlit Cloud,
+add it to the app's secrets. Google may use free-tier prompts to improve its
+products, and the tab tells visitors so. `scripts/manual_test_whatif.py`
+checks the real API by hand.
+
 ## Adding a league
 
 For a league backed by a football-data.co.uk CSV: add an entry to

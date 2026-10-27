@@ -9,13 +9,22 @@ import datetime as dt
 import time
 from uuid import uuid4
 
+import pandas as pd
 import streamlit as st
 
+from soccer_predictor.ai import whatif_parser
 from soccer_predictor.ai.note_parser import MissingApiKey as NoteParserMissingApiKey
 from soccer_predictor.ai.note_parser import NoteParsingError, parse_note
-from soccer_predictor.config import load_leagues, notes_password
+from soccer_predictor.config import gemini_api_key, load_leagues, notes_password
 from soccer_predictor.dashboard import notes_access as na
+from soccer_predictor.dashboard import whatif_access as wa
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
+from soccer_predictor.dashboard.whatif import (
+    build_adjustments,
+    comparison_rows,
+    describe_form_entry,
+    describe_injury_entry,
+)
 from soccer_predictor.dashboard.chat_notes import (
     add_reply,
     delete_exchange,
@@ -24,6 +33,7 @@ from soccer_predictor.dashboard.chat_notes import (
 )
 from soccer_predictor.dashboard.components import (
     LEADERBOARD_DISPLAY_COLUMNS,
+    _escape_markdown,
     fixture_columns_with_kickoff_first,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
@@ -242,6 +252,146 @@ def _render_chat_history(team_names: dict[int, str]) -> None:
                     st.rerun()
 
 
+WHATIF_RESULT_KEY = "whatif_result"
+
+
+def _ask_whatif(note: str, home_id: int, home_name: str, away_id: int, away_name: str) -> None:
+    """Runs one what-if ask (within the visitor and site-wide limits) and keeps
+    the outcome in this session only -- an error message or the AI's entries.
+    Nothing is written to the database."""
+    cached = whatif_parser.cached_entries(home_id, away_id, note)
+    if cached is not None:  # the same note on the same match: no quota used
+        st.session_state[WHATIF_RESULT_KEY] = {
+            "home_id": home_id, "away_id": away_id, "entries": cached, "error": None,
+            "n": st.session_state.get("whatif_runs", 0) + 1,
+        }
+        st.session_state["whatif_runs"] = st.session_state[WHATIF_RESULT_KEY]["n"]
+        return
+    verdict = wa.try_ask(st.session_state, note)
+    if verdict != wa.OK:
+        st.session_state[WHATIF_RESULT_KEY] = {"home_id": home_id, "away_id": away_id, "error": wa.MESSAGES[verdict]}
+        return
+    entries, error = None, None
+    with st.spinner("Asking the AI..."):
+        try:
+            entries = whatif_parser.parse_whatif_note(note, home_id, home_name, away_id, away_name)
+        except whatif_parser.WhatIfAtCapacity:
+            error = wa.MESSAGES[wa.DAY_LIMIT]
+        except whatif_parser.WhatIfUnavailable:
+            error = "The AI what-if is turned off on this site."
+        except whatif_parser.WhatIfError as exc:
+            error = str(exc)
+    runs = st.session_state.get("whatif_runs", 0) + 1
+    st.session_state["whatif_runs"] = runs
+    st.session_state[WHATIF_RESULT_KEY] = {
+        "home_id": home_id, "away_id": away_id, "entries": entries, "error": error, "n": runs,
+    }
+
+
+def _render_whatif_results(result: dict, params, team_names: dict[int, str], league) -> None:
+    home_id, away_id = result["home_id"], result["away_id"]
+    home_name, away_name = team_names[home_id], team_names[away_id]
+    entries = result["entries"]
+    if entries.empty:
+        st.info("That note didn't mention either team's players or form, so there is nothing to change.")
+        return
+    if entries.skipped:
+        st.caption(f"{entries.skipped} item(s) the AI read were left out: not about these two teams, or over the limit.")
+
+    st.markdown("**What the AI read from your note**")
+    st.caption(
+        "Drag a slider to count less of what the AI inferred - the table below updates straight away, "
+        "with no new AI request."
+    )
+    run = result["n"]
+    injury_scale, form_scale = [], []
+    for index, injury in enumerate(entries.injuries):
+        team = team_names.get(injury.team_id, "")
+        headline, maths = describe_injury_entry(
+            _escape_markdown(injury.player_name), _escape_markdown(team), injury.position, injury.importance_weight
+        )
+        st.markdown(headline)
+        st.caption(f"{maths} · AI: {_escape_markdown(injury.rationale)}")
+        injury_scale.append(
+            st.slider("Count this much of it", 0.0, 1.0, 1.0, 0.05, key=f"whatif_inj_{run}_{index}", format="%.2f")
+        )
+    for index, form in enumerate(entries.form_notes):
+        team = team_names.get(form.team_id, "")
+        headline, maths = describe_form_entry(
+            _escape_markdown(form.summary), _escape_markdown(team), form.magnitude, form.affects
+        )
+        st.markdown(headline)
+        st.caption(f"{maths} · AI: {_escape_markdown(form.rationale)}")
+        form_scale.append(
+            st.slider("Count this much of it", 0.0, 1.0, 1.0, 0.05, key=f"whatif_form_{run}_{index}", format="%.2f")
+        )
+
+    adjustments = build_adjustments(entries, home_id, injury_scale, form_scale)
+    with session_scope() as session:  # read-only: the what-if entries never go in the database
+        base = predict_fixture(session, params, home_id, away_id, home_name, away_name)
+        adjusted = predict_fixture(
+            session, params, home_id, away_id, home_name, away_name,
+            extra_home_injuries=adjustments.home_injuries,
+            extra_away_injuries=adjustments.away_injuries,
+            extra_home_form=adjustments.home_form,
+            extra_away_form=adjustments.away_form,
+        )
+    st.markdown(f"**{_escape_markdown(home_name)} v {_escape_markdown(away_name)}: the model, with and without your note**")
+    st.table(pd.DataFrame(comparison_rows(base, adjusted)).set_index(""))
+    st.plotly_chart(scoreline_chart(adjusted, home_name, away_name), use_container_width=True)
+    st.caption(
+        "What-if only: this is not saved, not shared with other visitors, and not part of the Track Record. "
+        "It runs through the same adjustment formulas as saved notes, which are capped and not backtested - "
+        "treat the shift as an illustration of how such news could move the odds, not a better forecast."
+    )
+
+
+def _render_whatif_section(league, params, team_names: dict[int, str]) -> None:
+    st.subheader("Try it: how could a note move the odds?")
+    st.caption(
+        "Free for everyone. Pick a match, type a note about a player or a team's form (e.g. \"their top "
+        "scorer is out for this one\"), and an AI reads it and shows how it would shift the odds. "
+        "Nothing you type is saved or changes anyone else's predictions."
+    )
+    if not gemini_api_key():
+        st.info("The AI what-if is turned off on this site (no GEMINI_API_KEY is set).")
+        return
+
+    id_by_name = {name: team_id for team_id, name in team_names.items()}
+    options = sorted(id_by_name)
+    col1, col2 = st.columns(2)
+    home_choice = col1.selectbox("Home team", options, key=f"whatif_home_{league.code}")
+    away_choice = col2.selectbox(
+        "Away team", [t for t in options if t != home_choice], key=f"whatif_away_{league.code}"
+    )
+    note = st.text_area(
+        "Your note",
+        max_chars=wa.MAX_NOTE_LENGTH,
+        height=90,
+        placeholder="e.g. Their goalkeeper is injured and the team has been struggling to score lately",
+        key=f"whatif_note_{league.code}",
+    )
+    privacy_note = st.empty()  # filled after the button is handled, so the count is current
+    if st.button("Ask the AI", key=f"whatif_ask_{league.code}"):
+        _ask_whatif(note, id_by_name[home_choice], home_choice, id_by_name[away_choice], away_choice)
+    privacy_note.caption(
+        "Your note is sent to Google's Gemini API on its free tier, which Google may use to improve its "
+        "products - please don't include personal details. "
+        f"{wa.asks_left(st.session_state)} AI ask(s) left this visit; the site shares a daily free allowance."
+    )
+
+    result = st.session_state.get(WHATIF_RESULT_KEY)
+    if result is None:
+        return
+    if result["home_id"] != id_by_name[home_choice] or result["away_id"] != id_by_name[away_choice]:
+        st.info("You changed the teams - ask the AI again to see how your note shifts this match.")
+        return
+    if result["error"]:
+        st.warning(result["error"])
+        return
+    _render_whatif_results(result, params, team_names, league)
+
+
 def render() -> None:
     leagues = load_leagues()
     if not leagues:
@@ -316,7 +466,7 @@ def render() -> None:
     id_by_name = {name: team_id for team_id, name in team_names.items()}
 
     fixtures_tab, leaderboard_tab, injuries_tab, notes_tab = st.tabs(
-        ["Upcoming Fixtures", "Team Strength Leaderboard", "Injuries", "Notes"]
+        ["Upcoming Fixtures", "Team Strength Leaderboard", "Injuries", "AI notes"]
     )
 
     with fixtures_tab:
@@ -462,11 +612,18 @@ def render() -> None:
             st.caption("No injuries on record.")
 
     with notes_tab:
+        # Top: the free what-if for everyone. Below: the owner-only notes that are
+        # saved and change the real predictions.
+        _render_whatif_section(league, params, team_names)
+
+        st.divider()
+        st.subheader("Save notes that change the real predictions")
         st.caption(
             'Type notes about players or teams (e.g. "Saka is injured, ~3 weeks out", '
             '"Arsenal have been flat since the manager change"). An AI parses them into '
             "structured entries below for you to review and save - nothing is applied to "
-            "predictions until you click Save."
+            "predictions until you click Save. Saved notes change the forecasts everyone sees, "
+            "so adding them is owner-only."
         )
 
         unlocked = _render_notes_gate()

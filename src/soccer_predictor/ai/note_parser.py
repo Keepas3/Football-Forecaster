@@ -205,12 +205,18 @@ def parse_note(
     if not tool_use_blocks:
         raise NoteParsingError("Model response contained no tool_use block")
 
-    data = tool_use_blocks[0].input
+    return build_parsed_notes(tool_use_blocks[0].input, team_names, reference_date)
 
-    # The model's output is only as trustworthy as the note it was given (a note
-    # can try to instruct it), so nothing from it is taken as-is: numbers are
-    # clamped to the ranges the schema promises, choices to their allowed
-    # values, text to a sane length, and an entry that can't be read is dropped.
+
+def build_parsed_notes(data: dict, team_names: dict[int, str], reference_date: dt.date) -> ParsedNotes:
+    """Turns a model's extracted JSON (either provider's, same schema) into
+    ParsedNotes.
+
+    The model's output is only as trustworthy as the note it was given (a note
+    can try to instruct it), so nothing from it is taken as-is: numbers are
+    clamped to the ranges the schema promises, choices to their allowed
+    values, text to a sane length, and an entry that can't be read is dropped.
+    """
     injuries = []
     for entry in data.get("injury_entries") or []:
         try:

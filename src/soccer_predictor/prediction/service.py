@@ -8,6 +8,7 @@ injury/note updates never require re-running the slower league-wide fit.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -115,14 +116,30 @@ def predict_fixture(
     home_team_name: str,
     away_team_name: str,
     fixture_date: dt.date | None = None,
+    *,
+    extra_home_injuries: Sequence[InjuryEntry] = (),
+    extra_away_injuries: Sequence[InjuryEntry] = (),
+    extra_home_form: Sequence[FormNoteEntry] = (),
+    extra_away_form: Sequence[FormNoteEntry] = (),
 ) -> MatchPrediction:
+    """The `extra_*` entries are what-if adjustments held in memory only, added
+    on top of what the database holds (the AI what-if tab passes a visitor's
+    note this way). Nothing here saves them, so they cannot reach another
+    visitor's prediction or a locked-in snapshot; left empty, the result is
+    exactly what every other caller has always got."""
     if fixture_date is None:
         fixture_date = dt.date.today()
 
-    home_injuries = get_injuries_for_team(session, home_team_id, home_team_name, fixture_date).entries
-    away_injuries = get_injuries_for_team(session, away_team_id, away_team_name, fixture_date).entries
-    home_form = get_form_notes_for_team(session, home_team_id, fixture_date)
-    away_form = get_form_notes_for_team(session, away_team_id, fixture_date)
+    home_injuries = [
+        *get_injuries_for_team(session, home_team_id, home_team_name, fixture_date).entries,
+        *extra_home_injuries,
+    ]
+    away_injuries = [
+        *get_injuries_for_team(session, away_team_id, away_team_name, fixture_date).entries,
+        *extra_away_injuries,
+    ]
+    home_form = [*get_form_notes_for_team(session, home_team_id, fixture_date), *extra_home_form]
+    away_form = [*get_form_notes_for_team(session, away_team_id, fixture_date), *extra_away_form]
 
     base_home_attack, base_home_defense = params.attack[home_team_id], params.defense[home_team_id]
     base_away_attack, base_away_defense = params.attack[away_team_id], params.defense[away_team_id]
