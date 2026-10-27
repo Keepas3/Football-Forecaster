@@ -153,10 +153,34 @@ def test_fixture_rows_with_and_without_a_prediction_line_up_in_one_table():
     assert "50.00" in html and "A" in html and "C" in html
 
 
-def _team_page(monkeypatch, with_other_games=True, linked_names=("UEFA Champions League",)):
+def _ucl_params():
+    from soccer_predictor.model.dixon_coles import DixonColesParams
+
+    return DixonColesParams(
+        league_code="UCL",
+        attack={500: 1.4, 501: 1.0},
+        defense={500: 0.9, 501: 1.1},
+        home_advantage=1.3,
+        rho=-0.1,
+        xi=0.0005,
+        fitted_at="2026-01-01T00:00:00",
+        n_matches=100,
+    )
+
+
+def _team_page(monkeypatch, with_other_games=True, linked_names=("UEFA Champions League",), ucl_params=None):
     from streamlit.testing.v1 import AppTest
 
     from soccer_predictor.dashboard.views import team_detail
+
+    # Whether the Champions League has a trained model depends on what the local database
+    # holds; pin it (None = no model) so what the page does with or without one is tested.
+    real_load = team_detail.load_latest_params
+    monkeypatch.setattr(
+        team_detail,
+        "load_latest_params",
+        lambda session, code: ucl_params if code == "UCL" else real_load(session, code),
+    )
 
     today = dt.date.today()
     other = team_detail.OtherCompetitions(
@@ -198,7 +222,7 @@ def _schedule_markup(at):
 
 
 def test_other_competitions_are_hidden_until_the_toggle_is_on(monkeypatch):
-    at = _team_page(monkeypatch)
+    at = _team_page(monkeypatch)  # no model for the other competition
     assert not at.exception
     assert [t.label for t in at.toggle] == ["Include other competitions (UEFA Champions League)"]
     assert at.toggle[0].value is False
@@ -218,6 +242,16 @@ def test_other_competitions_are_hidden_until_the_toggle_is_on(monkeypatch):
     assert "/team_detail?league=UCL&amp;team=500" in schedule and "/team_detail?league=UCL&amp;team=501" in schedule
     # ...and with no model there, its match has no predicted-score link to open.
     assert "fixture=500-501" not in schedule
+
+
+def test_another_competitions_match_gets_a_predicted_score_link_once_it_has_a_model(monkeypatch):
+    # The Champions League is trained like the leagues, so (unlike a competition without a
+    # model) its game in the schedule can be opened to see how it was predicted.
+    at = _team_page(monkeypatch, ucl_params=_ucl_params())
+    at.toggle[0].set_value(True).run()
+    assert not at.exception
+    schedule = _schedule_markup(at)
+    assert "fixture=500-501-" in schedule and "How this was predicted" in schedule
 
 
 def test_no_toggle_when_the_team_has_no_other_competitions(monkeypatch):

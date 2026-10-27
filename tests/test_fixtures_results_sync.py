@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
 from soccer_predictor.ingest import api_client
-from soccer_predictor.ingest.fixtures import sync_results_to_db
+from soccer_predictor.ingest.fixtures import ninety_minute_score, sync_results_to_db
 from soccer_predictor.storage.models import Base
 from soccer_predictor.storage.repository import get_or_create_team, matches_for_league, upsert_team_alias
 
@@ -61,6 +62,50 @@ def test_sync_results_to_db_upserts_finished_matches(monkeypatch):
         assert row["home_goals"] == 2
         assert row["away_goals"] == 0
         assert row["date"] == dt.date(2024, 9, 17)
+
+
+def test_a_tie_that_went_to_penalties_is_stored_as_it_stood_after_90_minutes(monkeypatch):
+    # Arsenal 1-0 Porto, 2024: fullTime counts the shoot-out (5-2), regularTime is the 90 minutes.
+    response = {
+        "matches": [
+            {
+                "utcDate": "2024-03-12T20:00:00Z",
+                "status": "FINISHED",
+                "homeTeam": {"name": "Arsenal FC", "crest": None},
+                "awayTeam": {"name": "FC Porto", "crest": None},
+                "score": {
+                    "duration": "PENALTY_SHOOTOUT",
+                    "fullTime": {"home": 5, "away": 2},
+                    "regularTime": {"home": 1, "away": 0},
+                    "penalties": {"home": 4, "away": 2},
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(api_client, "get", lambda *args, **kwargs: response)
+    with _session() as s:
+        for name in ("Arsenal FC", "FC Porto"):
+            upsert_team_alias(s, get_or_create_team(s, name, "UCL"), name, source="api")
+        s.commit()
+
+        assert sync_results_to_db(s, LEAGUE, "2324") == (1, 0)
+        row = matches_for_league(s, "UCL").iloc[0]
+        assert (row["home_goals"], row["away_goals"]) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        ({"fullTime": {"home": 3, "away": 1}}, (3, 1)),
+        ({"fullTime": {"home": 3, "away": 2}, "regularTime": {"home": 2, "away": 2}}, (2, 2)),  # extra time
+        ({"fullTime": {"home": 4, "away": 2}, "regularTime": {"home": None, "away": None}}, (4, 2)),
+        ({"fullTime": {"home": None, "away": None}}, None),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_ninety_minute_score(score, expected):
+    assert ninety_minute_score({"score": score}) == expected
 
 
 def test_sync_results_to_db_skips_unresolved_teams(monkeypatch):

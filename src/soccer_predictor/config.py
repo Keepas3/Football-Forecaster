@@ -38,9 +38,9 @@ class League:
     name: str
     seasons: list[str]
     # None for a competition with no football-data.co.uk historical CSV
-    # (e.g. UEFA Champions League, European Championship) -- these rely
-    # entirely on football-data.org's live API for match history, so they
-    # never get a trained Dixon-Coles model (see supports_predictions).
+    # (e.g. UEFA Champions League, European Championship) -- these get their
+    # match history from football-data.org's API or a static archive instead
+    # (see data_source / trainable / supports_predictions).
     csv_code: str | None = None
     # None for a league football-data.org doesn't cover at all (e.g. MLS,
     # see data_source below) -- every football-data.org call site must
@@ -80,11 +80,15 @@ class League:
     # ISN'T a football-data.co.uk CSV (e.g. MLS via ESPN, World Cup/Euro via
     # their static archives -- see data_source) -- see supports_predictions.
     # Defaults to False so every existing league's behavior is unchanged
-    # unless a league's config explicitly sets this. UEFA Champions League
-    # deliberately leaves it False -- confirmed no real per-match history
-    # exists for its current 36-team league-phase format (see its own
-    # config/leagues.yaml comment), unlike WC/EURO/MLS.
+    # unless a league's config explicitly sets this.
     trainable: bool = False
+    # Past seasons that exist only to train the model: stored by
+    # scripts/fetch_historical_data.py but never offered in the season picker or
+    # shown in the standings, so `seasons` stays what a visitor can browse. The
+    # Champions League keeps its pre-2024 eight-group seasons here -- a flat
+    # league-phase table cannot show them, yet they still tell the ratings how
+    # strong a club has been. Season codes use the same format as `seasons`.
+    history_seasons: list[str] = field(default_factory=list)
     # Search term for the Latest news section (ingest/news.py) when `name`
     # isn't what news sites actually call the competition, e.g. "English
     # Premier League" -> "Premier League". None falls back to `name`.
@@ -177,6 +181,7 @@ def load_leagues() -> dict[str, League]:
             data_source=entry.get("data_source", "football_data_org"),
             espn_league_slug=entry.get("espn_league_slug"),
             trainable=entry.get("trainable", False),
+            history_seasons=list(entry.get("history_seasons", [])),
             news_query=entry.get("news_query"),
             has_groups=entry.get("has_groups", False),
             rating_decay_xi=entry.get("rating_decay_xi"),

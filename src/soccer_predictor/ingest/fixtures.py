@@ -109,6 +109,24 @@ def fetch_finished_matches(league: League, season_year: int) -> list[dict]:
     return data.get("matches", [])
 
 
+def ninety_minute_score(match: dict) -> tuple[int, int] | None:
+    """The score after 90 minutes of a football-data.org match, or None if it
+    has none yet.
+
+    `score.fullTime` also counts extra-time goals and, for a tie settled on
+    penalties, the shoot-out as well (an Arsenal 1-0 Porto that went to
+    penalties comes back as 5-2), while `score.regularTime` -- present only for
+    a match that ran past 90 minutes -- is the score the ratings must be fit on
+    and the predicted scoreline is graded against.
+    """
+    score = match.get("score") or {}
+    for key in ("regularTime", "fullTime"):
+        side = score.get(key) or {}
+        if side.get("home") is not None and side.get("away") is not None:
+            return side["home"], side["away"]
+    return None
+
+
 def sync_results_to_db(session: Session, league: League, season: str) -> tuple[int, int]:
     """Resolves team names and upserts finished matches for one season.
     Returns (synced, skipped). Mirrors sync_fixtures_to_db, but writes to
@@ -118,8 +136,8 @@ def sync_results_to_db(session: Session, league: League, season: str) -> tuple[i
     synced = 0
     skipped = 0
     for match in fetch_finished_matches(league, league.api_season_year(season)):
-        score = match.get("score", {}).get("fullTime", {})
-        if score.get("home") is None or score.get("away") is None:
+        score = ninety_minute_score(match)
+        if score is None:
             continue
         home_name = match["homeTeam"]["name"]
         away_name = match["awayTeam"]["name"]
@@ -141,8 +159,8 @@ def sync_results_to_db(session: Session, league: League, season: str) -> tuple[i
             date=match_date,
             home_team_id=home_team_id,
             away_team_id=away_team_id,
-            home_goals=score["home"],
-            away_goals=score["away"],
+            home_goals=score[0],
+            away_goals=score[1],
             source="football-data.org",
             group_name=_football_data_group(match, league),
         )

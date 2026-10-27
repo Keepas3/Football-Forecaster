@@ -8,21 +8,28 @@ historical results, adjusted for current injuries and team form.
 
 ## What it does
 
-- **Predicts match outcomes** for six leagues with enough historical data to
-  train from: Premier League, La Liga, Bundesliga, Serie A, Ligue 1, and
-  MLS. Each prediction shows the full probability breakdown (home win,
-  draw, away win, over/under 2.5 goals, both teams to score, most likely
-  scorelines) and the worked Poisson/Dixon-Coles math behind it.
+- **Predicts match outcomes** for every competition it follows: the Premier
+  League, La Liga, Bundesliga, Serie A, Ligue 1, MLS, the UEFA Champions
+  League, and the international tournaments (World Cup, European
+  Championship, Nations League, Asian Cup). Each competition has its own
+  fitted model, with rating settings (how fast old results fade, how hard
+  thinly-played teams are pulled toward average) chosen by a walk-forward
+  backtest rather than assumed. Each prediction shows the full probability
+  breakdown (home win, draw, away win, over/under 2.5 goals, both teams to
+  score, most likely scorelines) and the worked Poisson/Dixon-Coles math
+  behind it.
 - **Tracks its own accuracy.** Every prediction is locked in the moment a
   fixture is seen as upcoming, before the result is known. Once the real
   result comes in, that locked-in prediction is graded as an exact score
   match, a correct win/draw/loss call with the wrong score, or wrong
   entirely. Running counters and a hit rate are shown in the Predictor
   page's sidebar.
-- **Shows live fixtures, results, and standings** for three additional
-  competitions with no historical model attached (UEFA Champions League,
-  European Championship, World Cup), since those either lack enough
-  matching historical data or don't run on a normal weekly season.
+- **Shows live fixtures, results, and standings** for all of them, with the
+  periodic tournaments (World Cup, European Championship, Asian Cup)
+  presented as editions rather than a weekly season. The Champions League
+  is trained on its 90-minute scores from 2011/12 on (extra time and
+  shoot-out goals are not part of the model's goal process); seasons before
+  2024/25 are training data only and never appear in the season picker.
 - **Adjusts predictions for injuries**, from three merged sources: a manual
   YAML file (most trusted), a best-effort API fetch, and freeform notes
   typed into a chat tab that an AI parses into structured entries. Injuries
@@ -52,6 +59,11 @@ historical results, adjusted for current injuries and team form.
 - **ESPN's public site API** (undocumented, no key required): fixtures,
   results, squads, and multi-season historical results for MLS, which
   football-data.org does not cover at all.
+- **openfootball/champions-league** (public domain text files on GitHub):
+  Champions League results for 2011/12 to 2022/23, with the 90-minute score
+  of every match. football-data.org's free tier only serves the competition
+  from 2023/24, so this fills in the earlier training history
+  (`ingest/ucl_archive.py`; downloads are cached under `data/cache/`).
 - **Understat** (undocumented, no key required): historical and current-
   season goals/assists/xG/xA/shots/key passes/cards for the five European
   leagues it tracks, back to 2014. Used on the Players/Team Detail pages
@@ -212,12 +224,19 @@ cross-tagged even though they all live in one file.
 For a league with no football-data.co.uk CSV, there are two patterns
 already in use, depending on whether football-data.org covers it:
 
-- If football-data.org does cover it (as with UEFA Champions League, the
-  European Championship, and the World Cup): omit `csv_code`, set
-  `api_competition_id`, and team seeding happens automatically from the
-  live API with no alias file entries needed at all. Leave `trainable`
-  unset (or false) unless you also want a model fit from whatever match
-  history football-data.org can provide.
+- If football-data.org does cover it (as with the UEFA Champions League):
+  omit `csv_code`, set `api_competition_id`, and team seeding happens
+  automatically from the live API. Leave `trainable` unset (or false) for a
+  competition with only the live feed; set it to `true` once enough history
+  is stored to fit a model. The free tier serves only recent seasons, so
+  older ones need another source: list them under `history_seasons` (training
+  only, never shown in the season picker or standings) and add a parser like
+  `ingest/ucl_archive.py`. Clubs that two sources spell differently get alias
+  rows in `config/team_aliases.yaml` so each stays one team. Pick the
+  `rating_decay_xi` / `rating_ridge` values with
+  `uv run python scripts/tune_ratings.py <CODE>`, which scores a grid of them
+  on seasons the model has not seen and compares the winner with the default
+  settings and a no-skill guess on a holdout.
 - If football-data.org doesn't cover it (as with MLS): set
   `data_source: espn` and `espn_league_slug` to that league's slug on
   ESPN's site, and everything (fixtures, results, squads, injuries, team

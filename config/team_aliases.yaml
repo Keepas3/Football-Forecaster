@@ -686,3 +686,467 @@ teams:
     csv: Nimes
     api: Nîmes Olympique
     league: LIGUE1
+
+  # --- UEFA Champions League ---------------------------------------------------
+  # `api` = football-data.org's club name (2023-24 onward), `csv` = the spelling in
+  # the openfootball archive (2011-12 to 2022-23, see ingest/ucl_archive.py). A club
+  # in only one of the two repeats its name in the other column. A club that also
+  # plays in a domestic league above keeps that league's football-data.org name, which
+  # is what lets its team page show the Champions League games next to the league
+  # ones (storage/team_links.py matches clubs on the shared `api` name).
+  - canonical_name: 1. FC Union Berlin
+    csv: 1. FC Union Berlin
+    api: 1. FC Union Berlin
+    league: UCL
+  - canonical_name: AC Milan
+    csv: AC Milan
+    api: AC Milan
+    league: UCL
+  - canonical_name: AC Sparta Praha
+    csv: AC Sparta Praha
+    api: AC Sparta Praha
+    league: UCL
+  - canonical_name: AFC Ajax
+    csv: AFC Ajax
+    api: AFC Ajax
+    league: UCL
+  - canonical_name: APOEL Nikosia
+    csv: APOEL Nikosia
+    api: APOEL Nikosia
+    league: UCL
+  - canonical_name: Arsenal FC
+    csv: Arsenal FC
+    api: Arsenal FC
+    league: UCL
+  - canonical_name: AS Monaco FC
+    csv: AS Monaco
+    api: AS Monaco FC
+    league: UCL
+  - canonical_name: AS Roma
+    csv: AS Roma
+    api: AS Roma
+    league: UCL
+  - canonical_name: Aston Villa FC
+    csv: Aston Villa FC
+    api: Aston Villa FC
+    league: UCL
+  - canonical_name: Atalanta BC
+    csv: Atalanta
+    api: Atalanta BC
+    league: UCL
+  - canonical_name: Athletic Club
+    csv: Athletic Club
+    api: Athletic Club
+    league: UCL
+  - canonical_name: Austria Wien
+    csv: Austria Wien
+    api: Austria Wien
+    league: UCL
+  - canonical_name: BATE Borisov
+    csv: BATE Borisov
+    api: BATE Borisov
+    league: UCL
+  - canonical_name: Bayer 04 Leverkusen
+    csv: Bayer Leverkusen
+    api: Bayer 04 Leverkusen
+    league: UCL
+  - canonical_name: Beşiktaş
+    csv: Beşiktaş
+    api: Beşiktaş
+    league: UCL
+  - canonical_name: Bologna FC 1909
+    csv: Bologna FC 1909
+    api: Bologna FC 1909
+    league: UCL
+  - canonical_name: Borussia Dortmund
+    csv: Borussia Dortmund
+    api: Borussia Dortmund
+    league: UCL
+  - canonical_name: Borussia Mönchengladbach
+    csv: Bor. Mönchengladbach
+    api: Borussia Mönchengladbach
+    league: UCL
+  - canonical_name: BSC Young Boys
+    csv: BSC Young Boys
+    api: BSC Young Boys
+    league: UCL
+  - canonical_name: Celtic FC
+    csv: Celtic FC
+    api: Celtic FC
+    league: UCL
+  - canonical_name: CFR Cluj
+    csv: CFR Cluj
+    api: CFR Cluj
+    league: UCL
+  - canonical_name: Chelsea FC
+    csv: Chelsea FC
+    api: Chelsea FC
+    league: UCL
+  - canonical_name: Club Atlético de Madrid
+    csv: Atlético Madrid
+    api: Club Atlético de Madrid
+    league: UCL
+  - canonical_name: Club Brugge KV
+    csv: Club Brugge KV
+    api: Club Brugge KV
+    league: UCL
+  - canonical_name: Como 1907
+    csv: Como 1907
+    api: Como 1907
+    league: UCL
+  - canonical_name: CSKA Moskva
+    csv: CSKA Moskva
+    api: CSKA Moskva
+    league: UCL
+  - canonical_name: Dinamo Kiev
+    csv: Dinamo Kiev
+    api: Dinamo Kiev
+    league: UCL
+  - canonical_name: Eintracht Frankfurt
+    csv: Eintracht Frankfurt
+    api: Eintracht Frankfurt
+    league: UCL
+  - canonical_name: FC Barcelona
+    csv: FC Barcelona
+    api: FC Barcelona
+    league: UCL
+  - canonical_name: FC Basel 1893
+    csv: FC Basel 1893
+    api: FC Basel 1893
+    league: UCL
+  - canonical_name: FC Bayern München
+    csv: Bayern München
+    api: FC Bayern München
+    league: UCL
+  - canonical_name: FC Internazionale Milano
+    csv: Inter
+    api: FC Internazionale Milano
+    league: UCL
+  - canonical_name: FC København
+    csv: FC København
+    api: FC København
+    league: UCL
+  - canonical_name: FC Midtjylland
+    csv: FC Midtjylland
+    api: FC Midtjylland
+    league: UCL
+  - canonical_name: FC Nordsjælland
+    csv: FC Nordsjælland
+    api: FC Nordsjælland
+    league: UCL
+  - canonical_name: FC Porto
+    csv: FC Porto
+    api: FC Porto
+    league: UCL
+  - canonical_name: FC Red Bull Salzburg
+    csv: RB Salzburg
+    api: FC Red Bull Salzburg
+    league: UCL
+  - canonical_name: FC Schalke 04
+    csv: FC Schalke 04
+    api: FC Schalke 04
+    league: UCL
+  - canonical_name: FC Sheriff
+    csv: FC Sheriff
+    api: FC Sheriff
+    league: UCL
+  - canonical_name: FC Steaua Bucureşti
+    csv: FC Steaua Bucureşti
+    api: FC Steaua Bucureşti
+    league: UCL
+  - canonical_name: Fenerbahçe SK
+    csv: Fenerbahçe SK
+    api: Fenerbahçe SK
+    league: UCL
+  - canonical_name: Ferencvárosi TC
+    csv: Ferencvárosi TC
+    api: Ferencvárosi TC
+    league: UCL
+  - canonical_name: Feyenoord Rotterdam
+    csv: Feyenoord
+    api: Feyenoord Rotterdam
+    league: UCL
+  - canonical_name: FK Astana
+    csv: FK Astana
+    api: FK Astana
+    league: UCL
+  - canonical_name: FK Bodø/Glimt
+    csv: FK Bodø/Glimt
+    api: FK Bodø/Glimt
+    league: UCL
+  - canonical_name: FK Crvena Zvezda
+    csv: Crvena Zvezda
+    api: FK Crvena Zvezda
+    league: UCL
+  - canonical_name: FK Kairat
+    csv: FK Kairat
+    api: FK Kairat
+    league: UCL
+  - canonical_name: FK Krasnodar
+    csv: FK Krasnodar
+    api: FK Krasnodar
+    league: UCL
+  - canonical_name: FK Rostov
+    csv: FK Rostov
+    api: FK Rostov
+    league: UCL
+  - canonical_name: FK Shakhtar Donetsk
+    csv: Shakhtar Donetsk
+    api: FK Shakhtar Donetsk
+    league: UCL
+  - canonical_name: Galatasaray SK
+    csv: Galatasaray
+    api: Galatasaray SK
+    league: UCL
+  - canonical_name: Girona FC
+    csv: Girona FC
+    api: Girona FC
+    league: UCL
+  - canonical_name: GNK Dinamo Zagreb
+    csv: Dinamo Zagreb
+    api: GNK Dinamo Zagreb
+    league: UCL
+  - canonical_name: İstanbul Başakşehir
+    csv: İstanbul Başakşehir
+    api: İstanbul Başakşehir
+    league: UCL
+  - canonical_name: Juventus FC
+    csv: Juventus
+    api: Juventus FC
+    league: UCL
+  - canonical_name: KAA Gent
+    csv: KAA Gent
+    api: KAA Gent
+    league: UCL
+  - canonical_name: KRC Genk
+    csv: KRC Genk
+    api: KRC Genk
+    league: UCL
+  - canonical_name: LASK Linz
+    csv: LASK Linz
+    api: LASK Linz
+    league: UCL
+  - canonical_name: Legia Warszawa
+    csv: Legia Warszawa
+    api: Legia Warszawa
+    league: UCL
+  - canonical_name: Leicester City FC
+    csv: Leicester City
+    api: Leicester City FC
+    league: UCL
+  - canonical_name: Lille OSC
+    csv: Lille OSC
+    api: Lille OSC
+    league: UCL
+  - canonical_name: Liverpool FC
+    csv: Liverpool FC
+    api: Liverpool FC
+    league: UCL
+  - canonical_name: Lokomotiv Moskva
+    csv: Lokomotiv Moskva
+    api: Lokomotiv Moskva
+    league: UCL
+  - canonical_name: Maccabi Haifa
+    csv: Maccabi Haifa
+    api: Maccabi Haifa
+    league: UCL
+  - canonical_name: Maccabi Tel Aviv
+    csv: Maccabi Tel Aviv
+    api: Maccabi Tel Aviv
+    league: UCL
+  - canonical_name: Malmö FF
+    csv: Malmö FF
+    api: Malmö FF
+    league: UCL
+  - canonical_name: Manchester City FC
+    csv: Manchester City
+    api: Manchester City FC
+    league: UCL
+  - canonical_name: Manchester United FC
+    csv: Manchester United
+    api: Manchester United FC
+    league: UCL
+  - canonical_name: Montpellier HSC
+    csv: Montpellier HSC
+    api: Montpellier HSC
+    league: UCL
+  - canonical_name: Málaga CF
+    csv: Málaga CF
+    api: Málaga CF
+    league: UCL
+  - canonical_name: Newcastle United FC
+    csv: Newcastle United FC
+    api: Newcastle United FC
+    league: UCL
+  - canonical_name: NK Maribor
+    csv: NK Maribor
+    api: NK Maribor
+    league: UCL
+  - canonical_name: Olympique de Marseille
+    csv: Olympique Marseille
+    api: Olympique de Marseille
+    league: UCL
+  - canonical_name: Olympique Lyonnais
+    csv: Olympique Lyonnais
+    api: Olympique Lyonnais
+    league: UCL
+  - canonical_name: Oţelul Galaţi
+    csv: Oţelul Galaţi
+    api: Oţelul Galaţi
+    league: UCL
+  - canonical_name: PAE AEK
+    csv: AEK Athen
+    api: PAE AEK
+    league: UCL
+  - canonical_name: PAE Olympiakos SFP
+    csv: Olympiakos Piraeus
+    api: PAE Olympiakos SFP
+    league: UCL
+  - canonical_name: Paphos FC
+    csv: Paphos FC
+    api: Paphos FC
+    league: UCL
+  - canonical_name: Paris Saint-Germain FC
+    csv: Paris Saint-Germain
+    api: Paris Saint-Germain FC
+    league: UCL
+  - canonical_name: PFC Ludogorets Razgrad
+    csv: PFC Ludogorets Razgrad
+    api: PFC Ludogorets Razgrad
+    league: UCL
+  - canonical_name: PSV
+    csv: PSV Eindhoven
+    api: PSV
+    league: UCL
+  - canonical_name: Qarabağ Ağdam FK
+    csv: Qarabağ FK
+    api: Qarabağ Ağdam FK
+    league: UCL
+  - canonical_name: Racing Club de Lens
+    csv: Racing Club de Lens
+    api: Racing Club de Lens
+    league: UCL
+  - canonical_name: Rangers FC
+    csv: Rangers FC
+    api: Rangers FC
+    league: UCL
+  - canonical_name: RB Leipzig
+    csv: RB Leipzig
+    api: RB Leipzig
+    league: UCL
+  - canonical_name: Real Betis Balompié
+    csv: Real Betis Balompié
+    api: Real Betis Balompié
+    league: UCL
+  - canonical_name: Real Madrid CF
+    csv: Real Madrid
+    api: Real Madrid CF
+    league: UCL
+  - canonical_name: Real Sociedad de Fútbol
+    csv: Real Sociedad
+    api: Real Sociedad de Fútbol
+    league: UCL
+  - canonical_name: Royal Antwerp FC
+    csv: Royal Antwerp FC
+    api: Royal Antwerp FC
+    league: UCL
+  - canonical_name: Royale Union Saint-Gilloise
+    csv: Royale Union Saint-Gilloise
+    api: Royale Union Saint-Gilloise
+    league: UCL
+  - canonical_name: RSC Anderlecht
+    csv: RSC Anderlecht
+    api: RSC Anderlecht
+    league: UCL
+  - canonical_name: Sabah FK
+    csv: Sabah FK
+    api: Sabah FK
+    league: UCL
+  - canonical_name: Sevilla FC
+    csv: Sevilla FC
+    api: Sevilla FC
+    league: UCL
+  - canonical_name: SK Slavia Praha
+    csv: Slavia Praha
+    api: SK Slavia Praha
+    league: UCL
+  - canonical_name: SK Sturm Graz
+    csv: SK Sturm Graz
+    api: SK Sturm Graz
+    league: UCL
+  - canonical_name: Spartak Moskva
+    csv: Spartak Moskva
+    api: Spartak Moskva
+    league: UCL
+  - canonical_name: Sport Lisboa e Benfica
+    csv: SL Benfica
+    api: Sport Lisboa e Benfica
+    league: UCL
+  - canonical_name: Sporting Clube de Braga
+    csv: Sporting Braga
+    api: Sporting Clube de Braga
+    league: UCL
+  - canonical_name: Sporting Clube de Portugal
+    csv: Sporting CP
+    api: Sporting Clube de Portugal
+    league: UCL
+  - canonical_name: SS Lazio
+    csv: Lazio Roma
+    api: SS Lazio
+    league: UCL
+  - canonical_name: SSC Napoli
+    csv: SSC Napoli
+    api: SSC Napoli
+    league: UCL
+  - canonical_name: Stade Brestois 29
+    csv: Stade Brestois 29
+    api: Stade Brestois 29
+    league: UCL
+  - canonical_name: Stade Rennais FC 1901
+    csv: Stade Rennais
+    api: Stade Rennais FC 1901
+    league: UCL
+  - canonical_name: Tottenham Hotspur FC
+    csv: Tottenham Hotspur
+    api: Tottenham Hotspur FC
+    league: UCL
+  - canonical_name: Trabzonspor
+    csv: Trabzonspor
+    api: Trabzonspor
+    league: UCL
+  - canonical_name: TSG 1899 Hoffenheim
+    csv: 1899 Hoffenheim
+    api: TSG 1899 Hoffenheim
+    league: UCL
+  - canonical_name: Valencia CF
+    csv: Valencia CF
+    api: Valencia CF
+    league: UCL
+  - canonical_name: VfB Stuttgart
+    csv: VfB Stuttgart
+    api: VfB Stuttgart
+    league: UCL
+  - canonical_name: VfL Wolfsburg
+    csv: VfL Wolfsburg
+    api: VfL Wolfsburg
+    league: UCL
+  - canonical_name: Viking FK
+    csv: Viking FK
+    api: Viking FK
+    league: UCL
+  - canonical_name: Viktoria Plzeň
+    csv: Viktoria Plzeň
+    api: Viktoria Plzeň
+    league: UCL
+  - canonical_name: Villarreal CF
+    csv: Villarreal CF
+    api: Villarreal CF
+    league: UCL
+  - canonical_name: Zenit St. Petersburg
+    csv: Zenit St. Petersburg
+    api: Zenit St. Petersburg
+    league: UCL
+  - canonical_name: ŠK Slovan Bratislava
+    csv: ŠK Slovan Bratislava
+    api: ŠK Slovan Bratislava
+    league: UCL

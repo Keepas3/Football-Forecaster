@@ -138,8 +138,7 @@ def _other_competitions(team_id: int, leagues: dict, start: dt.date, end: dt.dat
 def _schedule_entries(session, frame, league_code, params, names, locked_predictions, tz, match_details):
     """(table row, FixtureRef) for each fixture in `frame`, a competition's
     upcoming matches. Predicted with that competition's own model; a competition
-    with no model (the Champions League) gets the match with the prediction
-    columns left blank. `match_details` says whether that competition has a match
+    with no model gets the match with the prediction columns left blank. `match_details` says whether that competition has a match
     details page to link the kickoff to."""
     entries = []
     for row in frame.itertuples(index=False):
@@ -264,9 +263,8 @@ def render() -> None:
 
     # Unlike before, a missing model no longer stops the whole page -- a
     # competition with no historical data source (League.supports_predictions
-    # is False, e.g. UEFA Champions League/European Championship) will never
-    # have one, but its squad/historical-stats/injuries sections below are
-    # still perfectly useful without it.
+    # is False) will never have one, but its squad/historical-stats/injuries
+    # sections below are still perfectly useful without it.
     st.subheader("Current rating")
     if params is None:
         if league is not None and not league.supports_predictions:

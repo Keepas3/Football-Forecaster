@@ -125,6 +125,29 @@ def test_real_leagues_yaml_euro_is_trainable_archive_with_historical_seasons():
     assert league.supports_predictions is True
 
 
+def test_real_leagues_yaml_ucl_trains_on_hidden_history_but_shows_only_the_league_phase_seasons():
+    import soccer_predictor.config as config
+    from soccer_predictor.ingest import ucl_archive
+
+    leagues = config.load_leagues()
+    league = leagues["UCL"]
+    assert league.trainable is True and league.supports_predictions is True
+    # A visitor browses only the 36-team format; the older eight-group seasons just train the ratings.
+    assert league.seasons == ["2425", "2526", "2627"]
+    assert league.history_seasons[0] == "1112" and league.history_seasons[-1] == "2324"
+    assert not set(league.seasons) & set(league.history_seasons)
+    # Every archive season is loaded, and everything after it comes from football-data.org.
+    assert ucl_archive.ARCHIVE_SEASONS <= set(league.history_seasons)
+    assert set(league.history_seasons) - ucl_archive.ARCHIVE_SEASONS == {"2324"}
+    # No other competition keeps hidden seasons.
+    assert all(not other.history_seasons for code, other in leagues.items() if code != "UCL")
+
+
+def test_history_seasons_default_to_none():
+    league = League(code="EPL", name="English Premier League", seasons=["2627"], csv_code="E0")
+    assert league.history_seasons == []
+
+
 def test_load_leagues_parses_trainable_flag(tmp_path, monkeypatch):
     import soccer_predictor.config as config
 

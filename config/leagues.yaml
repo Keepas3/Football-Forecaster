@@ -78,13 +78,13 @@ leagues:
       - {start: 16, end: 16, kind: playoff, label: "Relegation playoff"}
       - {start: 17, end: 18, kind: relegation, label: "Relegation"}
   # No football-data.co.uk CSV exists for any competition in this group --
-  # their match history/standings/squads come entirely from football-data.org's
-  # live API (see ingest/fixtures.py's sync_results_to_db and
-  # ingest/team_mapper.py's seed_teams_from_api). No csv_code means no
-  # Dixon-Coles model either (League.supports_predictions is False) -- the
-  # dashboard shows standings/fixtures/squads for these but skips score
-  # predictions. Flagged with the UN flag rather than a country flag, since
-  # none of them is a single nation's competition.
+  # their match history/standings/squads come from football-data.org's live
+  # API (see ingest/fixtures.py's sync_results_to_db and ingest/team_mapper.py's
+  # seed_teams_from_api) and, for past tournaments, a static archive. Having no
+  # csv_code does not rule out a Dixon-Coles model: `trainable: true` (see
+  # League.supports_predictions) switches it on once enough history is stored.
+  # Flagged with the UN flag rather than a country flag, since none of them is a
+  # single nation's competition.
   - code: WC
     name: FIFA World Cup
     team_type: national
@@ -118,10 +118,30 @@ leagues:
     name: UEFA Champions League
     espn_league_slug: uefa.champions  # match detail only (lineups/stats); data still comes from the source below
     api_competition_id: 2001
-    # Scoped to the 2024/25+ 36-team single league-phase table format --
-    # older seasons used an 8-group format that a flat table can't represent
-    # correctly, so they're deliberately left out.
+    # `seasons` is what a visitor can browse: the 2024/25+ 36-team single
+    # league-phase table format. Earlier seasons used an 8-group format that a
+    # flat table can't represent, so they are listed in `history_seasons`
+    # instead -- stored and used to train the ratings, never shown. 2023/24
+    # onward comes from football-data.org, 2011/12 to 2022/23 from a static
+    # archive (ingest/ucl_archive.py; the free tier 403s on anything older).
+    # Stored scores are the 90-minute ones (ingest/fixtures.py's
+    # ninety_minute_score): a tie settled in extra time or on penalties is
+    # recorded as it stood after 90 minutes, which is what the model predicts.
+    trainable: true
+    # Rating memory/smoothing chosen by walk-forward backtest
+    # (scripts/tune_ratings.py UCL): every month from 2014/15 to 2023/24 (1,244
+    # matches) predicted from only the matches before it, 25 memory/smoothing
+    # pairs tried. The default one-year memory scored RPS 0.1963 and guessing the
+    # usual win/draw/loss rates 0.2341; a ~3.8-year half-life with moderate
+    # smoothing scores 0.1908. Clubs meet only a handful of times a season, so
+    # what they did in earlier seasons still says something about them. On the
+    # 2024/25+ matches the choice never saw: 0.2020 against the default's 0.2156
+    # and guessing's 0.2392. Starting the history at 2015/16 instead scores the
+    # same (0.2028) to within noise, so the extra four seasons are kept.
+    rating_decay_xi: 0.0005
+    rating_ridge: 1.5
     seasons: ["2425", "2526", "2627"]
+    history_seasons: ["1112", "1213", "1314", "1415", "1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324"]
     flag_url: https://flagcdn.com/w40/un.png
     flag_emoji: "🇺🇳"
     zones:

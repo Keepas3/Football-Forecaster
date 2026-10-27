@@ -39,6 +39,10 @@ def test_the_real_league_configs():
     assert not wc.division_prior and not euro.division_prior
     # Domestic leagues keep the standard fit.
     assert (epl.rating_decay_xi, epl.rating_ridge, epl.division_prior) == (None, 0.0, False)
+    # The Champions League's clubs meet a few times a season: long memory and some smoothing too,
+    # but no divisions (every club starts from the league average).
+    ucl = leagues["UCL"]
+    assert ucl.rating_decay_xi < DEFAULT_XI and ucl.rating_ridge > 0 and not ucl.division_prior
 
 
 @pytest.fixture

@@ -28,7 +28,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from soccer_predictor.config import DATA_DIR, League, load_leagues  # noqa: E402
-from soccer_predictor.ingest import euro_archive, worldcup_archive  # noqa: E402
+from soccer_predictor.ingest import euro_archive, ucl_archive, worldcup_archive  # noqa: E402
 from soccer_predictor.ingest.api_client import MissingApiKey  # noqa: E402
 from soccer_predictor.ingest.fixtures import (  # noqa: E402
     espn_seasons_to_sync,
@@ -191,6 +191,29 @@ def _sync_archive_league(league: League) -> None:
             print(f"  season {season}: {synced} matches synced, {skipped} skipped (unresolved teams)")
 
 
+def _sync_history_seasons(league: League) -> list[str]:
+    """Stores a league's training-only seasons (League.history_seasons) that
+    football-data.org's free tier cannot serve: the Champions League's
+    2011-12 to 2022-23 seasons come from a static archive
+    (ingest/ucl_archive.py), whose club names the alias rows in
+    config/team_aliases.yaml tie to football-data.org's. Needs no API key.
+    Returns the history seasons still left for football-data.org to fetch."""
+    remaining = []
+    for season in league.history_seasons:
+        if league.code != "UCL" or season not in ucl_archive.ARCHIVE_SEASONS:
+            remaining.append(season)
+            continue
+        try:
+            frame = ucl_archive.matches_frame(season)
+        except requests.RequestException as exc:
+            print(f"  season {season}: skipped -- {exc}")
+            continue
+        with session_scope() as session:
+            ingested, skipped = ingest_into_db(session, league.code, season, frame)
+        print(f"  season {season}: {ingested} matches ingested from the archive, {skipped} skipped (unresolved teams)")
+    return remaining
+
+
 def main() -> None:
     init_db()
     leagues = load_leagues()
@@ -243,6 +266,12 @@ def main() -> None:
             # No football-data.co.uk source for this competition -- team
             # list and match history both come from football-data.org
             # instead (see ingest/team_mapper.py, ingest/fixtures.py).
+            # Hand-mapped clubs first (a no-op for a league with no rows in
+            # config/team_aliases.yaml): the Champions League's past seasons
+            # name clubs the current team list no longer holds.
+            with session_scope() as session:
+                seed_teams_and_aliases(session, league.code)
+            api_history_seasons = _sync_history_seasons(league)
             with session_scope() as session:
                 seeded = seed_teams_from_api(session, league)
             print(f"  seeded {seeded} teams from the live API")
@@ -252,7 +281,7 @@ def main() -> None:
                 )
                 continue
 
-            for season in league.seasons:
+            for season in [*api_history_seasons, *league.seasons]:
                 try:
                     with session_scope() as session:
                         synced, skipped = sync_results_to_db(session, league, season)
