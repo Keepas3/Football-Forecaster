@@ -185,12 +185,23 @@ def test_full_refresh_of_an_espn_league_is_unchanged(monkeypatch):
 
 def test_quick_refresh_of_a_football_data_league_skips_only_injuries(monkeypatch):
     calls = _record_calls(monkeypatch)
-    laliga = League(code="LALIGA", name="La Liga", csv_code="SP1", seasons=["2627"])
+    serie_a = League(code="SERIEA", name="Serie A", csv_code="I1", seasons=["2627"])  # no automatic injury feed
 
-    result = refresh.refresh_league(laliga, quick=True)
+    result = refresh.refresh_league(serie_a, quick=True)
 
     assert [n for n, _ in calls] == ["fixtures_fd"]
     assert result.fixtures_synced == 7 and result.injuries_synced == 0
+
+
+def test_quick_refresh_of_la_liga_and_the_champions_league_also_pulls_their_single_request_injury_feeds(monkeypatch):
+    for code, csv_code in (("LALIGA", "SP1"), ("UCL", None)):
+        calls = _record_calls(monkeypatch)
+        league = League(code=code, name=code, csv_code=csv_code, seasons=["2627"])
+
+        result = refresh.refresh_league(league, quick=True)
+
+        assert "injuries" in [n for n, _ in calls], code
+        assert result.injuries_synced == 5
 
 
 def test_quick_refresh_of_the_premier_league_also_pulls_its_injuries_before_locking_in_predictions(monkeypatch):

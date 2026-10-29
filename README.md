@@ -292,14 +292,21 @@ uv run pytest
 
 - **Team-name matching** across the CSV and API sources is ongoing manual
   upkeep (see `config/team_aliases.yaml` above), not a one-time fix.
-- **Automatic injury detection only exists for MLS** (via ESPN's roster
-  data). Every other league has no automatic injury source at all --
+- **Automatic injury detection covers only some competitions, all from
+  unofficial feeds**: the Premier League (the Fantasy Premier League
+  feed), La Liga and the Champions League (Biwenger's fantasy-football
+  feed, `ingest/biwenger_client.py`), and MLS (ESPN's roster data, which
+  is usually empty). The feeds are undocumented and not offered under a
+  data licence, so they can change or be withdrawn; Biwenger's legal
+  notice reserves its content and asks for written permission before
+  reuse, so check it suits your use before deploying. Bundesliga, Serie A,
+  Ligue 1 and the rest have no automatic source --
   football-data.org has no injuries endpoint, and the API-Football
-  integration this app used to have for the other leagues was removed once
-  that account became permanently unusable, not just temporarily
-  suspended. `config/injuries.yaml` (manual entry) and the AI chat notes
-  tab are the real sources of injury data for those leagues; both always
-  override anything an automatic source might otherwise supply.
+  integration this app used to have was removed once that account became
+  permanently unusable, not just temporarily suspended.
+  `config/injuries.yaml` (manual entry) and the AI chat notes tab are the
+  real sources of injury data for those leagues; both always override
+  anything an automatic source might otherwise supply.
 - **The injury adjustment's magnitude is a tuned heuristic**
   (`model/injury_adjustment.py`), not empirically validated. There isn't
   enough free injury data to backtest it properly.

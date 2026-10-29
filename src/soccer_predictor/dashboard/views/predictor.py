@@ -16,6 +16,7 @@ from soccer_predictor.ai import whatif_parser
 from soccer_predictor.ai.note_parser import MissingApiKey as NoteParserMissingApiKey
 from soccer_predictor.ai.note_parser import NoteParsingError, parse_note
 from soccer_predictor.config import gemini_api_key, load_leagues, notes_password
+from soccer_predictor.dashboard import injury_table as it
 from soccer_predictor.dashboard import notes_access as na
 from soccer_predictor.dashboard import whatif_access as wa
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
@@ -37,7 +38,6 @@ from soccer_predictor.dashboard.components import (
     fixture_columns_with_kickoff_first,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
-    injury_line,
     format_kickoff,
     leaderboard_dataframe,
     league_option_label,
@@ -47,7 +47,7 @@ from soccer_predictor.dashboard.components import (
     style_fixture_predictions,
     timezone_selector,
 )
-from soccer_predictor.model.injury_adjustment import adjust_strength
+from soccer_predictor.ingest import injuries as injuries_module
 from soccer_predictor.prediction.service import (
     get_injuries_for_team,
     load_latest_params,
@@ -250,6 +250,112 @@ def _render_chat_history(team_names: dict[int, str]) -> None:
                     if st.session_state.editing_message == message_id:
                         st.session_state.editing_message = None
                     st.rerun()
+
+
+INJURY_ROW_PX = 35
+INJURY_HEADER_PX = 38
+INJURY_TABLE_MAX_PX = 900
+
+
+def _table_height(rows: int) -> int:
+    """Pixels for a table that shows its rows without a tiny scroll window,
+    up to a cap (taller than a screen scrolls inside the table instead)."""
+    return min(INJURY_HEADER_PX + INJURY_ROW_PX * rows + 4, INJURY_TABLE_MAX_PX)
+
+
+def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
+    """Everyone currently listed as out, doubtful or suspended, as a table that
+    can be filtered, searched and sorted, plus what that does to each team's
+    ratings (dashboard/injury_table.py)."""
+    today = dt.date.today()
+    rows, ratings = [], {}
+    with session_scope() as session:
+        for team_id, team_name in sorted(team_names.items(), key=lambda item: item[1]):
+            team_injuries = get_injuries_for_team(session, team_id, team_name, today)
+            rows += it.player_rows(team_name, team_injuries, today)
+            ratings[team_name] = (params.attack[team_id], params.defense[team_id], team_injuries.entries)
+    frame = it.players_frame(rows)
+
+    if frame.empty:
+        st.info("No injuries on record.")
+        if not injuries_module.has_automatic_feed(league):
+            st.caption(
+                f"This site has no automatic injury feed for {league.name}, so only entries added by hand "
+                "(config/injuries.yaml or saved AI notes) appear here."
+            )
+        return
+
+    counts = it.summary_counts(frame)
+    st.caption(
+        f"{counts['players']} players across {counts['teams']} teams: {counts[it.OUT]} out · "
+        f"{counts[it.DOUBTFUL]} doubtful · {counts[it.SUSPENDED]} suspended."
+    )
+    if league.code in injuries_module.BIWENGER_LEAGUES:
+        st.caption(
+            "Automatic injury news for this competition comes from Biwenger's fantasy-football feed "
+            "(unofficial, so it can lag the clubs' own announcements)."
+        )
+    players_tab, teams_tab = st.tabs(["Players", "Team impact"])
+
+    with players_tab:
+        col_team, col_status, col_position, col_search = st.columns([2, 2, 1.4, 2])
+        teams = col_team.multiselect("Team", sorted(frame["Team"].unique()), key=f"inj_teams_{league.code}")
+        statuses = col_status.multiselect(
+            "Status", [s for s in it.STATUS_ORDER if s in set(frame["Status"])], key=f"inj_status_{league.code}"
+        )
+        positions = col_position.multiselect(
+            "Position", sorted(frame["Position"].unique()), key=f"inj_position_{league.code}"
+        )
+        # The grid is a canvas, invisible to the browser's own Ctrl+F -- hence a search box.
+        query = col_search.text_input("Search player", key=f"inj_query_{league.code}")
+        shown = it.filter_players(frame, teams, statuses, positions, query)
+        if shown.empty:
+            st.info("No player matches those filters.")
+        else:
+            st.dataframe(
+                shown,
+                hide_index=True,
+                use_container_width=True,
+                height=_table_height(len(shown)),
+                column_config={
+                    "Chance of playing": st.column_config.NumberColumn(
+                        "Chance of playing", format="%d%%", help="How likely he is to play the next match."
+                    ),
+                    "Expected back": st.column_config.DateColumn(
+                        "Expected back",
+                        format="D MMM YYYY",
+                        help="Some feeds only say roughly when (\"mid-November\"); those show the middle of the month.",
+                    ),
+                    "Impact": st.column_config.ProgressColumn(
+                        "Impact",
+                        min_value=0.0,
+                        max_value=1.0,
+                        format="%.2f",
+                        help="How much the model discounts the team for him (an attacker lowers its attack, "
+                        "a defender or keeper raises the goals it concedes). A doubtful player counts for less.",
+                    ),
+                },
+                key=f"inj_table_{league.code}",
+            )
+            st.caption("Click a column heading to sort. Within each team the biggest impact comes first.")
+
+    with teams_tab:
+        impact = it.team_impact_frame(ratings)
+        st.dataframe(
+            impact,
+            hide_index=True,
+            use_container_width=True,
+            height=_table_height(len(impact)),
+            column_config={
+                "Attack change": st.column_config.NumberColumn("Attack change", format="%+.1f%%"),
+                "Defence change": st.column_config.NumberColumn("Defence change", format="%+.1f%%"),
+            },
+            key=f"inj_teams_table_{league.code}",
+        )
+        st.caption(
+            "The model's attack and defence ratings for each team before and after these players are "
+            "taken out. Defence is goals conceded, so a rise there is worse. Teams most affected come first."
+        )
 
 
 WHATIF_RESULT_KEY = "whatif_result"
@@ -583,33 +689,7 @@ def render() -> None:
             )
 
     with injuries_tab:
-        any_injuries_shown = False
-        for team_id in sorted(team_names, key=lambda t: team_names[t]):
-            team_name = team_names[team_id]
-            with session_scope() as session:
-                team_injuries = get_injuries_for_team(session, team_id, team_name, dt.date.today())
-            if not team_injuries.entries:
-                continue
-
-            any_injuries_shown = True
-            st.markdown(f"**{team_name}**")
-            for entry, source, return_date, note in zip(
-                team_injuries.entries,
-                team_injuries.sources,
-                team_injuries.expected_return_dates,
-                team_injuries.notes,
-            ):
-                st.write(injury_line(entry, source, return_date, note))
-            adj_attack, adj_defense = adjust_strength(
-                params.attack[team_id], params.defense[team_id], team_injuries.entries
-            )
-            st.caption(
-                f"Attack {params.attack[team_id]:.2f} → {adj_attack:.2f}, "
-                f"Defense {params.defense[team_id]:.2f} → {adj_defense:.2f}"
-            )
-
-        if not any_injuries_shown:
-            st.caption("No injuries on record.")
+        _render_injuries_tab(league, params, team_names)
 
     with notes_tab:
         # Top: the free what-if for everyone. Below: the owner-only notes that are

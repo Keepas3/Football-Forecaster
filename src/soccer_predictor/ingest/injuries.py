@@ -1,15 +1,17 @@
 """Injury sync -- the bonus source layered on top of the reliable
 config/injuries.yaml manual list.
 
-Automatic injury detection exists for two places only: MLS (ESPN's roster
-data) and the Premier League (the Fantasy Premier League feed, see
-ingest/fpl_client.py -- unofficial, so treated as best effort).
-football-data.org (this app's source for the other leagues) has no
-injuries endpoint of its own, ESPN's injury fields are empty for them, and
-the API-Football-based fallback this used to have was removed once that
-account became permanently unusable -- see ingest/player_importance.py's
-module docstring. Every other league relies solely on config/injuries.yaml
-(manual) and AI-parsed chat notes (see prediction/service.py::get_injuries_for_team).
+Automatic injury detection exists for four places: MLS (ESPN's roster
+data), the Premier League (the Fantasy Premier League feed, see
+ingest/fpl_client.py), and La Liga and the Champions League (Biwenger's
+fantasy feed, see ingest/biwenger_client.py) -- the last three unofficial, so
+treated as best effort. football-data.org (this app's source for the other
+leagues) has no injuries endpoint of its own, ESPN's injury fields are empty
+for them, and the API-Football-based fallback this used to have was removed
+once that account became permanently unusable -- see
+ingest/player_importance.py's module docstring. Every other league relies
+solely on config/injuries.yaml (manual) and AI-parsed chat notes (see
+prediction/service.py::get_injuries_for_team).
 
 For MLS, the importance_weight each detected injury gets is looked up from
 American Soccer Analysis (ingest/asa_client.py) via
@@ -23,10 +25,18 @@ from __future__ import annotations
 
 import datetime as dt
 
+from rapidfuzz import fuzz, process
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
-from soccer_predictor.ingest import asa_client, espn_client, fpl_client, player_importance, understat_client
+from soccer_predictor.ingest import (
+    asa_client,
+    biwenger_client,
+    espn_client,
+    fpl_client,
+    player_importance,
+    understat_client,
+)
 from soccer_predictor.storage.models import Team
 from soccer_predictor.storage.repository import replace_injuries
 
@@ -34,18 +44,27 @@ from soccer_predictor.storage.repository import replace_injuries
 def sync_injuries_to_db(session: Session, league: League, season_year: int) -> tuple[int, int]:
     """Fetches + stores injuries for every team in `league`. Returns
     (teams_synced, teams_skipped) -- a deliberate (0, 0) no-op for any
-    league that isn't ESPN-backed, since there's no automatic injury source
-    for those anymore (see this module's docstring).
+    league without an automatic injury source (see this module's docstring).
     """
     if league.data_source == "espn":
         return _sync_injuries_to_db_espn(session, league)
     if league.code in FPL_LEAGUES:
         return sync_fpl_injuries(session, league)
+    if league.code in BIWENGER_LEAGUES:
+        return sync_biwenger_injuries(session, league)
     return 0, 0
 
 
 # The Fantasy Premier League feed (ingest/fpl_client.py) covers this league only.
 FPL_LEAGUES = {"EPL"}
+# Biwenger's fantasy feed (ingest/biwenger_client.py) covers these.
+BIWENGER_LEAGUES = set(biwenger_client.COMPETITIONS)
+# Leagues whose whole feed is one cached request, cheap enough for the frequent quick refresh.
+SINGLE_REQUEST_LEAGUES = FPL_LEAGUES | BIWENGER_LEAGUES
+
+
+def has_automatic_feed(league: League) -> bool:
+    return league.data_source == "espn" or league.code in SINGLE_REQUEST_LEAGUES
 # A doubtful player's weight is scaled by how likely he is to miss the game; below
 # this it would not move a prediction, so the entry is dropped.
 MIN_INJURY_WEIGHT = 0.02
@@ -115,6 +134,103 @@ def sync_fpl_injuries(session: Session, league: League) -> tuple[int, int]:
                         "position": injury.position_bucket,
                         "importance_weight": weight,
                         "note": f"FPL: {news}{chance}",
+                    }
+                )
+        replace_injuries(session, id_by_name[our_name], source="api", injuries=entries)
+        synced += 1
+    return synced, skipped
+
+
+# A club must match an Understat club this closely to borrow its players' stats;
+# below it (a Portuguese or Turkish side Understat doesn't track) the lookalike
+# is more likely wrong than right.
+UNDERSTAT_CLUB_MATCH_THRESHOLD = 85
+
+
+def _understat_squad(
+    biwenger_club: str, our_name: str, league: League, season: int
+) -> list[understat_client.UnderstatPlayerStats]:
+    """The Understat players of a club, or [] if Understat doesn't track it.
+    La Liga is covered directly; the Champions League is not, so a club's stats
+    are looked up in the domestic league it plays in (the five Understat covers),
+    which is where its players' output is recorded."""
+    if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG:
+        return understat_client.fetch_team_season(our_name, league.code, season)
+    best_score, best_squad = 0.0, []
+    for code in understat_client.UNDERSTAT_LEAGUE_SLUG:
+        squads = understat_client.fetch_all_teams_totals(code, season)
+        for name in (biwenger_club, our_name):  # one of the two spellings is usually Understat's own
+            match = process.extractOne(
+                name, list(squads), scorer=fuzz.WRatio, processor=biwenger_client.fold_name
+            )
+            if match is not None and match[1] > best_score:
+                best_score, best_squad = match[1], squads[match[0]]
+    return best_squad if best_score >= UNDERSTAT_CLUB_MATCH_THRESHOLD else []
+
+
+def _biwenger_base_weight(injury, players, totals) -> float:
+    """How much his club loses without him, before any doubt is applied: his
+    Understat output share where Understat knows him; otherwise a guess from the
+    feed itself -- none if he hasn't played, else the default scaled by how
+    close his market price is to his club's most expensive player."""
+    if players and player_importance.find_understat_player(injury.player_name, players) is not None:
+        return player_importance.resolve_api_importance_weight(
+            injury.player_name, injury.position_bucket, understat_players=players, understat_totals=totals
+        )
+    if injury.games_played == 0:
+        return UNPLAYED_WEIGHT
+    return max(UNPLAYED_WEIGHT, player_importance.DEFAULT_API_IMPORTANCE_WEIGHT * injury.price_share)
+
+
+def _biwenger_note(injury) -> str:
+    news = injury.news
+    if injury.status == "doubt":
+        chance = f"{injury.chance_of_playing}% chance of playing"
+        news = f"{news} - {chance}" if news else chance
+    return f"Biwenger: {news or 'Out'}"
+
+
+def sync_biwenger_injuries(session: Session, league: League) -> tuple[int, int]:
+    """La Liga or Champions League injuries, doubts and suspensions from
+    Biwenger's feed. Returns (clubs synced, clubs skipped); (0, 0) and nothing
+    changed if the feed can't be reached -- yesterday's data beats wiping it.
+
+    Priced like the Premier League's (see sync_fpl_injuries): by Understat
+    output where it knows the player, else a guess from the feed; a doubtful
+    player's weight is scaled by his chance of missing the game. Stored as
+    source "api" and replaced on every sync.
+    """
+    from soccer_predictor.storage.repository import teams_for_league
+
+    by_club = biwenger_client.fetch_injuries_by_club(league.code)
+    if by_club is None:
+        return 0, 0
+    teams = teams_for_league(session, league.code)
+    id_by_name = {name: team_id for team_id, name in teams.items()}
+    season = league.api_season_year(league.seasons[-1])
+
+    synced = skipped = 0
+    claimed: set[str] = set()
+    for club, injuries in by_club.items():
+        our_name = biwenger_client.resolve_team_name(club, list(id_by_name))
+        if our_name is None or our_name in claimed:  # unknown club, or two of theirs for one of ours
+            skipped += 1
+            continue
+        claimed.add(our_name)
+        entries = []
+        if injuries:  # only priced when the club has someone to price
+            players = _understat_squad(club, our_name, league, season)
+            totals = player_importance.aggregate_understat_team_output(players)
+            for injury in injuries:
+                weight = _biwenger_base_weight(injury, players, totals) * (1 - injury.chance_of_playing / 100)
+                if weight < MIN_INJURY_WEIGHT:
+                    continue
+                entries.append(
+                    {
+                        "player_name": injury.player_name,
+                        "position": injury.position_bucket,
+                        "importance_weight": weight,
+                        "note": _biwenger_note(injury),
                     }
                 )
         replace_injuries(session, id_by_name[our_name], source="api", injuries=entries)
