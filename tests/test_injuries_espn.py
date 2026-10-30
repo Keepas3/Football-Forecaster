@@ -11,8 +11,9 @@ from soccer_predictor.ingest.player_importance import DEFAULT_API_IMPORTANCE_WEI
 from soccer_predictor.storage.models import Base
 from soccer_predictor.storage.repository import get_or_create_team, injuries_for_team, update_espn_team_id
 
+# Not MLS: that league's injuries now come from starting11.com (ingest/starting11_client.py).
 LEAGUE = League(
-    code="MLS", name="Major League Soccer", seasons=["2026"], data_source="espn", espn_league_slug="usa.1"
+    code="ASIA", name="AFC Champions League Elite", seasons=["2026"], data_source="espn", espn_league_slug="afc.championsleague"
 )
 
 
@@ -21,7 +22,7 @@ def session():
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     with Session(engine) as s:
-        crew = get_or_create_team(s, "Columbus Crew", "MLS")
+        crew = get_or_create_team(s, "Columbus Crew", LEAGUE.code)
         update_espn_team_id(s, crew.id, 183)
         s.commit()
         yield s
@@ -33,7 +34,7 @@ def no_asa_by_default(monkeypatch):
 
 
 def _crew_injury(session):
-    team = get_or_create_team(session, "Columbus Crew", "MLS")
+    team = get_or_create_team(session, "Columbus Crew", LEAGUE.code)
     return injuries_for_team(session, team.id)[0]
 
 
@@ -62,7 +63,7 @@ def test_no_injuries_still_counts_as_synced(session, monkeypatch):
 
 
 def test_skips_team_without_espn_id(session, monkeypatch):
-    get_or_create_team(session, "Some Other Club", "MLS")
+    get_or_create_team(session, "Some Other Club", LEAGUE.code)
     session.commit()
     monkeypatch.setattr(espn_client, "fetch_team_roster", lambda *a, **k: ([], []))
 
@@ -113,7 +114,7 @@ def test_importance_weight_falls_back_to_default_when_no_stats(session, monkeypa
 
 
 def test_non_espn_league_is_a_no_op(session):
-    non_espn_league = League(code="SERIEA", name="Serie A", seasons=["2526"], csv_code="I1")  # no automatic injury source
+    non_espn_league = League(code="EURO", name="European Championship", seasons=["2024"])  # no automatic injury source
 
     synced, skipped = injuries.sync_injuries_to_db(session, non_espn_league, 2026)
 

@@ -295,6 +295,11 @@ def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
             "Automatic injury news for this competition comes from Biwenger's fantasy-football feed "
             "(unofficial, so it can lag the clubs' own announcements)."
         )
+    elif league.code in injuries_module.STARTING11_LEAGUES:
+        st.caption(
+            "Automatic injury news for this league comes from starting11.com, read once a day "
+            "(unofficial: it can lag the clubs' own announcements, and it gives no return dates)."
+        )
     players_tab, teams_tab = st.tabs(["Players", "Team impact"])
 
     with players_tab:

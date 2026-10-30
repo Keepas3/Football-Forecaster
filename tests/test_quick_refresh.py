@@ -185,7 +185,7 @@ def test_full_refresh_of_an_espn_league_is_unchanged(monkeypatch):
 
 def test_quick_refresh_of_a_football_data_league_skips_only_injuries(monkeypatch):
     calls = _record_calls(monkeypatch)
-    serie_a = League(code="SERIEA", name="Serie A", csv_code="I1", seasons=["2627"])  # no automatic injury feed
+    serie_a = League(code="SERIEA", name="Serie A", csv_code="I1", seasons=["2627"])  # its feed is read daily only
 
     result = refresh.refresh_league(serie_a, quick=True)
 

@@ -21,15 +21,13 @@ import hashlib
 import json
 import re
 import time
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
-from rapidfuzz import fuzz, process
 
 from soccer_predictor.config import DATA_DIR
-from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest import club_names, http_session
 
 # This app's league code -> Biwenger's competition slug.
 COMPETITIONS = {"LALIGA": "la-liga", "UCL": "champions-league"}
@@ -56,7 +54,6 @@ TEAM_NAME_OVERRIDES = {
     "aek athen": "PAE AEK",
     "slavia prag": "SK Slavia Praha",
 }
-TEAM_NAME_FUZZY_THRESHOLD = 95
 
 # Biwenger's English text is machine-translated; "golpe" (a knock) comes out as
 # "Stroke", which on an injury list reads as a medical emergency.
@@ -185,28 +182,13 @@ def parse_injuries(data: dict) -> list[BiwengerInjury]:
     return injuries
 
 
-def fold_name(name: str) -> str:
-    """Lowercase, accents removed, punctuation turned into spaces."""
-    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", plain.lower()).split())
+fold_name = club_names.fold_name
 
 
 def resolve_team_name(biwenger_name: str, our_team_names: list[str]) -> str | None:
     """Our name for a Biwenger club ("Atlético" -> "Atletico Madrid"), or None
-    if nothing matches clearly. The words of one name must be all of the other's
-    ("Lens" in "Racing Club de Lens"), and if several of ours fit equally well
-    ("Manchester" alone) none is taken -- a wrong club is worse than no club."""
-    folded = fold_name(biwenger_name)
-    wanted = fold_name(TEAM_NAME_OVERRIDES.get(folded, biwenger_name))
-    by_folded = {fold_name(name): name for name in our_team_names}
-    if wanted in by_folded:  # an exact match must never lose to a lookalike
-        return by_folded[wanted]
-    scored = process.extract(wanted, list(by_folded), scorer=fuzz.token_set_ratio, limit=2)
-    if not scored or scored[0][1] < TEAM_NAME_FUZZY_THRESHOLD:
-        return None
-    if len(scored) > 1 and scored[1][1] >= scored[0][1]:
-        return None
-    return by_folded[scored[0][0]]
+    if nothing matches clearly (see ingest/club_names.py)."""
+    return club_names.resolve_club_name(biwenger_name, our_team_names, TEAM_NAME_OVERRIDES)
 
 
 def fetch_injuries_by_club(league_code: str) -> dict[str, list[BiwengerInjury]] | None:

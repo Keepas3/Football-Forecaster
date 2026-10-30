@@ -293,14 +293,17 @@ uv run pytest
 - **Team-name matching** across the CSV and API sources is ongoing manual
   upkeep (see `config/team_aliases.yaml` above), not a one-time fix.
 - **Automatic injury detection covers only some competitions, all from
-  unofficial feeds**: the Premier League (the Fantasy Premier League
+  unofficial sources**: the Premier League (the Fantasy Premier League
   feed), La Liga and the Champions League (Biwenger's fantasy-football
-  feed, `ingest/biwenger_client.py`), and MLS (ESPN's roster data, which
-  is usually empty). The feeds are undocumented and not offered under a
-  data licence, so they can change or be withdrawn; Biwenger's legal
-  notice reserves its content and asks for written permission before
-  reuse, so check it suits your use before deploying. Bundesliga, Serie A,
-  Ligue 1 and the rest have no automatic source --
+  feed, `ingest/biwenger_client.py`), and MLS, Bundesliga, Serie A and
+  Ligue 1 (the injury pages of starting11.com, read once a day by
+  `ingest/starting11_client.py`; it lists surnames only, with no return
+  dates, and its "doubtful" is loose, so doubts are weighted lightly).
+  None of these is documented or offered under a data licence, so they
+  can change or be withdrawn, and the terms of both Biwenger and
+  Starting 11 reserve their content (Starting 11 says its football data
+  comes from a third-party provider), so check that this suits your use
+  before deploying. Any other league has no automatic source --
   football-data.org has no injuries endpoint, and the API-Football
   integration this app used to have was removed once that account became
   permanently unusable, not just temporarily suspended.

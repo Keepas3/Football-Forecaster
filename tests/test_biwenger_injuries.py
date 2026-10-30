@@ -281,4 +281,4 @@ def test_champions_league_clubs_are_priced_from_the_domestic_league_understat_tr
 def test_only_the_single_request_feeds_run_in_the_quick_refresh():
     assert injuries.SINGLE_REQUEST_LEAGUES == {"EPL", "LALIGA", "UCL"}
     assert injuries.has_automatic_feed(UCL) and injuries.has_automatic_feed(LALIGA)
-    assert not injuries.has_automatic_feed(League(code="SERIEA", name="Serie A", seasons=["2627"], csv_code="I1"))
+    assert not injuries.has_automatic_feed(League(code="EURO", name="European Championship", seasons=["2024"]))

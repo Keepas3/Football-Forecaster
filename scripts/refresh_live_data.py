@@ -4,11 +4,13 @@ Usage:
     uv run python scripts/refresh_live_data.py [--quick] [LEAGUE_CODE ...]
 
 --quick is the light refresh the frequent GitHub Actions run uses: recent results
-and a short fixture window, no injury sync (see ingest.refresh.refresh_league).
+and a short fixture window, and only the injury feeds that are a single request
+(see ingest.refresh.refresh_league).
 
-Requires FOOTBALL_DATA_ORG_API_KEY in .env for fixtures. Automatic
-injuries only exist for MLS (via ESPN); every other league relies on
-config/injuries.yaml and the dashboard's chat notes tab instead.
+Requires FOOTBALL_DATA_ORG_API_KEY in .env for fixtures. Automatic injuries
+exist for the leagues listed in ingest/injuries.py (to try just those, see
+scripts/sync_injuries.py); every other league relies on config/injuries.yaml
+and the dashboard's chat notes tab instead.
 
 This is a thin printing loop over ingest.refresh.refresh_league -- the
 actual per-league orchestration is shared with dashboard/views/admin.py's
@@ -54,8 +56,8 @@ def main() -> None:
             f"{result.probabilities_backfilled} given probabilities"
         )
 
-        if quick:
-            continue  # injuries aren't synced in a quick refresh
+        if quick and not (result.injuries_synced or result.injuries_skipped or result.injuries_error):
+            continue  # the slow injury sync isn't part of a quick refresh
 
         if result.injuries_error:
             print(f"  injuries: skipped -- {result.injuries_error}")
