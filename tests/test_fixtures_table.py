@@ -50,6 +50,12 @@ def test_names_kickoff_and_score_are_links_to_the_right_pages():
     assert markup.count('target="_self"') == 4 and "_blank" not in markup  # same tab, like the standings links
 
 
+def test_page_params_ride_only_on_the_link_that_reloads_the_same_page():
+    markup = fixtures_table_html([_row()], [REF], "EPL", match_details=True, page_params="&from=2026-11-01&to=2026-11-09")
+    with_params = [h for h in _hrefs(markup) if "from=" in h]
+    assert with_params == ["?league=EPL&amp;from=2026-11-01&amp;to=2026-11-09&amp;fixture=7-17-2026-10-31"]
+
+
 def test_a_league_without_match_details_leaves_the_kickoff_as_plain_text():
     markup = fixtures_table_html([_row()], [REF], "EPL", match_details=False)
     assert "/match_detail" not in markup and "Oct 31, 2026 08:30 AM EDT" in markup

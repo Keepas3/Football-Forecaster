@@ -19,6 +19,7 @@ from soccer_predictor.config import gemini_api_key, load_leagues, notes_password
 from soccer_predictor.dashboard import injury_table as it
 from soccer_predictor.dashboard import notes_access as na
 from soccer_predictor.dashboard import whatif_access as wa
+from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
 from soccer_predictor.dashboard.whatif import (
     build_adjustments,
@@ -33,9 +34,11 @@ from soccer_predictor.dashboard.chat_notes import (
     replace_note_text,
 )
 from soccer_predictor.dashboard.components import (
+    FIXTURE_PARAM,
     LEADERBOARD_DISPLAY_COLUMNS,
     _escape_markdown,
-    fixture_columns_with_kickoff_first,
+    FixtureRef,
+    fixtures_table_html,
     injury_column_config,
     injury_source_note,
     PREDICTION_STATUS_NOTE,
@@ -44,6 +47,7 @@ from soccer_predictor.dashboard.components import (
     leaderboard_dataframe,
     league_option_label,
     live_sync_requirement_note,
+    parse_fixture_key,
     render_prediction_breakdown,
     scoreline_chart,
     style_fixture_predictions,
@@ -76,6 +80,23 @@ def _safe_index(options: list, value, default: int = 0) -> int:
         return options.index(value)
     except ValueError:
         return default
+
+
+def default_date_range() -> tuple[dt.date, dt.date]:
+    today = dt.date.today()
+    return today, today + dt.timedelta(days=14)
+
+
+def date_range_from_url(query_params, default: tuple[dt.date, dt.date]) -> tuple[dt.date, dt.date]:
+    """The fixture date range the fixtures table's links carry in `from`/`to` (ISO dates),
+    else `default`: a link reloads the page, which would otherwise reset the range and
+    lose a match picked from outside it."""
+    try:
+        start = dt.date.fromisoformat(query_params.get("from") or "")
+        end = dt.date.fromisoformat(query_params.get("to") or "")
+    except ValueError:
+        return default
+    return (start, end) if start <= end else default
 
 
 def _render_active_notes(leagues: dict, can_delete: bool) -> None:
@@ -496,7 +517,7 @@ def render() -> None:
         )
         date_range = st.date_input(
             "Fixture date range",
-            value=(dt.date.today(), dt.date.today() + dt.timedelta(days=14)),
+            value=date_range_from_url(st.query_params, default_date_range()),
         )
 
         st.divider()
@@ -552,7 +573,7 @@ def render() -> None:
         if isinstance(date_range, tuple) and len(date_range) == 2:
             start, end = date_range
         else:
-            start, end = dt.date.today(), dt.date.today() + dt.timedelta(days=14)
+            start, end = default_date_range()
 
         with session_scope() as session:
             fixtures_df = fixtures_for_league(session, league.code, start, end)
@@ -567,7 +588,7 @@ def render() -> None:
         else:
             tz = timezone_selector()
             rows = []
-            row_meta = []  # parallel to rows: (home_id, away_id, home_name, away_name, date)
+            fixture_refs: list[FixtureRef] = []  # parallel to rows
             with session_scope() as session:
                 locked_predictions = locked_predictions_for_league(session, league.code)
                 for row in fixtures_df.sort_values("date").itertuples(index=False):
@@ -590,30 +611,39 @@ def render() -> None:
                     )
                     row_dict["Kickoff"] = format_kickoff(row.kickoff_utc, row.date, tz)
                     rows.append(row_dict)
-                    row_meta.append((row.home_team_id, row.away_team_id, home_name, away_name, row.date))
-            column_order = fixture_columns_with_kickoff_first(rows[0])
-            fixtures_event = st.dataframe(
-                style_fixture_predictions(rows),
-                use_container_width=True,
-                column_order=column_order,
-                on_select="rerun",
-                selection_mode="single-row",
-                key=f"predictor_fixtures_table_{league.code}",
+                    fixture_refs.append(FixtureRef(row.home_team_id, row.away_team_id, home_name, away_name, row.date))
+
+            # The match whose workings are open: named in the URL by the predicted-score
+            # link, and only ever one of the rows shown (anything else is dropped).
+            selected_index = None
+            if st.query_params.get(FIXTURE_PARAM) is not None:
+                wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
+                selected_index = next(
+                    (i for i, ref in enumerate(fixture_refs) if wanted == (ref.home_id, ref.away_id, ref.date)), None
+                )
+                if selected_index is None:
+                    del st.query_params[FIXTURE_PARAM]
+
+            st.markdown(
+                fixtures_table_html(
+                    rows,
+                    fixture_refs,
+                    league.code,
+                    tz_name=tz.key,
+                    match_details=bool(league.espn_league_slug),
+                    selected=selected_index,
+                    page_params=f"&from={start.isoformat()}&to={end.isoformat()}",
+                ),
+                unsafe_allow_html=True,
             )
             st.caption(
-                "Click a fixture's row to see the full Poisson/Dixon-Coles math behind its prediction. "
-                + PREDICTION_STATUS_NOTE
+                "Click a team's name for its page, the kickoff for the match details, or the predicted "
+                "score to see how it was calculated. " + PREDICTION_STATUS_NOTE
             )
-            selected = fixtures_event.selection.rows if fixtures_event and fixtures_event.selection else []
-            if selected:
-                sel_home_id, sel_away_id, sel_home_name, sel_away_name, sel_date = row_meta[selected[0]]
-                with session_scope() as session:
-                    prediction = predict_fixture(
-                        session, params, sel_home_id, sel_away_id, sel_home_name, sel_away_name, fixture_date=sel_date
-                    )
-                    render_prediction_breakdown(
-                        prediction, sel_home_name, sel_away_name, session, league, sel_home_id, sel_away_id
-                    )
+            if selected_index is not None:
+                render_fixture_workings(
+                    fixture_refs[selected_index], params, league, f"close_fixture_breakdown_{league.code}"
+                )
 
         st.subheader("Custom matchup")
         st.caption("Predict any pairing directly from the fitted model, regardless of the fixture list.")

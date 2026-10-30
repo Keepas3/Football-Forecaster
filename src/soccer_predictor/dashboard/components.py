@@ -1116,6 +1116,7 @@ def fixtures_table_html(
     match_details: bool = False,
     selected: int | None = None,
     team_id: int | None = None,
+    page_params: str = "",
 ) -> str:
     """The upcoming-matches table as HTML, so long names wrap (a Streamlit
     dataframe clips them) and cells can be links:
@@ -1129,6 +1130,9 @@ def fixtures_table_html(
     travels in the links so the chosen timezone survives the page reload.
     `team_id` is set on a team's own page: it stays in the predicted-score links, and
     the match details page then has a Back button to this team.
+    `page_params` ("&name=value..." already URL-encoded) is added to the predicted-score
+    links only, the ones that reload this same page: it carries the page's own filters
+    (the Predictor's date range) so the match still shows after the reload.
     Everything from the database or an API is HTML-escaped."""
     quoted_league = urllib.parse.quote(league_code)
     season_part = f"&season={urllib.parse.quote(season)}" if season else ""
@@ -1179,7 +1183,7 @@ def fixtures_table_html(
             elif column == "Predicted score" and value is not None:
                 team_part = f"&team={team_id}" if team_id is not None else ""
                 href = (
-                    f"?league={quoted_league}{team_part}{extra}"
+                    f"?league={quoted_league}{team_part}{extra}{page_params}"
                     f"&{FIXTURE_PARAM}={urllib.parse.quote(fixture_key(ref))}"
                 )
                 text = (
