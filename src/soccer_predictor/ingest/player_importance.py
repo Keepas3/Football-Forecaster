@@ -28,6 +28,7 @@ from soccer_predictor.ingest.asa_client import AsaPlayerStats
 from soccer_predictor.ingest.asa_client import fetch_all_teams_totals as fetch_asa_all_teams_totals
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.understat_client import (
+    TEAM_NAME_ALIASES,
     UNDERSTAT_LEAGUE_SLUG,
     UnderstatPlayerStats,
     fetch_team_season,
@@ -123,7 +124,10 @@ def resolve_current_attack_strength(team_name: str, league_code: str) -> float |
     # Match against every team regardless of sample size first -- an
     # early-season team must still resolve to itself correctly, even
     # though its own rate won't end up usable below.
-    match = process.extractOne(team_name, list(teams_totals), scorer=fuzz.WRatio)
+    # Same alias table as understat_client.fetch_team_season (Understat's titles
+    # only), and a fixed order so two equally good titles never swap between runs.
+    wanted = TEAM_NAME_ALIASES.get(team_name, team_name) if league_code in UNDERSTAT_LEAGUE_SLUG else team_name
+    match = process.extractOne(wanted, sorted(teams_totals), scorer=fuzz.WRatio)
     if match is None:
         return None
     matched_title, score, _ = match

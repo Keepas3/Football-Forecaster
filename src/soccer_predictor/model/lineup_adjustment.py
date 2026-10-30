@@ -28,18 +28,21 @@ from soccer_predictor.model.injury_adjustment import MAX_MULTIPLIER, MIN_MULTIPL
 
 EXPECTED_XI_SIZE = 11
 # How much one absent player's importance weight moves the rating. Chosen by
-# scripts/backtest_lineups.py on 433 matches from six leagues of the 2026-27
-# season, with base ratings fitted before 1 Sep 2026. At these values the lineup
-# improves the ranked probability score slightly (0.2088 -> 0.2072), but on
-# held-out halves the gain is only -0.0012 with a 95% interval of -0.0040..+0.0013,
-# so it is small and not statistically certain (better in four leagues, slightly
-# worse in La Liga and Ligue 1). Strengths as large as an injury's (0.5 for both)
-# make it clearly worse (0.2120), so the injury factors are NOT reused. The
-# surface is flat between about 0.2 and 0.3 for attack and 0.05 and 0.1 for
-# defense. Re-run the backtest as the season's sample grows. The what-if injuries
-# a visitor adds keep the injury factors (0.5, model/injury_adjustment.py).
+# scripts/backtest_lineups.py on 434 matches from six leagues of the 2026-27
+# season, with base ratings fitted before 1 Sep 2026 and the multipliers held
+# between 0.7 and 1.3. At these values the lineup improves the ranked probability
+# score slightly (0.2093 -> 0.2075), but on held-out halves the gain is only
+# about -0.002 with a 95% interval that includes zero, so it is small and not
+# statistically certain (better in four leagues, slightly worse in La Liga and
+# Ligue 1). Attack: 0.2 and 0.3 score best, 0.5 and above worse. Defense: every
+# value from 0 to 0.75 lands within 0.001 of the others, so the data cannot place
+# it; 0.1 is a modest value in that flat range. (Under the old 2.0 ceiling, large
+# defense factors looked clearly worse, only because a few absences could double
+# the goals a side conceded.) Re-run the backtest as the season's sample grows.
+# The injury factors (model/injury_adjustment.py) are the same pair, so a player
+# counts the same whether a feed lists him as injured or the XI leaves him out.
 LINEUP_ATTACK_FACTOR = 0.3
-LINEUP_DEFENSE_FACTOR = 0.05
+LINEUP_DEFENSE_FACTOR = 0.1
 # Two full names that are spelt differently count as the same player at or above
 # this similarity, with the surnames alone at least SURNAME_MATCH_THRESHOLD alike.
 NAME_MATCH_THRESHOLD = 92

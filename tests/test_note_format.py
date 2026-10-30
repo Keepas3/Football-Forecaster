@@ -4,7 +4,7 @@ import datetime as dt
 
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
 from soccer_predictor.model.form_adjustment import FormNoteEntry, adjust_for_form
-from soccer_predictor.model.injury_adjustment import InjuryEntry, adjust_strength
+from soccer_predictor.model.injury_adjustment import ATTACK_IMPACT_FACTOR, InjuryEntry, adjust_strength
 
 TODAY = dt.date(2026, 10, 5)
 
@@ -55,7 +55,7 @@ def test_form_note_numbers_match_what_the_model_actually_applies():
 def test_injury_with_a_return_date():
     headline, maths = describe_injury("Lewandowski", "attack", 0.7, dt.date(2026, 10, 26), TODAY)
     assert headline == "**Injury** · 🩹 Lewandowski (attack player) — expected back Oct 26, 2026 (in 21 days)"
-    assert "importance 0.70 × 0.5" in maths and "attack strength −35.0%" in maths
+    assert f"importance 0.70 × {ATTACK_IMPACT_FACTOR:g}" in maths and "attack strength −21.0%" in maths
 
 
 def test_injury_without_a_return_date_says_it_counts_until_deleted():
@@ -65,16 +65,16 @@ def test_injury_without_a_return_date_says_it_counts_until_deleted():
 
 def test_defender_injury_raises_goals_conceded():
     _, maths = describe_injury("Rúben Dias", "defense", 0.6, None, TODAY)
-    assert "goals conceded +30.0%" in maths
+    assert "goals conceded +6.0%" in maths
 
 
 def test_injury_numbers_match_the_model_and_respect_its_floor():
     attack, _ = adjust_strength(1.0, 1.0, [InjuryEntry("x", "attack", 0.7)])
     _, maths = describe_injury("x", "attack", 0.7, None, TODAY)
-    assert abs(attack - 0.65) < 1e-9 and "−35.0%" in maths
+    assert abs(attack - 0.79) < 1e-9 and "−21.0%" in maths
     # An importance above 1 can't cut a rating past the floor.
-    _, floored = describe_injury("x", "attack", 1.5, None, TODAY)
-    assert "−50.0%" in floored
+    _, floored = describe_injury("x", "attack", 2.0, None, TODAY)
+    assert "−30.0%" in floored
 
 
 def test_countdown_wording():

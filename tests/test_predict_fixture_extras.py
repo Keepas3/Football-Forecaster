@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.form_adjustment import FORM_IMPACT_CAP, FormNoteEntry
-from soccer_predictor.model.injury_adjustment import InjuryEntry
+from soccer_predictor.model.injury_adjustment import ATTACK_IMPACT_FACTOR, DEFENSE_IMPACT_FACTOR, InjuryEntry
 from soccer_predictor.prediction.service import predict_fixture
 from soccer_predictor.storage.models import Base, Injury, PredictionRecord, TeamFormNote
 from soccer_predictor.storage.repository import get_or_create_team
@@ -61,7 +61,7 @@ def test_no_extras_is_exactly_the_plain_prediction(session, teams):
 def test_an_extra_injury_cuts_that_sides_attack_like_a_saved_one(session, teams):
     plain = _predict(session, teams)
     hurt = _predict(session, teams, extra_home_injuries=[InjuryEntry("Saka", "attack", 0.4)])
-    assert hurt.breakdown.home_attack == pytest.approx(plain.breakdown.home_attack * (1 - 0.4 * 0.5))
+    assert hurt.breakdown.home_attack == pytest.approx(plain.breakdown.home_attack * (1 - 0.4 * ATTACK_IMPACT_FACTOR))
     assert hurt.breakdown.away_attack == pytest.approx(plain.breakdown.away_attack)
     assert hurt.home_win < plain.home_win
 
@@ -69,7 +69,7 @@ def test_an_extra_injury_cuts_that_sides_attack_like_a_saved_one(session, teams)
 def test_an_extra_defender_injury_makes_that_side_concede_more(session, teams):
     plain = _predict(session, teams)
     hurt = _predict(session, teams, extra_away_injuries=[InjuryEntry("Keeper", "defense", 0.5)])
-    assert hurt.breakdown.away_defense == pytest.approx(plain.breakdown.away_defense * (1 + 0.5 * 0.5))
+    assert hurt.breakdown.away_defense == pytest.approx(plain.breakdown.away_defense * (1 + 0.5 * DEFENSE_IMPACT_FACTOR))
     assert hurt.breakdown.lambda_home > plain.breakdown.lambda_home
 
 

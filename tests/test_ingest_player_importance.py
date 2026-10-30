@@ -438,6 +438,20 @@ def test_resolve_current_attack_strength_below_average_team_under_one(monkeypatc
     assert result < 1.0
 
 
+def test_resolve_current_attack_strength_gives_man_united_its_own_rate_not_newcastles(monkeypatch):
+    # "Man United" ties between "Manchester United" and "Newcastle United"; the alias
+    # table settles it, and it must hold whichever order the teams arrive in.
+    united = [_understat_player("U1", "Manchester United", minutes=900, xg=15.0)]  # rate 1.5
+    newcastle = [_understat_player("N1", "Newcastle United", minutes=900, xg=5.0)]  # rate 0.5
+    other = [_understat_player("O1", "Arsenal", minutes=900, xg=10.0)]  # rate 1.0
+    for teams in (
+        {"Manchester United": united, "Newcastle United": newcastle, "Arsenal": other},
+        {"Newcastle United": newcastle, "Arsenal": other, "Manchester United": united},
+    ):
+        _understat_league(monkeypatch, teams)
+        assert resolve_current_attack_strength("Man United", "EPL") == pytest.approx(1.5)
+
+
 def test_resolve_current_attack_strength_ucl_returns_none_no_fetch_attempted(monkeypatch):
     def fail(*a, **k):
         raise AssertionError("should never fetch for an uncovered league")

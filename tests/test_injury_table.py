@@ -8,7 +8,7 @@ import datetime as dt
 import pytest
 
 from soccer_predictor.dashboard import injury_table as it
-from soccer_predictor.model.injury_adjustment import InjuryEntry
+from soccer_predictor.model.injury_adjustment import ATTACK_IMPACT_FACTOR, DEFENSE_IMPACT_FACTOR, InjuryEntry
 from soccer_predictor.prediction.service import TeamInjuries
 
 TODAY = dt.date(2026, 10, 29)
@@ -103,7 +103,7 @@ def test_team_impact_uses_the_models_own_adjustment_and_lists_the_worst_hit_firs
     assert list(impact["Team"]) == ["Arsenal", "Villa"]  # a team with nobody listed is left out
     arsenal = impact.iloc[0]
     assert arsenal["Players listed"] == 2
-    assert arsenal["Attack with injuries"] == pytest.approx(1.5 * (1 - 0.54 * 0.5), abs=0.01)
-    assert arsenal["Attack change"] == pytest.approx(-27.0, abs=0.1)
-    assert arsenal["Defence change"] == pytest.approx(5.0, abs=0.1)
+    assert arsenal["Attack with injuries"] == pytest.approx(1.5 * (1 - 0.54 * ATTACK_IMPACT_FACTOR), abs=0.01)
+    assert arsenal["Attack change"] == pytest.approx(-54 * ATTACK_IMPACT_FACTOR, abs=0.1)  # -16.2%
+    assert arsenal["Defence change"] == pytest.approx(10 * DEFENSE_IMPACT_FACTOR, abs=0.1)  # +1.0%
     assert it.team_impact_frame({}).empty

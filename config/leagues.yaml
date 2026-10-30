@@ -25,6 +25,7 @@ leagues:
     news_query: Premier League
     csv_code: E0
     api_competition_id: 2021
+    recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/gb-eng.png
     flag_emoji: "en"
@@ -36,6 +37,7 @@ leagues:
     espn_league_slug: esp.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: SP1
     api_competition_id: 2014
+    recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/es.png
     flag_emoji: "🇪🇸"
@@ -47,6 +49,7 @@ leagues:
     espn_league_slug: ger.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: D1
     api_competition_id: 2002
+    recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/de.png
     flag_emoji: "🇩🇪"
@@ -59,6 +62,7 @@ leagues:
     espn_league_slug: ita.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: I1
     api_competition_id: 2019
+    recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/it.png
     flag_emoji: "🇮🇹"
@@ -70,6 +74,7 @@ leagues:
     espn_league_slug: fra.1  # match detail only (lineups/stats); data still comes from the source below
     csv_code: F1
     api_competition_id: 2015
+    recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/fr.png
     flag_emoji: "🇫🇷"
@@ -245,6 +250,7 @@ leagues:
     data_source: espn
     espn_league_slug: usa.1
     trainable: true
+    recent_results_form: true
     seasons: ["2020", "2021", "2022", "2023", "2024", "2025", "2026"]
     season_display: single_year
     flag_url: https://flagcdn.com/w40/us.png

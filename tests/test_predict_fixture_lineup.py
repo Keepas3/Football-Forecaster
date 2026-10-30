@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from soccer_predictor.model.dixon_coles import DixonColesParams
+from soccer_predictor.model.injury_adjustment import ATTACK_IMPACT_FACTOR
 from soccer_predictor.model.lineup_adjustment import LINEUP_ATTACK_FACTOR, LINEUP_DEFENSE_FACTOR, ExpectedPlayer
 from soccer_predictor.prediction import service
 from soccer_predictor.prediction.service import predict_fixture
@@ -117,4 +118,4 @@ def test_what_if_extras_still_apply_on_top_of_a_lineup(session, teams):
     xi = [p.name for p in [SAKA, *SQUAD][:11]]
     plain = _predict(session, teams, home_lineup=xi)
     extra = _predict(session, teams, home_lineup=xi, extra_home_injuries=[InjuryEntry("Someone", "attack", 0.4)])
-    assert extra.breakdown.home_attack == pytest.approx(plain.breakdown.home_attack * (1 - 0.4 * 0.5))
+    assert extra.breakdown.home_attack == pytest.approx(plain.breakdown.home_attack * (1 - 0.4 * ATTACK_IMPACT_FACTOR))

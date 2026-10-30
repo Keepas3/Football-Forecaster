@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from soccer_predictor.ai.note_parser import ParsedFormNote, ParsedInjuryNote
 from soccer_predictor.ai.whatif_parser import WhatIfEntries
 from soccer_predictor.dashboard import whatif
+from soccer_predictor.model.injury_adjustment import ATTACK_IMPACT_FACTOR
 from soccer_predictor.model.markets import MatchPrediction, PredictionBreakdown
 from soccer_predictor.storage.models import Base, Injury, PredictionRecord, TeamFormNote
 from soccer_predictor.storage.repository import get_or_create_team
@@ -71,11 +72,11 @@ def test_the_comparison_shows_both_columns_and_the_change():
 def test_the_wording_uses_the_models_own_numbers():
     headline, maths = whatif.describe_injury_entry("Saka", "Arsenal", "attack", 0.4)
     assert "Saka" in headline and "Arsenal" in headline
-    assert "0.40 × 0.5" in maths and "−20.0%" in maths
+    assert f"0.40 × {ATTACK_IMPACT_FACTOR:g}" in maths and "−12.0%" in maths
     _, defence = whatif.describe_injury_entry("Keeper", "Chelsea", "defense", 0.5)
-    assert "25.0% more goals" in defence
-    _, capped = whatif.describe_injury_entry("Everyone", "Arsenal", "attack", 1.0)
-    assert "−50.0%" in capped  # the model's own floor
+    assert "5.0% more goals" in defence
+    _, capped = whatif.describe_injury_entry("Everyone", "Arsenal", "attack", 2.0)
+    assert "−30.0%" in capped  # the model's own floor
     headline, form = whatif.describe_form_entry("Struggling to score.", "Chelsea", -0.4, "both")
     assert "bad form" in headline and "Struggling to score" in headline and "Struggling to score." not in headline
     assert "attack −6.0%" in form and "goals conceded +6.0%" in form

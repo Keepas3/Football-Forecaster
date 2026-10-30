@@ -112,6 +112,11 @@ class League:
     # `division_prior`: pull each team toward its own division's average
     # instead (Nations League League A-D, read from Match.group_name).
     division_prior: bool = False
+    # Nudge each side's rating for its last six results (model/results_form_adjustment.py).
+    # Opt-in: only leagues it was tested on (the five football-data.co.uk
+    # leagues and MLS) -- not the Champions League or the national-team
+    # competitions, where six results can span most of a year.
+    recent_results_form: bool = False
     # What a "team" is in this competition: "club" (domestic leagues, the
     # Champions League, MLS) or "national" (World Cup, Euros, Nations League,
     # Asian Cup). Teams are only ever linked to the same club/country in other
@@ -187,6 +192,7 @@ def load_leagues() -> dict[str, League]:
             rating_decay_xi=entry.get("rating_decay_xi"),
             rating_ridge=float(entry.get("rating_ridge", 0.0)),
             division_prior=entry.get("division_prior", False),
+            recent_results_form=entry.get("recent_results_form", False),
             team_type=entry.get("team_type", "club"),
         )
         for entry in raw["leagues"]

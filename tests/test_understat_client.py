@@ -65,6 +65,22 @@ def test_fetch_team_season_fuzzy_matches_team_name(monkeypatch):
     assert {p.name for p in players} == {"Erling Haaland"}
 
 
+def test_man_united_is_never_mistaken_for_newcastle_whatever_order_understat_lists_them(monkeypatch):
+    # "Man United" scores 85.5 against both "Manchester United" and "Newcastle
+    # United"; the one returned used to depend on the (per-run) order of a set.
+    united, newcastle = _row("Bruno Fernandes", "Manchester United"), _row("Bruno Guimaraes", "Newcastle United")
+    for rows in ([united, newcastle], [newcastle, united]):
+        monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, rows=rows, **k: rows)
+        assert {p.name for p in understat_client.fetch_team_season("Man United", "EPL", 2026)} == {"Bruno Fernandes"}
+        assert {p.name for p in understat_client.fetch_team_season("Newcastle", "EPL", 2026)} == {"Bruno Guimaraes"}
+
+
+def test_the_teams_come_back_in_a_fixed_order(monkeypatch):
+    rows = [_row("A", "Wolves"), _row("B", "Arsenal"), _row("C", "Chelsea")]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+    assert list(understat_client.fetch_all_teams_totals("EPL", 2026)) == ["Arsenal", "Chelsea", "Wolves"]
+
+
 def test_fetch_team_season_includes_mid_season_transfers_not_just_pure_title(monkeypatch):
     # Regression test: a player who transferred mid-season gets a combined
     # Understat team_title like "Chelsea,Manchester City" -- confirmed live

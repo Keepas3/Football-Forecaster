@@ -4,7 +4,7 @@ A local, single-user Streamlit app that predicts football match outcomes
 (win/draw/loss, over/under, correct score) using a
 [Dixon-Coles](https://en.wikipedia.org/wiki/Dixon%E2%80%93Coles_model) model
 (a Poisson goal model with a low-score correlation adjustment) fit on
-historical results, adjusted for current injuries and team form.
+historical results, adjusted for current injuries, recent results and team form.
 
 ## What it does
 
@@ -48,7 +48,16 @@ historical results, adjusted for current injuries and team form.
   typed into a chat tab that an AI parses into structured entries. Injuries
   reduce the injured player's team's attack or defense rating in proportion
   to how important that player actually is, based on their own real
-  goals, assists, and minutes played.
+  goals, assists, and minutes played. A missing regular costs a team 30%
+  of his weight in attack and 10% in defense (the strengths the lineup
+  backtest chose), and no list of injuries can move a rating by more than
+  30% either way.
+- **Nudges ratings for recent results.** The ratings average years of
+  history, so they are slow to notice a bad or good run. In the five big
+  European leagues and MLS, a team's points from its last six matches move
+  its attack and goals conceded by 5% per point per match above or below
+  average (at most about 8%). Tested on about 7,600 past matches this improves
+  forecasts only slightly (see Known limitations).
 - **Lets you search for any player** by name across an entire league (not
   just one team at a time), showing their current club, current-season
   expected goals and assists where available, and historical per-season
@@ -378,9 +387,21 @@ uv run pytest
   `config/injuries.yaml` (manual entry) and the AI chat notes tab are the
   real sources of injury data for those leagues; both always override
   anything an automatic source might otherwise supply.
-- **The injury adjustment's magnitude is a tuned heuristic**
-  (`model/injury_adjustment.py`), not empirically validated. There isn't
-  enough free injury data to backtest it properly.
+- **The injury adjustment's magnitude is only indirectly validated**
+  (`model/injury_adjustment.py`). Past injuries aren't stored, so it
+  can't be backtested on the injury feed itself; its strengths are the
+  ones `scripts/backtest_lineups.py` chose on real starting XIs, where
+  the attack strength is well supported and the defense strength is a
+  modest guess in a range the data can't separate. The lineup gain itself
+  is small and not statistically certain.
+- **The recent-results nudge is real but small**
+  (`model/results_form_adjustment.py`). Walk-forward over 5,566 matches
+  it improved the ranked probability score by about 0.0006 (95% interval
+  0.0002 to 0.0010), and by a similar amount on 2,025 MLS matches it
+  wasn't tuned on. It was not better in every league or season (Ligue 1
+  and 2025-26 were slightly worse), and it overlaps a little with the
+  current-season xG nudge, which can't be backtested. A whole run of
+  bad results moves a forecast by a few percentage points, no more.
 - **The form-note adjustment is more speculative still**
   (`model/form_adjustment.py`). Unlike the injury adjustment, even the
   existence of an effect from a general note not tied to a specific

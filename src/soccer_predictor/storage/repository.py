@@ -455,6 +455,24 @@ def matches_for_team(session: Session, team_id: int) -> pd.DataFrame:
     )
 
 
+def recent_results_for_team(
+    session: Session, team_id: int, before: dt.date, limit: int
+) -> list[tuple[dt.date, int]]:
+    """(date, points won: 3 a win, 1 a draw, 0 a loss) for the team's latest
+    `limit` matches played before `before`, newest first."""
+    rows = session.execute(
+        select(Match.date, Match.home_team_id, Match.home_goals, Match.away_goals)
+        .where(or_(Match.home_team_id == team_id, Match.away_team_id == team_id), Match.date < before)
+        .order_by(Match.date.desc())
+        .limit(limit)
+    ).all()
+    results = []
+    for date, home_team_id, home_goals, away_goals in rows:
+        scored, conceded = (home_goals, away_goals) if home_team_id == team_id else (away_goals, home_goals)
+        results.append((date, 3 if scored > conceded else 1 if scored == conceded else 0))
+    return results
+
+
 def teams_for_league(session: Session, league_code: str) -> dict[int, str]:
     rows = session.execute(
         select(Team.id, Team.canonical_name).where(Team.league_code == league_code)

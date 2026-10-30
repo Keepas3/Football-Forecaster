@@ -25,6 +25,7 @@ from soccer_predictor.model.current_form_adjustment import adjust_for_current_at
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.dixon_coles import tau as dixon_coles_tau
 from soccer_predictor.model.markets import MatchPrediction
+from soccer_predictor.model.results_form_adjustment import AVERAGE_POINTS_PER_MATCH, RESULTS_FORM_STRENGTH
 from soccer_predictor.model.scoreline_matrix import DEFAULT_DISPERSION, build_matrix, marginal_pmf
 from soccer_predictor.model.standings import FormGame, TeamStanding
 from soccer_predictor.model.team_facts import HeadToHeadRecord, TeamFacts
@@ -1517,9 +1518,9 @@ def _render_lineup_section(b, home_name: str, away_name: str) -> None:
     st.write(
         "The starting XIs are announced, so this forecast is made from who is actually playing "
         "instead of from the injury list. Each regular missing from his team's usual XI cuts the "
-        "team's attack (or raises what it concedes) in proportion to his own weight - the same "
-        "weight an injury to him would carry, applied at a gentler strength fitted on past "
-        "matches. A team whose usual XI is playing is not adjusted at all."
+        "team's attack (or raises what it concedes) in proportion to his own weight, exactly as "
+        "an injury to him would, at a strength fitted on past matches. A team whose usual XI is "
+        "playing is not adjusted at all."
     )
     cols = st.columns(2)
     for col, name, absences in (
@@ -1543,6 +1544,30 @@ def _render_lineup_section(b, home_name: str, away_name: str) -> None:
                         for a in sorted(absences, key=lambda a: -a.weight)
                     ]
                 )
+
+
+def _render_results_form_section(b, home_name: str, away_name: str) -> None:
+    """Each side's last six results and the small rating change they cause (nothing
+    for a league that does not use them)."""
+    if b.home_results_form is None and b.away_results_form is None:
+        return
+    st.write(
+        "Attack and goals conceded also move a little with each team's last six results, because "
+        "the ratings above average a long history and are slow to notice a good or bad run. Every "
+        f"point per match above or below the league average ({AVERAGE_POINTS_PER_MATCH:.2f}) moves "
+        f"both by {RESULTS_FORM_STRENGTH:.0%}, so even a side with no points from six is rated only "
+        f"about {RESULTS_FORM_STRENGTH * AVERAGE_POINTS_PER_MATCH:.0%} down. Measured on past matches "
+        "this improves forecasts only slightly."
+    )
+    for name, form in ((home_name, b.home_results_form), (away_name, b.away_results_form)):
+        if form is None:
+            st.caption(f"{name}: fewer than six recent results, so no adjustment.")
+        else:
+            st.write(
+                f"{name}: **{form.points} points from the last {form.matches} matches** "
+                f"({form.points / form.matches:.2f} a match) → attack {form.shift:+.1%}, "
+                f"goals conceded {1 / (1 + form.shift) - 1:+.1%}."
+            )
 
 
 def render_prediction_breakdown(
@@ -1606,6 +1631,7 @@ def render_prediction_breakdown(
                 "defensive stat to adjust defense with. Not shown/applied for a league with no "
                 "current-season stats coverage (e.g. UCL)."
             )
+        _render_results_form_section(b, home_name, away_name)
         _render_squad_reference(session, league, home_team_id, home_name, away_team_id, away_name)
         _render_lineup_section(b, home_name, away_name)
 
@@ -1618,7 +1644,7 @@ def render_prediction_breakdown(
             with col:
                 st.markdown(f"**{name}**")
                 if attack != base_attack:
-                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries or lineup, form and current stats)")
+                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries or lineup, form notes, recent results and current stats)")
                 else:
                     col.write(f"Attack: **{attack:.3f}**")
                 if defense != base_defense:

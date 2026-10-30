@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from soccer_predictor.model.results_form_adjustment import ResultsForm
+
 
 @dataclass
 class PredictionBreakdown:
@@ -50,6 +52,11 @@ class PredictionBreakdown:
     # None for a side rated without a lineup, [] for a lineup with nobody missing.
     home_lineup_absences: list | None = None
     away_lineup_absences: list | None = None
+    # Each side's last six results and the rating change they caused
+    # (model/results_form_adjustment.py) -- None where it does not apply (a
+    # league it was not tested on, or fewer than six recent results).
+    home_results_form: ResultsForm | None = None
+    away_results_form: ResultsForm | None = None
 
 
 @dataclass

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from soccer_predictor.config import load_leagues, load_manual_injuries
+from soccer_predictor.config import League, load_leagues, load_manual_injuries
 from soccer_predictor.ingest.lineups import expected_squad
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
@@ -23,11 +23,18 @@ from soccer_predictor.model.form_adjustment import FormNoteEntry, adjust_for_for
 from soccer_predictor.model.injury_adjustment import InjuryEntry, adjust_strength
 from soccer_predictor.model.lineup_adjustment import LineupAbsence, adjust_for_lineup, lineup_absences
 from soccer_predictor.model.markets import MatchPrediction, PredictionBreakdown, predict_markets
+from soccer_predictor.model.results_form_adjustment import (
+    RECENT_MATCHES,
+    ResultsForm,
+    adjust_for_results_form,
+    results_form,
+)
 from soccer_predictor.model.scoreline_matrix import build_matrix
 from soccer_predictor.storage.models import FittedParams
 from soccer_predictor.storage.repository import (
     form_notes_for_team,
     injuries_for_team,
+    recent_results_for_team,
 )
 
 
@@ -110,6 +117,15 @@ def get_form_notes_for_team(session: Session, team_id: int, as_of: dt.date) -> l
     return [FormNoteEntry(magnitude=row.magnitude, affects=row.affects) for row in active]
 
 
+def get_results_form(session: Session, team_id: int, league: League | None, as_of: dt.date) -> ResultsForm | None:
+    """The team's last six results as a rating nudge, or None in a league that
+    does not use them (see model/results_form_adjustment.py) or before there
+    are six recent ones."""
+    if league is None or not league.recent_results_form:
+        return None
+    return results_form(recent_results_for_team(session, team_id, as_of, RECENT_MATCHES), as_of)
+
+
 def rate_lineup(team_name: str, league_code: str, xi_names: Sequence[str] | None) -> list[LineupAbsence] | None:
     """Who is missing from `team_name`'s usual XI given the XI named for the match,
     or None when there is no named XI or the club's season stats cannot be found
@@ -165,6 +181,9 @@ def predict_fixture(
     ]
     home_form = [*get_form_notes_for_team(session, home_team_id, fixture_date), *extra_home_form]
     away_form = [*get_form_notes_for_team(session, away_team_id, fixture_date), *extra_away_form]
+    league = load_leagues().get(params.league_code)
+    home_results_form = get_results_form(session, home_team_id, league, fixture_date)
+    away_results_form = get_results_form(session, away_team_id, league, fixture_date)
 
     base_home_attack, base_home_defense = params.attack[home_team_id], params.defense[home_team_id]
     base_away_attack, base_away_defense = params.attack[away_team_id], params.defense[away_team_id]
@@ -174,12 +193,14 @@ def predict_fixture(
         home_attack, home_defense = adjust_for_lineup(home_attack, home_defense, home_absences)
     home_attack, home_defense = adjust_strength(home_attack, home_defense, home_injuries)
     home_attack, home_defense = adjust_for_form(home_attack, home_defense, home_form)
+    home_attack, home_defense = adjust_for_results_form(home_attack, home_defense, home_results_form)
 
     away_attack, away_defense = base_away_attack, base_away_defense
     if away_absences is not None:
         away_attack, away_defense = adjust_for_lineup(away_attack, away_defense, away_absences)
     away_attack, away_defense = adjust_strength(away_attack, away_defense, away_injuries)
     away_attack, away_defense = adjust_for_form(away_attack, away_defense, away_form)
+    away_attack, away_defense = adjust_for_results_form(away_attack, away_defense, away_results_form)
 
     home_xg_relative_strength = resolve_current_attack_strength(home_team_name, params.league_code)
     away_xg_relative_strength = resolve_current_attack_strength(away_team_name, params.league_code)
@@ -211,5 +232,7 @@ def predict_fixture(
         away_xg_relative_strength=away_xg_relative_strength,
         home_lineup_absences=home_absences,
         away_lineup_absences=away_absences,
+        home_results_form=home_results_form,
+        away_results_form=away_results_form,
     )
     return prediction
