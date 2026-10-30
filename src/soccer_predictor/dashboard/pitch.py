@@ -99,6 +99,33 @@ def _label(name: str) -> str:
     return (words[-1] if words else name).upper()[:12]
 
 
+LABEL_FONT = 11  # the surname's usual font size
+LABEL_MIN_FONT = 8.5  # smallest it is shrunk to before the letters are squeezed instead
+LABEL_CHAR_EM = 0.72  # a bold capital is about this many font sizes wide (a little generous)
+LABEL_PAD = 8  # room inside the pill, both sides together
+LABEL_GAP = 4  # kept clear between one pill and the next
+LABEL_MAX_WIDTH = 84
+LABEL_MIN_WIDTH = 44
+
+
+def label_box(text: str, slot: float) -> tuple[float, float, float | None]:
+    """(pill width, font size, squeezed text width or None) for a surname under a
+    player whose neighbours are `slot` pixels away on either side, so the pill never
+    touches the next one and the name never runs past its own pill. A name too long
+    for the pill is first drawn in a smaller font, and only below LABEL_MIN_FONT are
+    its letters squeezed together to the width left (SVG `textLength`)."""
+    room = min(LABEL_MAX_WIDTH, slot - LABEL_GAP)
+    fits = room - LABEL_PAD
+    size = LABEL_FONT
+    natural = len(text) * LABEL_CHAR_EM * size
+    if natural > fits + 1e-6:
+        size = max(LABEL_MIN_FONT, fits / (len(text) * LABEL_CHAR_EM))
+        natural = len(text) * LABEL_CHAR_EM * size
+    if natural > fits + 1e-6:
+        return room, size, fits
+    return min(room, max(LABEL_MIN_WIDTH, natural + LABEL_PAD)), size, None
+
+
 def short_minute(label: str) -> str:
     """ESPN's "90'+3'" as "90+3'"."""
     return label.replace("'+", "+")
@@ -184,17 +211,23 @@ def pitch_svg(team: TeamMatchInfo) -> str:
             y = (LOWEST_OUTFIELD_Y + TOP_LINE_Y) / 2
         else:
             y = LOWEST_OUTFIELD_Y - (row - 1) * (LOWEST_OUTFIELD_Y - TOP_LINE_Y) / (outfield_lines - 1)
+        slot = VIEW_WIDTH / (len(players) + 1)  # how far apart the players of this line are
         for index, player in enumerate(players):
-            x = VIEW_WIDTH * (index + 1) / (len(players) + 1)
+            x = slot * (index + 1)
             number = html.escape(re.sub(r"\D", "", player.jersey)[:2])
+            label = _label(player.name)
+            width, font_size, squeezed = label_box(label, slot)
+            squeeze = f' textLength="{squeezed:.1f}" lengthAdjust="spacingAndGlyphs"' if squeezed else ""
             parts.append(
                 f'<g transform="translate({x:.1f} {y:.1f})">'
                 f'<circle r="{RADIUS}" fill="#ffffff" stroke="#0b1d3a" stroke-width="1.5"/>'
                 f'<text y="7" font-size="20" font-weight="700" fill="#0b1d3a" text-anchor="middle" '
                 f'font-family="sans-serif">{number}</text>'
-                f'<rect x="-40" y="{RADIUS + 4}" width="80" height="18" rx="9" fill="#e9ecef" opacity="0.92"/>'
-                f'<text y="{RADIUS + 17}" font-size="11" font-weight="700" fill="#2b2f36" text-anchor="middle" '
-                f'font-family="sans-serif">{html.escape(_label(player.name))}</text></g>'
+                f'<rect x="{-width / 2:.1f}" y="{RADIUS + 4}" width="{width:.1f}" height="18" rx="9" '
+                f'fill="#e9ecef" opacity="0.92"/>'
+                f'<text y="{RADIUS + 16.5 + (LABEL_FONT - font_size) * 0.35:.1f}" font-size="{font_size:.1f}" '
+                f'font-weight="700" fill="#2b2f36" text-anchor="middle" font-family="sans-serif"{squeeze}>'
+                f'{html.escape(label)}</text></g>'
             )
             badges = _badges(player, x)
             if badges:

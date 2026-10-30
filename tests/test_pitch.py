@@ -118,3 +118,62 @@ def test_minutes_are_escaped():
     team = _squad(p10=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["<b>1'</b>"]}))
     svg = pitch.pitch_svg(team)
     assert "<b>" not in svg and "&lt;b&gt;" in svg
+
+
+# --- name labels never run into each other ---------------------------------------------------
+
+
+def _pills(svg):
+    """(centre x, y, pill width) of every surname pill, from the SVG."""
+    import re
+
+    found = re.findall(r'<g transform="translate\(([\d.]+) ([\d.]+)\)"><circle.*?<rect x="(-?[\d.]+)" y="25" width="([\d.]+)"', svg)
+    return [(float(x), float(y), float(width)) for x, y, _, width in found]
+
+
+def _turkey():
+    names = {
+        "G": "Altay Rustu", "CD-L": "Zeki Akyel", "CD": "Ozan Asik", "CD-R": "Mert Korkmaz",
+        "LM": "Arda Basturk", "CM-L": "Kenan Belozoglu", "CM": "Orkun Davala", "CM-R": "Kaan Kerimoglu",
+        "RM": "Yusuf Unsal", "CF-L": "Baris Sas", "CF-R": "Hakan Sukur",
+    }
+    team = _team("3-5-2", list(names))
+    for player, name in zip(team.players, names.values()):
+        player.name = name
+    return team
+
+
+def test_a_crowded_line_of_long_surnames_keeps_every_pill_clear_of_its_neighbour():
+    svg = pitch.pitch_svg(_turkey())
+    pills = _pills(svg)
+    assert len(pills) == 11
+    for y in {y for _, y, _ in pills}:
+        row = sorted((x, width) for x, row_y, width in pills if row_y == y)
+        for (left_x, left_width), (right_x, right_width) in zip(row, row[1:]):
+            assert right_x - right_width / 2 - (left_x + left_width / 2) >= pitch.LABEL_GAP - 0.1, row
+        assert row[0][0] - row[0][1] / 2 >= 12 and row[-1][0] + row[-1][1] / 2 <= pitch.VIEW_WIDTH - 12
+
+
+def test_a_surname_wider_than_its_pill_is_shrunk_or_squeezed_to_fit():
+    import re
+
+    svg = pitch.pitch_svg(_turkey())
+    belozoglu = re.search(r'<text[^>]*font-size="([\d.]+)"[^>]*>BELOZOGLU</text>', svg)
+    assert belozoglu is not None and float(belozoglu.group(1)) < pitch.LABEL_FONT  # smaller than the usual 11
+    assert 'textLength="' in svg  # the longest of them is squeezed the last bit
+
+
+def test_short_names_keep_the_usual_size_and_a_snug_pill():
+    width, size, squeezed = pitch.label_box("SAS", slot=200)
+    assert (size, squeezed) == (pitch.LABEL_FONT, None)
+    assert pitch.LABEL_MIN_WIDTH <= width < pitch.LABEL_MAX_WIDTH
+
+
+def test_every_label_fits_its_pill_whatever_the_name_or_the_crowding():
+    for slot in (66.7, 80, 100, 133, 200):
+        for text in ("LI", "SAS", "BASTURK", "BELOZOGLU", "CHAMBERLAIN", "ABCDEFGHIJKL"):
+            width, size, squeezed = pitch.label_box(text, slot)
+            assert width <= slot - pitch.LABEL_GAP + 1e-9 and width <= pitch.LABEL_MAX_WIDTH
+            drawn = squeezed if squeezed is not None else len(text) * pitch.LABEL_CHAR_EM * size
+            assert drawn <= width - pitch.LABEL_PAD + 1e-9, (slot, text)
+            assert size >= pitch.LABEL_MIN_FONT
