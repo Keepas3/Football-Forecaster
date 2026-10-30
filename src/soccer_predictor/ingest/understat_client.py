@@ -51,6 +51,9 @@ CACHE_TTL_SECONDS = 24 * 3600
 TOTALS_MEMO_SECONDS = 300
 
 TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as this app's other team-name matching (e.g. asa_client.py)
+# Our football-data.org club names that Understat spells too differently for fuzzy
+# matching to find ("FC Koln" is Understat's "FC Cologne"), mapped to its title.
+TEAM_NAME_ALIASES = {"FC Koln": "FC Cologne", "M'gladbach": "Borussia M.Gladbach"}
 
 # Understat's own league identifiers, exactly as its league-page <select
 # name="league"> option values (verified live 2026-09 against
@@ -196,7 +199,7 @@ def fetch_team_season(our_team_name: str, league_code: str, season: int) -> list
         # squad). Row selection below still catches mid-season arrivals by
         # checking each comma-separated part, not exact equality.
         pure_team_titles = [t for t in {row["team_title"] for row in raw_players} if "," not in t]
-        match = process.extractOne(our_team_name, pure_team_titles, scorer=fuzz.WRatio)
+        match = process.extractOne(TEAM_NAME_ALIASES.get(our_team_name, our_team_name), pure_team_titles, scorer=fuzz.WRatio)
         if match is None:
             return []
         matched_title, score, _ = match

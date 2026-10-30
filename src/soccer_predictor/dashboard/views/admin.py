@@ -35,7 +35,7 @@ def _render_refresh_result(result) -> None:
     elif result.results_synced or result.results_skipped:
         st.write(f"Results: {result.results_synced} synced, {result.results_skipped} skipped (unresolved teams)")
 
-    st.write(f"Prediction tracking: {result.snapshots_created} new snapshot(s) locked in")
+    st.write(f"Prediction tracking: {result.locks_created} new forecast(s) locked in")
 
     if result.injuries_error:
         st.warning(f"Injuries: skipped - {result.injuries_error}")
@@ -86,7 +86,7 @@ def render() -> None:
     st.subheader("Refresh live data")
     st.caption(
         "Same as running `refresh_live_data.py` for this league: fixtures, current-season "
-        "results, prediction snapshots, and injuries."
+        "results, prediction locks (for matches about to start), and injuries."
     )
     if st.button("Refresh live data"):
         with st.spinner(f"Refreshing {league.name}..."):

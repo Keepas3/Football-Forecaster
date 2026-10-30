@@ -32,9 +32,18 @@ def fingerprint(db_path: Path) -> str:
             "SELECT COUNT(*), COALESCE(SUM(home_goals * 31 + away_goals), 0) FROM matches"
         ).fetchone()
         prediction_count = connection.execute("SELECT COUNT(*) FROM prediction_records").fetchone()[0]
+        # A lineup lock can replace an older lock in place, which leaves the count
+        # unchanged: also count the rows locked from a lineup / early forecast.
+        # (A database from before that column existed has none.)
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(prediction_records)")}
+        lineup_locks = (
+            connection.execute("SELECT COUNT(*) FROM prediction_records WHERE basis IS NOT NULL").fetchone()[0]
+            if "basis" in columns
+            else 0
+        )
     finally:
         connection.close()
-    return f"matches={match_count}:{score_checksum} predictions={prediction_count}"
+    return f"matches={match_count}:{score_checksum} predictions={prediction_count} lineup_locks={lineup_locks}"
 
 
 if __name__ == "__main__":

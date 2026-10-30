@@ -18,7 +18,7 @@ def _patch_common(monkeypatch, params=None):
     monkeypatch.setattr(refresh, "seed_teams_from_api", lambda *a, **k: 0)
     monkeypatch.setattr(refresh, "seed_teams_from_espn", lambda *a, **k: 0)
     monkeypatch.setattr(refresh, "load_latest_params", lambda *a, **k: params)
-    monkeypatch.setattr(refresh, "snapshot_upcoming_predictions", lambda *a, **k: 3 if params else 0)
+    monkeypatch.setattr(refresh, "lock_due_predictions", lambda *a, **k: 3 if params else 0)
     monkeypatch.setattr(refresh, "backfill_prediction_probabilities", lambda *a, **k: 2 if params else 0)
     monkeypatch.setattr(refresh.injuries_module, "sync_injuries_to_db", lambda *a, **k: (5, 1))
 
@@ -110,7 +110,7 @@ def test_fixtures_failure_does_not_block_later_steps(monkeypatch):
     assert result.fixtures_error == "no key"
     # Prediction tracking and injuries are independent try blocks -- both
     # should still have run even though fixtures failed.
-    assert result.snapshots_created == 3
+    assert result.locks_created == 3
     assert result.injuries_synced == 5
 
 
@@ -120,6 +120,6 @@ def test_no_trained_model_means_zero_snapshots_no_error(monkeypatch):
 
     result = refresh.refresh_league(CSV_LEAGUE)
 
-    assert result.snapshots_created == 0
+    assert result.locks_created == 0
 
 

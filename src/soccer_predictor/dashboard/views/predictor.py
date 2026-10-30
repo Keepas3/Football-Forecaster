@@ -36,6 +36,7 @@ from soccer_predictor.dashboard.chat_notes import (
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
     LEADERBOARD_DISPLAY_COLUMNS,
+    LOCK_GROUP_LABELS,
     _escape_markdown,
     FixtureRef,
     fixtures_table_html,
@@ -523,7 +524,8 @@ def render() -> None:
         st.divider()
         st.header("Track Record")
         st.caption(
-            "All leagues. Predictions are locked in within 48 hours of kickoff and graded after the match. "
+            "All leagues. Each forecast is locked when the lineups are announced (about an hour before "
+            "kickoff) and graded after the match. "
             "Right outcome = the model's most likely result (win, draw or loss) happened."
         )
         with session_scope() as session:
@@ -537,10 +539,10 @@ def render() -> None:
             st.caption("No graded predictions yet.")
         else:
             st.caption(f"{accuracy.hit_rate:.2%} success rate ({accuracy.graded_total} graded)")
-        if accuracy.scored:
-            st.caption(
-                f""
-            )
+            for group_key, group_label in LOCK_GROUP_LABELS.items():
+                group = accuracy.groups.get(group_key)
+                if group is not None and group.graded_total:
+                    st.caption(f"{group_label}: {group.hit_rate:.0%} right ({group.graded_total} graded)")
 
     league = leagues[league_code]
     st.title(f"{league.name} Match Predictor")

@@ -272,10 +272,10 @@ def test_champions_league_clubs_are_priced_from_the_domestic_league_understat_tr
     monkeypatch.setattr(understat_client, "fetch_all_teams_totals", lambda code, season: squads if code == "EPL" else {})
     monkeypatch.setattr(understat_client, "fetch_team_season", lambda *a, **k: seen.append("per-league") or [])
 
-    arsenal = injuries._understat_squad("Arsenal", "Arsenal FC", UCL, 2026)
+    arsenal = injuries.understat_squad("Arsenal", "Arsenal FC", UCL, 2026)
     assert arsenal is squads["Arsenal"] and seen == []  # not through the La Liga-style per-league lookup
-    assert injuries._understat_squad("Slavia Prag", "SK Slavia Praha", UCL, 2026) == []  # Understat has no such club
-    assert injuries._understat_squad("Arsenal", "Arsenal FC", LALIGA, 2026) == [] and seen == ["per-league"]
+    assert injuries.understat_squad("Slavia Prag", "SK Slavia Praha", UCL, 2026) == []  # Understat has no such club
+    assert injuries.understat_squad("Arsenal", "Arsenal FC", LALIGA, 2026) == [] and seen == ["per-league"]
 
 
 def test_only_the_single_request_feeds_run_in_the_quick_refresh():

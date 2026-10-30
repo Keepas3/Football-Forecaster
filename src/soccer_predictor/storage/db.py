@@ -111,11 +111,28 @@ def ensure_prediction_probability_columns(engine=None) -> list[str]:
     return added
 
 
+def ensure_prediction_basis_columns(engine=None) -> list[str]:
+    """Adds prediction_records.basis / lineup_json to a database created before
+    they existed, returning the columns that were added -- automatic in
+    init_db() for the same reason as ensure_group_name_columns. Rows locked by
+    the older 48-hour rule keep NULL, which is how they are told apart."""
+    engine = engine or get_engine()
+    existing = {col["name"] for col in inspect(engine).get_columns("prediction_records")}
+    added = []
+    for column, sql_type in (("basis", "VARCHAR"), ("lineup_json", "TEXT")):
+        if column not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE prediction_records ADD COLUMN {column} {sql_type}"))
+            added.append(column)
+    return added
+
+
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
     ensure_group_name_columns()
     ensure_espn_event_id_columns()
     ensure_prediction_probability_columns()
+    ensure_prediction_basis_columns()
 
 
 @contextmanager

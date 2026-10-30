@@ -6,26 +6,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from soccer_predictor.model.dixon_coles import DixonColesParams
-from soccer_predictor.prediction.tracking import compute_prediction_accuracy, snapshot_upcoming_predictions
+from soccer_predictor.prediction.tracking import LOCK_GROUPS, compute_prediction_accuracy
 from soccer_predictor.storage.models import Base, PredictionRecord
 from soccer_predictor.storage.repository import (
     all_prediction_records,
     get_or_create_team,
-    upsert_fixture,
     upsert_match,
 )
-
-
-class _League:
-    """Minimal stand-in -- snapshot_upcoming_predictions only ever reads
-    `.code`, never any other League field."""
-
-    def __init__(self, code: str):
-        self.code = code
-
-
-LEAGUE = _League("EPL")
 
 
 @pytest.fixture
@@ -34,86 +21,6 @@ def session():
     Base.metadata.create_all(engine)
     with Session(engine) as s:
         yield s
-
-
-def _params(home_id: int, away_id: int, home_attack=1.4, home_defense=1.0, away_attack=0.9, away_defense=1.2):
-    return DixonColesParams(
-        league_code="EPL",
-        attack={home_id: home_attack, away_id: away_attack},
-        defense={home_id: home_defense, away_id: away_defense},
-        home_advantage=1.3,
-        rho=-0.05,
-        xi=0.0018,
-        fitted_at="2026-09-27T00:00:00",
-        n_matches=1000,
-    )
-
-
-def test_snapshot_creates_one_record_per_upcoming_fixture(session, monkeypatch):
-    monkeypatch.setattr(
-        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
-    )
-    arsenal = get_or_create_team(session, "Arsenal", "EPL")
-    villa = get_or_create_team(session, "Aston Villa", "EPL")
-    session.commit()
-
-    fixture_date = dt.date.today() + dt.timedelta(days=1)
-    upsert_fixture(session, "EPL", fixture_date, arsenal.id, villa.id, "SCHEDULED")
-    session.commit()
-
-    created = snapshot_upcoming_predictions(session, LEAGUE, _params(arsenal.id, villa.id))
-    session.commit()
-
-    assert created == 1
-    records = all_prediction_records(session)
-    assert len(records) == 1
-    record = records[0]
-    assert record.league_code == "EPL"
-    assert record.date == fixture_date
-    assert record.home_team_id == arsenal.id
-    assert record.away_team_id == villa.id
-    assert isinstance(record.predicted_home_goals, int)
-    assert isinstance(record.predicted_away_goals, int)
-
-
-def test_snapshot_is_idempotent_and_never_overwrites(session, monkeypatch):
-    monkeypatch.setattr(
-        "soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None
-    )
-    arsenal = get_or_create_team(session, "Arsenal", "EPL")
-    villa = get_or_create_team(session, "Aston Villa", "EPL")
-    session.commit()
-
-    fixture_date = dt.date.today() + dt.timedelta(days=1)
-    upsert_fixture(session, "EPL", fixture_date, arsenal.id, villa.id, "SCHEDULED")
-    session.commit()
-
-    first_params = _params(arsenal.id, villa.id, home_attack=1.4, away_attack=0.9)
-    snapshot_upcoming_predictions(session, LEAGUE, first_params)
-    session.commit()
-    original = all_prediction_records(session)[0]
-    original_prediction = (original.predicted_home_goals, original.predicted_away_goals)
-
-    # A wildly different "retrained" model shouldn't touch the locked-in
-    # snapshot -- that's the whole point of a forward snapshot.
-    retrained_params = _params(arsenal.id, villa.id, home_attack=0.3, away_attack=2.5)
-    created_second_pass = snapshot_upcoming_predictions(session, LEAGUE, retrained_params)
-    session.commit()
-
-    assert created_second_pass == 0
-    records = all_prediction_records(session)
-    assert len(records) == 1
-    assert (records[0].predicted_home_goals, records[0].predicted_away_goals) == original_prediction
-
-
-def test_snapshot_returns_zero_when_no_upcoming_fixtures(session):
-    arsenal = get_or_create_team(session, "Arsenal", "EPL")
-    villa = get_or_create_team(session, "Aston Villa", "EPL")
-    session.commit()
-
-    created = snapshot_upcoming_predictions(session, LEAGUE, _params(arsenal.id, villa.id))
-    assert created == 0
-    assert all_prediction_records(session) == []
 
 
 def _record(league_code, date, home_id, away_id, predicted_home, predicted_away):
@@ -201,58 +108,11 @@ def test_compute_prediction_accuracy_all_pending_gives_none_hit_rate(session):
     assert accuracy.hit_rate is None
 
 
-# --- locking in only close to kickoff -------------------------------------------------------
-
-
 def _two_teams(session):
     arsenal = get_or_create_team(session, "Arsenal", "EPL")
     villa = get_or_create_team(session, "Aston Villa", "EPL")
     session.commit()
     return arsenal.id, villa.id
-
-
-def test_a_fixture_further_out_than_48_hours_is_not_locked_in_yet(session, monkeypatch):
-    monkeypatch.setattr("soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None)
-    a, b = _two_teams(session)
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    upsert_fixture(session, "EPL", (now + dt.timedelta(days=10)).date(), a, b, "SCHEDULED", kickoff_utc=now + dt.timedelta(days=10))
-    session.commit()
-
-    assert snapshot_upcoming_predictions(session, LEAGUE, _params(a, b)) == 0
-    assert all_prediction_records(session) == []
-
-
-def test_kickoff_just_inside_and_just_outside_the_window(session, monkeypatch):
-    monkeypatch.setattr("soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None)
-    a, b = _two_teams(session)
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    inside, outside = now + dt.timedelta(hours=47), now + dt.timedelta(hours=49)
-    upsert_fixture(session, "EPL", inside.date(), a, b, "SCHEDULED", kickoff_utc=inside)
-    upsert_fixture(session, "EPL", outside.date(), b, a, "SCHEDULED", kickoff_utc=outside)
-    session.commit()
-
-    assert snapshot_upcoming_predictions(session, LEAGUE, _params(a, b)) == 1
-    [record] = all_prediction_records(session)
-    assert (record.home_team_id, record.away_team_id) == (a, b)
-
-
-def test_predictions_locked_in_too_early_are_cleared_but_near_and_graded_ones_stay(session, monkeypatch):
-    from soccer_predictor.storage.repository import insert_prediction_record, upsert_match
-
-    monkeypatch.setattr("soccer_predictor.prediction.service.resolve_current_attack_strength", lambda *a, **k: None)
-    a, b = _two_teams(session)
-    today = dt.datetime.now(dt.UTC).date()
-    insert_prediction_record(session, "EPL", today + dt.timedelta(days=60), a, b, 1, 0)  # locked months ahead: stale
-    insert_prediction_record(session, "EPL", today + dt.timedelta(days=1), b, a, 2, 2)  # inside the window: kept
-    insert_prediction_record(session, "EPL", today - dt.timedelta(days=3), a, b, 1, 1)  # already played and graded
-    upsert_match(session, "EPL", "2627", today - dt.timedelta(days=3), a, b, 1, 1)
-    session.commit()
-
-    snapshot_upcoming_predictions(session, LEAGUE, _params(a, b))
-    session.commit()
-
-    kept = sorted((r.date - today).days for r in all_prediction_records(session))
-    assert kept == [-3, 1]
 
 
 def test_locked_predictions_are_looked_up_by_match(session):
@@ -266,3 +126,51 @@ def test_locked_predictions_are_looked_up_by_match(session):
     locked = locked_predictions_for_league(session, "EPL")
     assert locked[(day, a, b)].home_goals == 2 and locked[(day, a, b)].p_home == 0.5
     assert (day, b, a) not in locked and locked_predictions_for_league(session, "LALIGA") == {}
+
+
+# --- the Track Record by kind of lock --------------------------------------------------------------
+
+
+def test_accuracy_is_also_kept_per_kind_of_lock(session):
+    teams = [get_or_create_team(session, f"Team {i}", "EPL") for i in range(8)]
+    session.commit()
+    day = dt.date(2026, 10, 3)
+
+    def add(i, basis, predicted, actual):
+        home, away = teams[2 * i], teams[2 * i + 1]
+        record = _record("EPL", day, home.id, away.id, *predicted)
+        record.basis = basis
+        record.p_home, record.p_draw, record.p_away = (0.6, 0.25, 0.15) if predicted[0] > predicted[1] else (0.2, 0.3, 0.5)
+        session.add(record)
+        upsert_match(session, "EPL", "2627", day, home.id, away.id, *actual)
+
+    add(0, "lineup", (2, 0), (1, 0))  # right outcome
+    add(1, "lineup", (2, 0), (0, 1))  # wrong
+    add(2, "early", (2, 0), (2, 0))  # exact
+    add(3, None, (0, 1), (3, 0))  # an older 48-hour lock: wrong
+    session.commit()
+
+    accuracy = compute_prediction_accuracy(session)
+
+    assert accuracy.graded_total == 4 and accuracy.scored == 4
+    lineup, early, legacy = accuracy.groups["lineup"], accuracy.groups["early"], accuracy.groups["legacy"]
+    assert (lineup.correct_outcome, lineup.wrong, lineup.graded_total) == (1, 1, 2)
+    assert lineup.hit_rate == pytest.approx(0.5)
+    assert (early.exact, early.graded_total) == (1, 1)
+    assert (legacy.wrong, legacy.graded_total) == (1, 1)
+    assert lineup.scored == 2 and lineup.mean_rps is not None
+    assert LOCK_GROUPS == ("lineup", "early", "legacy")
+
+
+def test_a_pending_lock_counts_in_its_group_too(session):
+    a = get_or_create_team(session, "Arsenal", "EPL")
+    b = get_or_create_team(session, "Aston Villa", "EPL")
+    session.commit()
+    record = _record("EPL", dt.date(2026, 11, 1), a.id, b.id, 1, 0)
+    record.basis = "lineup"
+    session.add(record)
+    session.commit()
+
+    accuracy = compute_prediction_accuracy(session)
+    assert accuracy.pending == 1 and accuracy.groups["lineup"].pending == 1
+    assert accuracy.groups["lineup"].hit_rate is None

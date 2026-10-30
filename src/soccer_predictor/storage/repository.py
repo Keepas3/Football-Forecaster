@@ -286,17 +286,6 @@ def prediction_record_scoreline(
     return (record.predicted_home_goals, record.predicted_away_goals) if record else None
 
 
-def delete_prediction_records_after(session: Session, league_code: str, after: dt.date) -> int:
-    """Deletes the league's prediction records for matches dated `after` or later
-    (matches that cannot have been played yet). Returns how many were removed."""
-    records = session.scalars(
-        select(PredictionRecord).where(PredictionRecord.league_code == league_code, PredictionRecord.date >= after)
-    ).all()
-    for record in records:
-        session.delete(record)
-    return len(records)
-
-
 @dataclass
 class LockedPrediction:
     home_goals: int
@@ -304,38 +293,42 @@ class LockedPrediction:
     p_home: float | None
     p_draw: float | None
     p_away: float | None
+    basis: str | None = None  # "lineup" | "early" | None (the older 48-hour rule); see PredictionRecord.basis
 
 
 def locked_predictions_for_league(
     session: Session, league_code: str, from_date: dt.date | None = None
 ) -> dict[tuple[dt.date, int, int], LockedPrediction]:
     """The predictions locked in for a league, keyed by (date, home id, away id) --
-    what the upcoming-matches tables show as "Locked in" instead of "Early"."""
+    what the upcoming-matches tables show as locked instead of "Early"."""
     query = select(PredictionRecord).where(PredictionRecord.league_code == league_code)
     if from_date is not None:
         query = query.where(PredictionRecord.date >= from_date)
     return {
         (r.date, r.home_team_id, r.away_team_id): LockedPrediction(
-            r.predicted_home_goals, r.predicted_away_goals, r.p_home, r.p_draw, r.p_away
+            r.predicted_home_goals, r.predicted_away_goals, r.p_home, r.p_draw, r.p_away, r.basis
         )
         for r in session.scalars(query)
     }
 
 
+def prediction_record_for_match(
+    session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
+) -> PredictionRecord | None:
+    return session.scalar(
+        select(PredictionRecord).where(
+            PredictionRecord.league_code == league_code,
+            PredictionRecord.date == date,
+            PredictionRecord.home_team_id == home_team_id,
+            PredictionRecord.away_team_id == away_team_id,
+        )
+    )
+
+
 def has_prediction_record(
     session: Session, league_code: str, date: dt.date, home_team_id: int, away_team_id: int
 ) -> bool:
-    return (
-        session.scalar(
-            select(PredictionRecord.id).where(
-                PredictionRecord.league_code == league_code,
-                PredictionRecord.date == date,
-                PredictionRecord.home_team_id == home_team_id,
-                PredictionRecord.away_team_id == away_team_id,
-            )
-        )
-        is not None
-    )
+    return prediction_record_for_match(session, league_code, date, home_team_id, away_team_id) is not None
 
 
 def insert_prediction_record(
@@ -349,14 +342,27 @@ def insert_prediction_record(
     p_home: float | None = None,
     p_draw: float | None = None,
     p_away: float | None = None,
-) -> None:
+    basis: str | None = None,
+    lineup_json: str | None = None,
+    replace_older_rule: bool = False,
+) -> bool:
     """Locks in a prediction -- unlike upsert_match/upsert_fixture, an
     existing row means skip, never update. That's the whole point of a
     snapshot: it has to stay whatever was forecast at the time, even if the
     model is retrained before the match is actually played.
+
+    The one exception is `replace_older_rule`: a row locked by the older
+    48-hour rule (basis None) is replaced by this one, because the lineup lock
+    that now supersedes it is made before kickoff too, and an unplayed match
+    carries nothing to grade. The caller must only ask for it for a match that
+    has not kicked off. Returns whether a row was written.
     """
-    if has_prediction_record(session, league_code, date, home_team_id, away_team_id):
-        return
+    existing = prediction_record_for_match(session, league_code, date, home_team_id, away_team_id)
+    if existing is not None:
+        if not (replace_older_rule and existing.basis is None):
+            return False
+        session.delete(existing)
+        session.flush()  # the unique key must be free before the replacement is added
     session.add(
         PredictionRecord(
             league_code=league_code,
@@ -369,8 +375,11 @@ def insert_prediction_record(
             p_home=p_home,
             p_draw=p_draw,
             p_away=p_away,
+            basis=basis,
+            lineup_json=lineup_json,
         )
     )
+    return True
 
 
 def prediction_records_missing_probabilities(

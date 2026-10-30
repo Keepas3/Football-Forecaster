@@ -52,7 +52,7 @@ jobs:
           # In-progress season of each football-data.co.uk league: a few small static files.
           uv run python scripts/fetch_historical_data.py --current-season-only
           # Recent results (ESPN scoreboard: a few requests, not one per team),
-          # new fixtures + prediction snapshots. No injuries, no retraining.
+          # new fixtures + any forecast due to be locked. No injuries, no retraining.
           uv run python scripts/refresh_live_data.py --quick
 
       - name: Fingerprint after

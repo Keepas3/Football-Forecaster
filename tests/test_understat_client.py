@@ -265,3 +265,15 @@ def test_understat_available_seasons_starts_at_2014_and_includes_current_year():
     assert seasons[0] == 2014
     assert seasons == sorted(seasons)
     assert dt.date.today().year in seasons
+
+
+def test_clubs_understat_spells_differently_are_found_by_alias(monkeypatch):
+    rows = [
+        _row("Said El Mala", "FC Cologne", minutes=900),
+        _row("Haris Tabakovic", "Borussia M.Gladbach", minutes=800),
+        _row("Vitaly Janelt", "Mainz 05", minutes=700),
+    ]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+
+    assert {p.name for p in understat_client.fetch_team_season("FC Koln", "BUNDESLIGA", 2026)} == {"Said El Mala"}
+    assert {p.name for p in understat_client.fetch_team_season("M'gladbach", "BUNDESLIGA", 2026)} == {"Haris Tabakovic"}

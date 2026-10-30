@@ -1,5 +1,5 @@
 """Refreshes one league's live data (fixtures, results, prediction
-snapshots, injuries) -- the shared logic behind both
+locks, injuries) -- the shared logic behind both
 scripts/refresh_live_data.py (the CLI entrypoint) and
 dashboard/views/admin.py (the in-app equivalent for deployments with no
 cron, e.g. Streamlit Community Cloud). Factored out so those two callers
@@ -25,7 +25,7 @@ from soccer_predictor.ingest.fixtures import (
 )
 from soccer_predictor.ingest.team_mapper import seed_teams_from_api, seed_teams_from_espn
 from soccer_predictor.prediction.service import load_latest_params
-from soccer_predictor.prediction.tracking import backfill_prediction_probabilities, snapshot_upcoming_predictions
+from soccer_predictor.prediction.tracking import backfill_prediction_probabilities, lock_due_predictions
 from soccer_predictor.storage.db import session_scope
 
 
@@ -38,7 +38,7 @@ class RefreshResult:
     results_synced: int = 0
     results_skipped: int = 0
     results_error: str | None = None
-    snapshots_created: int = 0
+    locks_created: int = 0
     probabilities_backfilled: int = 0
     injuries_synced: int = 0
     injuries_skipped: int = 0
@@ -109,7 +109,7 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
             except (MissingApiKey, requests.RequestException) as exc:
                 result.results_error = str(exc)
 
-    # Injuries first, so predictions locked in below already count them. The slow
+    # Injuries first, so the forecasts locked below already count them. The slow
     # per-team ESPN sync is for the full refresh only; the Premier League, La Liga
     # and Champions League feeds are each a single cached request, so they run in
     # the quick refresh too (injury news moves through the week, not once a day).
@@ -125,7 +125,10 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
     with session_scope() as session:
         params = load_latest_params(session, league.code)
         if params is not None:
-            result.snapshots_created = snapshot_upcoming_predictions(session, league, params)
+            # A backstop: scripts/lock_lineups.py is what normally locks a match
+            # when its lineup is announced; this catches whatever a refresh run
+            # happens to coincide with. Locking is idempotent, so both are safe.
+            result.locks_created = lock_due_predictions(session, league, params)
             result.probabilities_backfilled = backfill_prediction_probabilities(session, league, params)
 
     return result

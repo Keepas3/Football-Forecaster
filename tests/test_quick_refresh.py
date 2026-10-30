@@ -281,4 +281,15 @@ def test_fingerprint_of_the_real_schema_runs(tmp_path):
 
     path = tmp_path / "real.db"
     RealBase.metadata.create_all(create_engine(f"sqlite:///{path}"))
-    assert _fingerprint_module().fingerprint(path) == "matches=0:0 predictions=0"
+    assert _fingerprint_module().fingerprint(path) == "matches=0:0 predictions=0 lineup_locks=0"
+
+
+def test_fingerprint_sees_an_older_lock_replaced_by_a_lineup_lock_in_place(db):
+    fp = _fingerprint_module().fingerprint
+    _run(db, "ALTER TABLE prediction_records ADD COLUMN basis TEXT")
+    _run(db, "INSERT INTO prediction_records DEFAULT VALUES")  # an older-rule lock: same row count after the update
+    before = fp(db)
+
+    _run(db, "UPDATE prediction_records SET basis = 'lineup'")
+
+    assert fp(db) != before

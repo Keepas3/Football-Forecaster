@@ -52,7 +52,7 @@ def main() -> None:
             print(f"  results: {result.results_synced} synced, {result.results_skipped} skipped (unresolved teams)")
 
         print(
-            f"  prediction tracking: {result.snapshots_created} new snapshot(s) locked in, "
+            f"  prediction tracking: {result.locks_created} new forecast(s) locked in, "
             f"{result.probabilities_backfilled} given probabilities"
         )
 

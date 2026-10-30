@@ -18,8 +18,8 @@ from soccer_predictor.prediction.tracking import (
     _rps,
     backfill_prediction_probabilities,
     compute_prediction_accuracy,
+    lock_due_predictions,
     most_likely_outcome,
-    snapshot_upcoming_predictions,
 )
 from soccer_predictor.storage import db
 from soccer_predictor.storage.models import Base, PredictionRecord
@@ -33,6 +33,8 @@ from soccer_predictor.storage.repository import (
 
 
 class _League:
+    data_source = "football_data_org"
+
     def __init__(self, code):
         self.code = code
 
@@ -187,12 +189,13 @@ def test_no_skill_guess_is_a_valid_distribution():
 # --- snapshots store the probabilities ---------------------------------------------------------------------
 
 
-def test_new_snapshots_save_the_probabilities(session):
+def test_new_locks_save_the_probabilities(session):
     a, b = _teams(session)
-    upsert_fixture(session, "EPL", dt.date.today() + dt.timedelta(days=1), a, b, "SCHEDULED")
+    now = dt.datetime(2026, 10, 31, 14, 0)
+    upsert_fixture(session, "EPL", now.date(), a, b, "TIMED", kickoff_utc=now + dt.timedelta(minutes=10))
     session.commit()
 
-    snapshot_upcoming_predictions(session, LEAGUE, _params(a, b))
+    lock_due_predictions(session, LEAGUE, _params(a, b), now=now, named_xi=lambda *args: None)
     session.commit()
 
     record = all_prediction_records(session)[0]
@@ -264,23 +267,23 @@ def test_backfill_skips_a_match_dated_today_that_already_has_a_result(session):
 
 
 def _fixture_at(session, a, b, kickoff):
-    upsert_fixture(session, "EPL", kickoff.date(), a, b, "SCHEDULED", kickoff_utc=kickoff)
+    upsert_fixture(session, "EPL", kickoff.date(), a, b, "TIMED", kickoff_utc=kickoff)
     session.commit()
 
 
-def test_a_match_already_under_way_is_not_snapshotted(session):
+def test_a_match_already_under_way_is_not_locked(session):
     a, b = _teams(session)
     _fixture_at(session, a, b, dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(minutes=20))
 
-    assert snapshot_upcoming_predictions(session, LEAGUE, _params(a, b)) == 0
+    assert lock_due_predictions(session, LEAGUE, _params(a, b), named_xi=lambda *args: None) == 0
     assert all_prediction_records(session) == []
 
 
-def test_a_match_kicking_off_later_today_is_snapshotted(session):
+def test_a_match_about_to_kick_off_is_locked(session):
     a, b = _teams(session)
-    _fixture_at(session, a, b, dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=3))
+    _fixture_at(session, a, b, dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(minutes=10))
 
-    assert snapshot_upcoming_predictions(session, LEAGUE, _params(a, b)) == 1
+    assert lock_due_predictions(session, LEAGUE, _params(a, b), named_xi=lambda *args: None) == 1
 
 
 def test_backfill_skips_a_match_under_way_but_fills_one_that_has_not_started(session):

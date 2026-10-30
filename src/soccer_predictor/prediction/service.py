@@ -14,12 +14,14 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from soccer_predictor.config import load_manual_injuries
+from soccer_predictor.config import load_leagues, load_manual_injuries
+from soccer_predictor.ingest.lineups import expected_squad
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.form_adjustment import FormNoteEntry, adjust_for_form
 from soccer_predictor.model.injury_adjustment import InjuryEntry, adjust_strength
+from soccer_predictor.model.lineup_adjustment import LineupAbsence, adjust_for_lineup, lineup_absences
 from soccer_predictor.model.markets import MatchPrediction, PredictionBreakdown, predict_markets
 from soccer_predictor.model.scoreline_matrix import build_matrix
 from soccer_predictor.storage.models import FittedParams
@@ -108,6 +110,17 @@ def get_form_notes_for_team(session: Session, team_id: int, as_of: dt.date) -> l
     return [FormNoteEntry(magnitude=row.magnitude, affects=row.affects) for row in active]
 
 
+def rate_lineup(team_name: str, league_code: str, xi_names: Sequence[str] | None) -> list[LineupAbsence] | None:
+    """Who is missing from `team_name`'s usual XI given the XI named for the match,
+    or None when there is no named XI or the club's season stats cannot be found
+    (then the prediction stays on its injury-based estimate)."""
+    if not xi_names:
+        return None
+    league = load_leagues().get(league_code)
+    squad = expected_squad(team_name, league) if league else []
+    return lineup_absences(squad, xi_names) if squad else None
+
+
 def predict_fixture(
     session: Session,
     params: DixonColesParams,
@@ -121,21 +134,33 @@ def predict_fixture(
     extra_away_injuries: Sequence[InjuryEntry] = (),
     extra_home_form: Sequence[FormNoteEntry] = (),
     extra_away_form: Sequence[FormNoteEntry] = (),
+    home_lineup: Sequence[str] | None = None,
+    away_lineup: Sequence[str] | None = None,
 ) -> MatchPrediction:
     """The `extra_*` entries are what-if adjustments held in memory only, added
     on top of what the database holds (the AI what-if tab passes a visitor's
     note this way). Nothing here saves them, so they cannot reach another
     visitor's prediction or a locked-in snapshot; left empty, the result is
-    exactly what every other caller has always got."""
+    exactly what every other caller has always got.
+
+    `home_lineup` / `away_lineup` are the names of the starting XI once it is
+    announced. A side whose XI is given and whose club's usual XI is known is
+    adjusted for who is missing from it INSTEAD of for its database injuries
+    (an absent player is absent whatever the reason, and a doubtful one who
+    starts is no longer a doubt); any other side is adjusted for injuries as
+    before. The breakdown records which sides were rated this way."""
     if fixture_date is None:
         fixture_date = dt.date.today()
 
+    home_absences = rate_lineup(home_team_name, params.league_code, home_lineup)
+    away_absences = rate_lineup(away_team_name, params.league_code, away_lineup)
+
     home_injuries = [
-        *get_injuries_for_team(session, home_team_id, home_team_name, fixture_date).entries,
+        *(get_injuries_for_team(session, home_team_id, home_team_name, fixture_date).entries if home_absences is None else []),
         *extra_home_injuries,
     ]
     away_injuries = [
-        *get_injuries_for_team(session, away_team_id, away_team_name, fixture_date).entries,
+        *(get_injuries_for_team(session, away_team_id, away_team_name, fixture_date).entries if away_absences is None else []),
         *extra_away_injuries,
     ]
     home_form = [*get_form_notes_for_team(session, home_team_id, fixture_date), *extra_home_form]
@@ -144,10 +169,16 @@ def predict_fixture(
     base_home_attack, base_home_defense = params.attack[home_team_id], params.defense[home_team_id]
     base_away_attack, base_away_defense = params.attack[away_team_id], params.defense[away_team_id]
 
-    home_attack, home_defense = adjust_strength(base_home_attack, base_home_defense, home_injuries)
+    home_attack, home_defense = base_home_attack, base_home_defense
+    if home_absences is not None:
+        home_attack, home_defense = adjust_for_lineup(home_attack, home_defense, home_absences)
+    home_attack, home_defense = adjust_strength(home_attack, home_defense, home_injuries)
     home_attack, home_defense = adjust_for_form(home_attack, home_defense, home_form)
 
-    away_attack, away_defense = adjust_strength(base_away_attack, base_away_defense, away_injuries)
+    away_attack, away_defense = base_away_attack, base_away_defense
+    if away_absences is not None:
+        away_attack, away_defense = adjust_for_lineup(away_attack, away_defense, away_absences)
+    away_attack, away_defense = adjust_strength(away_attack, away_defense, away_injuries)
     away_attack, away_defense = adjust_for_form(away_attack, away_defense, away_form)
 
     home_xg_relative_strength = resolve_current_attack_strength(home_team_name, params.league_code)
@@ -178,5 +209,7 @@ def predict_fixture(
         xi=params.xi,
         home_xg_relative_strength=home_xg_relative_strength,
         away_xg_relative_strength=away_xg_relative_strength,
+        home_lineup_absences=home_absences,
+        away_lineup_absences=away_absences,
     )
     return prediction

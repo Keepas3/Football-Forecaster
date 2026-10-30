@@ -160,7 +160,7 @@ def sync_fpl_injuries(session: Session, league: League) -> tuple[int, int]:
 UNDERSTAT_CLUB_MATCH_THRESHOLD = 85
 
 
-def _understat_squad(
+def understat_squad(
     biwenger_club: str, our_name: str, league: League, season: int
 ) -> list[understat_client.UnderstatPlayerStats]:
     """The Understat players of a club, or [] if Understat doesn't track it.
@@ -232,7 +232,7 @@ def sync_biwenger_injuries(session: Session, league: League) -> tuple[int, int]:
         claimed.add(our_name)
         entries = []
         if injuries:  # only priced when the club has someone to price
-            players = _understat_squad(club, our_name, league, season)
+            players = understat_squad(club, our_name, league, season)
             totals = player_importance.aggregate_understat_team_output(players)
             for injury in injuries:
                 weight = _biwenger_base_weight(injury, players, totals) * (1 - injury.chance_of_playing / 100)

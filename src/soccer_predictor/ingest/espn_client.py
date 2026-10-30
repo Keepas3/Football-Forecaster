@@ -732,17 +732,23 @@ def parse_match_detail(event_id: str, data: dict) -> MatchDetail | None:
     )
 
 
-def fetch_match_detail(league_slug: str, event_id: str, state: str = "post") -> MatchDetail | None:
+def fetch_match_detail(
+    league_slug: str, event_id: str, state: str = "post", cache_ttl_seconds: int | None = None
+) -> MatchDetail | None:
     """Lineups, team/player match stats and the goals/cards/subs timeline for
     one match, from ESPN's summary endpoint (keyless, same host as the rest of
-    this client). `state` ("pre"/"in"/"post") only picks the cache lifetime.
+    this client). `state` ("pre"/"in"/"post") only picks the cache lifetime,
+    unless `cache_ttl_seconds` is given (0 = always fetch: the prediction lock
+    must not read a "no lineups yet" page cached a few minutes ago).
     None on any failure -- the page shows a friendly caption instead.
     """
+    if cache_ttl_seconds is None:
+        cache_ttl_seconds = MATCH_DETAIL_CACHE_TTL_SECONDS.get(state, 300)
     try:
         data = get(
             f"/{league_slug}/summary",
             params={"event": event_id},
-            cache_ttl_seconds=MATCH_DETAIL_CACHE_TTL_SECONDS.get(state, 300),
+            cache_ttl_seconds=cache_ttl_seconds,
         )
     except (requests.RequestException, ValueError):
         return None
@@ -770,12 +776,16 @@ def find_event_id(
 TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as the other clients' team matching
 # Club-form words that differ between sources ("Arsenal FC" vs "Arsenal").
 _NAME_NOISE = {"fc", "afc", "cf", "sc", "ac", "ssc", "fk", "sk"}
+# Words ESPN spells differently from the football-data.org names we store, too far
+# apart for fuzzy matching to bridge ("FC Cologne" v "FC Koln", "Stade Rennais" v
+# "Rennes"): each is mapped to the spelling we use before comparing.
+_NAME_WORD_ALIASES = {"cologne": "koln", "rennais": "rennes"}
 
 
 def _name_key(name: str) -> str:
     ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     words = re.sub(r"[^a-z0-9 ]+", " ", ascii_name.casefold()).split()
-    return " ".join(w for w in words if w not in _NAME_NOISE)
+    return " ".join(_NAME_WORD_ALIASES.get(w, w) for w in words if w not in _NAME_NOISE)
 
 
 def _name_score(a: str, b: str) -> float:

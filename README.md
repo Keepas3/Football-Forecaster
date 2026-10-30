@@ -18,12 +18,25 @@ historical results, adjusted for current injuries and team form.
   breakdown (home win, draw, away win, over/under 2.5 goals, both teams to
   score, most likely scorelines) and the worked Poisson/Dixon-Coles math
   behind it.
-- **Tracks its own accuracy.** Every prediction is locked in the moment a
-  fixture is seen as upcoming, before the result is known. Once the real
-  result comes in, that locked-in prediction is graded as an exact score
-  match, a correct win/draw/loss call with the wrong score, or wrong
-  entirely. Running counters and a hit rate are shown in the Predictor
-  page's sidebar.
+- **Locks in a final forecast when the lineups are announced.** Until a
+  match's starting XIs are out (about an hour before kickoff), its
+  prediction is marked "Early": the model's forecast from the squads and
+  the injury list, which can still change. When ESPN publishes the XIs, the
+  forecast is made again from the players who are actually starting (anyone
+  missing from a team's usual XI counts as absent, injured or rested alike;
+  a flagged player who starts counts for nothing) and locked in as
+  "Locked (lineup)". If no lineup appears by 20 minutes before kickoff, the
+  early forecast is locked instead as "Locked (no lineup)", so every match
+  is still graded. The same locking works for Champions League clubs and
+  MLS; competitions with no player stats (World Cup, Euros, Nations League,
+  Asian Cup) can only be locked as "no lineup".
+- **Tracks its own accuracy.** The locked-in forecast is saved before the
+  result is known and never changed. Once the real result comes in, it is
+  graded as an exact score match, a correct win/draw/loss call with the
+  wrong score, or wrong entirely. Running counters and a hit rate are shown
+  in the Predictor page's sidebar, with a line for each kind of lock
+  (lineup / no lineup / the older 48-hours-ahead rule, which locked
+  forecasts before any lineup was known).
 - **Shows live fixtures, results, and standings** for all of them, with the
   periodic tournaments (World Cup, European Championship, Asian Cup)
   presented as editions rather than a weekly season. The Champions League
@@ -126,7 +139,8 @@ haven't run yet (each is safe to re-run): `uv run python scripts/migrate_chat_no
    ```
 
    This also fetches each team's crest and each league's emblem, and locks
-   in a prediction snapshot for every upcoming fixture so accuracy can be
+   in the forecast of any match about to kick off whose lineup is out (see
+   "Locking forecasts when lineups are announced" below) so accuracy can be
    tracked later.
 
 3. **Launch the dashboard**:
@@ -228,6 +242,60 @@ It is off until `GEMINI_API_KEY` is set (a free key from
 add it to the app's secrets. Google may use free-tier prompts to improve its
 products, and the tab tells visitors so. `scripts/manual_test_whatif.py`
 checks the real API by hand.
+
+## Locking forecasts when lineups are announced
+
+A match's final forecast is locked in when its starting lineups are published,
+about an hour before kickoff (see "What it does" above). GitHub's own scheduler
+runs hours late, so something outside GitHub has to start the
+`.github/workflows/lock-lineups.yml` workflow about every ten minutes. Most of
+those runs finish in seconds: the first step asks the committed database whether
+any match is about to start with no final forecast
+(`scripts/lock_due_check.py`) and stops if not. This repository is public, so
+the runs cost nothing; if it is ever made private, ten-minute pings would use
+up the free monthly minutes.
+
+**Until you set this up, many matches go ungraded.** The scheduled refreshes also
+try to lock whatever is due when they happen to run (every two to four hours, so
+they only sometimes land in a match's last 90 minutes, and a refresh in the final
+20 minutes locks it without a lineup); every match they miss stays "Early" and is
+never graded. Set the pinger up when you publish this change.
+
+One-time setup (about ten minutes, free):
+
+1. **Create a GitHub token that can only start workflows.** GitHub, then
+   Settings, Developer settings, Personal access tokens, Fine-grained tokens,
+   Generate new token. Name it `lock-lineups pinger`; set the longest expiry
+   offered and put the date in your calendar (the pings stop silently when it
+   lapses); under Repository access choose "Only select repositories" and pick
+   `Keepas3/Football-Forecaster`; under Repository permissions set **Actions**
+   to "Read and write". Copy the token (shown once). Treat it like a password:
+   it can start this repository's workflows, nothing more, and you can revoke
+   it from the same page.
+2. **Create the ping at [cron-job.org](https://cron-job.org)** (free account).
+   Create cronjob with:
+   - URL: `https://api.github.com/repos/Keepas3/Football-Forecaster/actions/workflows/lock-lineups.yml/dispatches`
+   - Execution schedule: every 10 minutes (it may be limited to the hours
+     matches are played, roughly 10:00 to 05:00 UTC).
+   - Advanced, request method **POST**; request body `{"ref":"main"}`; headers
+     (one per line): `Authorization: Bearer <your token>`,
+     `Accept: application/vnd.github+json`,
+     `X-GitHub-Api-Version: 2022-11-28`, `Content-Type: application/json`,
+     `User-Agent: football-forecaster-pinger`.
+   - GitHub answers `204 No Content` when it starts a run; cron-job.org counts
+     that as success.
+3. **Test it before the first match day.** After the workflow file is on
+   `main`: on GitHub, Actions, Lock lineups, Run workflow (it will say nothing is
+   due unless a match is within 95 minutes). Then save the cron-job.org job, run
+   it once from its page (or wait for the next ten-minute mark) and check that
+   its history shows a 204 and a new run appears under Actions.
+4. **Watch the first real match day.** Within a few minutes of a lineup being
+   published (the ESPN match page shows it), the match's row on the Leagues
+   page should change from "Early" to "Locked (lineup)" after the site picks up
+   the new commit.
+
+To lock by hand, or to see what would happen:
+`uv run python scripts/lock_lineups.py [LEAGUE ...]`.
 
 ## Adding a league
 
@@ -351,3 +419,15 @@ uv run pytest
   forward snapshot before the match was played; there's no way to
   retroactively grade matches that were already finished before this
   feature existed, since no snapshot exists for them.
+- **Lineups come from ESPN, which is unofficial.** The starting XI is read
+  from ESPN's public match summary, which publishes it only when the club
+  does, and could change or stop without notice; the app then simply keeps
+  the early forecast. The usual XI each team is compared with comes from the
+  season's player stats (Understat, or American Soccer Analysis for MLS),
+  matched to ESPN's names, so a player whose name cannot be matched is left
+  out rather than guessed. How strongly an absence counts was fitted by
+  `scripts/backtest_lineups.py` on the 2026-27 matches played so far: the
+  lineup helped only slightly (ranked probability score 0.2088 to 0.2072 on
+  433 matches; better in four leagues, slightly worse in two) and the gain is
+  within the noise, so treat it as a modest refinement, not a large edge.
+  Re-run the backtest as more matches are played.

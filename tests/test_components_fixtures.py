@@ -275,3 +275,21 @@ def test_a_locked_in_match_shows_the_locked_forecast_and_an_early_one_the_curren
     old = components.fixture_prediction_row("A", "B", live, LockedPrediction(0, 1, None, None, None))
     assert old["Predicted score"] == "0-1" and old[components.HOME_WIN_COLUMN] == 50.0
     assert components.STATUS_COLUMN in components.fixture_columns_with_kickoff_first({**locked, "Kickoff": "x"})
+
+
+def test_a_locked_match_says_what_it_was_locked_from():
+    from soccer_predictor.dashboard import components
+    from soccer_predictor.storage.repository import LockedPrediction
+
+    live = SimpleNamespace(
+        home_win=0.50, draw=0.25, away_win=0.25, over_2_5=0.55, both_teams_to_score=0.5, top_scorelines=[(1, 0, 0.12)],
+    )
+
+    def label(basis):
+        row = components.fixture_prediction_row("A", "B", live, LockedPrediction(1, 0, 0.5, 0.3, 0.2, basis))
+        return row[components.STATUS_COLUMN]
+
+    assert label("lineup") == components.LOCKED_LINEUP_LABEL == "🔒 Locked (lineup)"
+    assert label("early") == components.LOCKED_NO_LINEUP_LABEL == "🔒 Locked (no lineup)"
+    assert label(None) == components.LOCKED_LABEL == "🔒 Locked in"  # the older 48-hour lock
+    assert "48 hours" not in components.PREDICTION_STATUS_NOTE

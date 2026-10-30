@@ -1,11 +1,12 @@
 """Tracks how good this app's own predictions actually are.
 
-A forward-snapshot system, not retrospective grading: the first time a
-fixture is seen as upcoming with a trained model available, its predicted
-scoreline is locked into `PredictionRecord` and never touched again, even
-if the model is retrained before the match is played (see
+A forward-snapshot system, not retrospective grading: a match's final
+forecast is locked into `PredictionRecord` when its starting XI is announced
+(usually 60-75 minutes before kickoff) and never touched again, even if the
+model is retrained before the match is played (see
 storage.repository.insert_prediction_record). Once the real result lands in
-the `matches` table, that locked-in snapshot can be graded against it.
+the `matches` table, that locked-in snapshot can be graded against it. Until
+the lineup is out the dashboard shows the injury-based forecast as "Early".
 
 Deliberately NOT retrospective (re-running the *current* model against
 already-completed matches) -- Dixon-Coles is fit on the full match history,
@@ -18,33 +19,42 @@ measure this.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 import math
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
+from soccer_predictor.ingest import lineups
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.prediction.service import predict_fixture
 from soccer_predictor.storage.repository import (
     all_prediction_records,
-    delete_prediction_records_after,
+    espn_event_id_for_match,
     fixtures_for_league,
-    has_prediction_record,
     insert_prediction_record,
     matches_for_league,
+    prediction_record_for_match,
     prediction_records_missing_probabilities,
     teams_for_league,
 )
 
-# How far ahead of kickoff a prediction is locked in. Football-data.org lists
-# the whole remaining season, so locking each fixture in the first time it was
-# seen meant forecasting games months ahead from ratings that knew nothing of
-# the teams' games in between. Locking in only the last 48 hours uses ratings
-# that include their latest results (the model is refit daily and the frequent
-# refresh runs every few hours, so every match is still caught before it
-# starts). Until then the dashboard shows the prediction as "Early".
-LOCK_IN_HOURS = 48
+logger = logging.getLogger(__name__)
+
+# The final forecast waits for the announced starting XI. Clubs name it about an
+# hour before kickoff, so from this long before kickoff the lock job looks for it
+# on every run and locks the moment it appears.
+LINEUP_WINDOW_MINUTES = 90
+# A match with still no XI this close to kickoff (no feed, a late team sheet, a
+# competition ESPN does not cover) is locked on its early, injury-based forecast
+# instead, so every match is still graded. Wide enough for two runs of a job that
+# is pinged every ten minutes.
+EARLY_FALLBACK_MINUTES = 20
+LINEUP_BASIS = "lineup"
+EARLY_BASIS = "early"
 # Wide enough to mean "every upcoming fixture currently known" -- used where a
 # lookup just has to find the rows, not decide what gets locked in.
 SNAPSHOT_WINDOW_DAYS = 365
@@ -64,45 +74,123 @@ def _is_missing(value) -> bool:
     return value != value
 
 
-def snapshot_upcoming_predictions(session: Session, league: League, params: DixonColesParams) -> int:
-    """Locks in a prediction for every fixture in `league` that kicks off within
-    LOCK_IN_HOURS and doesn't already have one. Returns how many new snapshots
-    were created.
+def has_real_kickoff(league: League, fixture) -> bool:
+    """Whether `fixture`'s kickoff time is a real one. football-data.org gives a
+    fixture it has not scheduled yet (status SCHEDULED) a placeholder 00:00 UTC
+    kickoff, and only a TIMED one a real time; ESPN's times are always real (an MLS
+    match at 00:00 UTC is simply an 8 pm Eastern kickoff)."""
+    if _is_missing(fixture.kickoff_utc) or fixture.kickoff_utc is None:
+        return False
+    return league.data_source == "espn" or fixture.status != "SCHEDULED"
 
-    Also clears out predictions that were locked in too early (the old rule
-    locked a fixture in as soon as it was known): any record for a match more
-    than a day beyond the lock-in window has not been played, so it carries no
-    result to grade, and is simply made again once the match is close. Records
-    inside the window, and every graded one, are never touched.
 
-    predict_fixture may fetch current-season stats (Understat/American
-    Soccer Analysis, see model/current_form_adjustment.py) for leagues
-    those cover -- disk-cached 24h, so only the first fixture per league
-    in a given run costs a real fetch; every other lookup in this loop
-    hits the same warm cache. Degrades to no adjustment (never raises) if
-    that fetch fails, same contract as every other adjustment here.
+def _named_xi(session: Session, league: League, fixture, home_name: str, away_name: str):
+    """The starting XI ESPN lists for `fixture` right now, or None. Never raises:
+    one match's feed trouble must not stop the others from being locked."""
+    try:
+        stored = espn_event_id_for_match(
+            session, league.code, fixture.date, fixture.home_team_id, fixture.away_team_id
+        )
+        event_id = lineups.find_event(league, fixture.date, home_name, away_name, stored)
+        return lineups.fetch_confirmed_xi(league, event_id, home_name, away_name) if event_id else None
+    except Exception:  # noqa: BLE001 -- the lineup is a bonus; the early forecast stands without it
+        logger.exception("Could not read the lineup for %s v %s", home_name, away_name)
+        return None
+
+
+def lineup_json(xi: lineups.ConfirmedXi, breakdown) -> str:
+    """What is saved with a lineup lock: both XIs and who was missing from each
+    side's usual XI, so the lock can be shown and audited later."""
+    return json.dumps(
+        {
+            "event_id": xi.event_id,
+            "home": xi.home,
+            "away": xi.away,
+            "home_formation": xi.home_formation,
+            "away_formation": xi.away_formation,
+            "home_absent": [asdict(a) for a in breakdown.home_lineup_absences or []],
+            "away_absent": [asdict(a) for a in breakdown.away_lineup_absences or []],
+        }
+    )
+
+
+def stored_lineup(record) -> tuple[list[str] | None, list[str] | None]:
+    """(home XI, away XI) saved with a lineup lock, or (None, None) for any other
+    record or an unreadable one -- so a locked match's workings can be shown for the
+    lineup it was locked with."""
+    if record is None or record.basis != LINEUP_BASIS or not record.lineup_json:
+        return None, None
+    try:
+        saved = json.loads(record.lineup_json)
+        return list(saved["home"]), list(saved["away"])
+    except (ValueError, KeyError, TypeError):
+        return None, None
+
+
+def lock_due_predictions(
+    session: Session,
+    league: League,
+    params: DixonColesParams,
+    now: dt.datetime | None = None,
+    named_xi: Callable | None = None,
+) -> int:
+    """Locks in the final forecast of every match in `league` that kicks off within
+    LINEUP_WINDOW_MINUTES and has none yet. Returns how many locks were made.
+
+    Each such match is looked up on ESPN. With both starting XIs named, the forecast
+    is made from them (basis "lineup", see prediction.service.predict_fixture) and
+    locked at once. With none yet the match is left alone until
+    EARLY_FALLBACK_MINUTES before kickoff, when the early forecast is locked instead
+    (basis "early"); a lineup that cannot be rated (no player stats for either club)
+    is locked the same way, since it changes nothing. A match locked by the older
+    48-hour rule that has not kicked off is replaced; one already played, or whose
+    kickoff time is still a placeholder, is never touched, and neither is a match
+    that has started: a forecast made after kickoff is not a forecast.
+
+    predict_fixture may fetch current-season stats (Understat/American Soccer
+    Analysis, see model/current_form_adjustment.py), disk-cached 24h, and degrades
+    to no adjustment (never raises) if that fails.
+
+    `now` and `named_xi` (called with the session, league, fixture row, home and
+    away name) exist for tests; the defaults are the real clock and ESPN.
     """
+    now = now or dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    named_xi = named_xi or _named_xi
+    window_end = now + dt.timedelta(minutes=LINEUP_WINDOW_MINUTES)
     team_names = teams_for_league(session, league.code)
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    horizon = now + dt.timedelta(hours=LOCK_IN_HOURS)
-    delete_prediction_records_after(session, league.code, horizon.date() + dt.timedelta(days=1))
-    upcoming = fixtures_for_league(session, league.code, now.date(), horizon.date())
+    upcoming = fixtures_for_league(session, league.code, now.date(), window_end.date())
 
     created = 0
     for row in upcoming.itertuples(index=False):
-        if _already_kicked_off(row.kickoff_utc, now):
+        if not has_real_kickoff(league, row) or not now < row.kickoff_utc <= window_end:
             continue
-        if not _is_missing(row.kickoff_utc) and row.kickoff_utc is not None and row.kickoff_utc > horizon:
-            continue  # a late kickoff on the last day of the window is still too far off
-        if has_prediction_record(session, league.code, row.date, row.home_team_id, row.away_team_id):
+        if row.home_team_id not in params.attack or row.away_team_id not in params.attack:
+            continue  # a club the model has no rating for yet
+        existing = prediction_record_for_match(session, league.code, row.date, row.home_team_id, row.away_team_id)
+        if existing is not None and existing.basis is not None:
             continue
         home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
         away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
+        xi = named_xi(session, league, row, home_name, away_name)
+        if xi is None and (row.kickoff_utc - now) > dt.timedelta(minutes=EARLY_FALLBACK_MINUTES):
+            continue  # the lineup may still come
         prediction = predict_fixture(
-            session, params, row.home_team_id, row.away_team_id, home_name, away_name, fixture_date=row.date
+            session,
+            params,
+            row.home_team_id,
+            row.away_team_id,
+            home_name,
+            away_name,
+            fixture_date=row.date,
+            home_lineup=xi.home if xi else None,
+            away_lineup=xi.away if xi else None,
+        )
+        breakdown = prediction.breakdown
+        rated = xi is not None and (
+            breakdown.home_lineup_absences is not None or breakdown.away_lineup_absences is not None
         )
         predicted_home_goals, predicted_away_goals, _ = prediction.top_scorelines[0]
-        insert_prediction_record(
+        if insert_prediction_record(
             session,
             league.code,
             row.date,
@@ -113,8 +201,11 @@ def snapshot_upcoming_predictions(session: Session, league: League, params: Dixo
             p_home=prediction.home_win,
             p_draw=prediction.draw,
             p_away=prediction.away_win,
-        )
-        created += 1
+            basis=LINEUP_BASIS if rated else EARLY_BASIS,
+            lineup_json=lineup_json(xi, breakdown) if rated else None,
+            replace_older_rule=True,
+        ):
+            created += 1
     return created
 
 
@@ -163,6 +254,16 @@ def backfill_prediction_probabilities(session: Session, league: League, params: 
 NO_SKILL_PROBS = (0.43, 0.25, 0.32)
 
 
+# What a locked record was made from, in the order the Track Record lists them:
+# the announced lineup, the early forecast locked for want of one, and the
+# forecast the older rule locked 48 hours ahead.
+LOCK_GROUPS = (LINEUP_BASIS, EARLY_BASIS, "legacy")
+
+
+def lock_group(record) -> str:
+    return record.basis if record.basis in (LINEUP_BASIS, EARLY_BASIS) else "legacy"
+
+
 @dataclass
 class PredictionAccuracy:
     exact: int = 0
@@ -176,6 +277,32 @@ class PredictionAccuracy:
     log_loss_total: float = 0.0
     baseline_rps_total: float = 0.0
     baseline_log_loss_total: float = 0.0
+    # The same figures for each kind of lock (LOCK_GROUPS keys), so the lineup
+    # forecasts can be told apart from the no-lineup and older 48-hour ones.
+    groups: dict[str, PredictionAccuracy] = field(default_factory=dict)
+
+    def record_result(self, record, actual: tuple[int, int] | None) -> None:
+        """Counts one locked-in record: pending without a result, else graded
+        (exact / right outcome / wrong) and, with saved probabilities, scored."""
+        if actual is None:
+            self.pending += 1
+            return
+        actual_home_goals, actual_away_goals = actual
+        actual_outcome = _outcome_sign(actual_home_goals, actual_away_goals)
+        if record.predicted_home_goals == actual_home_goals and record.predicted_away_goals == actual_away_goals:
+            self.exact += 1
+        elif most_likely_outcome(record) == actual_outcome:
+            self.correct_outcome += 1
+        else:
+            self.wrong += 1
+
+        if record.p_home is not None and record.p_draw is not None and record.p_away is not None:
+            probs = (record.p_home, record.p_draw, record.p_away)
+            self.scored += 1
+            self.rps_total += _rps(probs, actual_outcome)
+            self.log_loss_total += _log_loss(probs, actual_outcome)
+            self.baseline_rps_total += _rps(NO_SKILL_PROBS, actual_outcome)
+            self.baseline_log_loss_total += _log_loss(NO_SKILL_PROBS, actual_outcome)
 
     @property
     def graded_total(self) -> int:
@@ -274,26 +401,7 @@ def compute_prediction_accuracy(session: Session) -> PredictionAccuracy:
         }
         for record in league_records:
             actual = actual_by_key.get((record.date, record.home_team_id, record.away_team_id))
-            if actual is None:
-                accuracy.pending += 1
-                continue
-            actual_home_goals, actual_away_goals = actual
-            actual_outcome = _outcome_sign(actual_home_goals, actual_away_goals)
-            if (
-                record.predicted_home_goals == actual_home_goals
-                and record.predicted_away_goals == actual_away_goals
-            ):
-                accuracy.exact += 1
-            elif most_likely_outcome(record) == actual_outcome:
-                accuracy.correct_outcome += 1
-            else:
-                accuracy.wrong += 1
-
-            if record.p_home is not None and record.p_draw is not None and record.p_away is not None:
-                probs = (record.p_home, record.p_draw, record.p_away)
-                accuracy.scored += 1
-                accuracy.rps_total += _rps(probs, actual_outcome)
-                accuracy.log_loss_total += _log_loss(probs, actual_outcome)
-                accuracy.baseline_rps_total += _rps(NO_SKILL_PROBS, actual_outcome)
-                accuracy.baseline_log_loss_total += _log_loss(NO_SKILL_PROBS, actual_outcome)
+            group = accuracy.groups.setdefault(lock_group(record), PredictionAccuracy())
+            accuracy.record_result(record, actual)
+            group.record_result(record, actual)
     return accuracy

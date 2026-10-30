@@ -887,23 +887,44 @@ def injury_source_note(league_code: str) -> str | None:
 
 
 PREDICTION_STATUS_NOTE = (
-    "Early: the model's forecast today, which can still change as the teams play. "
-    "Locked in: the final forecast, saved within 48 hours of kickoff and the one the Track Record grades."
+    "Early: the model's forecast from the squads and injuries, before the lineups are out; it can still change. "
+    "Locked: the final forecast, saved when the starting lineups are announced (about an hour before kickoff), "
+    "or just before kickoff if no lineup is published. It is the one the Track Record grades."
 )
 STATUS_COLUMN = "Prediction"
-LOCKED_LABEL = "🔒 Locked in"
+LOCKED_LABEL = "🔒 Locked in"  # saved by the older rule, 48 hours before kickoff
+LOCKED_LINEUP_LABEL = "🔒 Locked (lineup)"
+LOCKED_NO_LINEUP_LABEL = "🔒 Locked (no lineup)"
 EARLY_LABEL = "Early"
+
+
+# The Track Record's lines for each kind of lock (prediction.tracking.LOCK_GROUPS keys).
+LOCK_GROUP_LABELS = {
+    "lineup": "With the lineup",
+    "early": "No lineup (early forecast)",
+    "legacy": "Locked 48 hours ahead (older rule)",
+}
+
+
+def locked_label(basis: str | None) -> str:
+    """The status shown for a locked prediction, by what it was made from (the
+    record's `basis`: "lineup", "early" for no usable lineup, None for the older rule)."""
+    if basis == "lineup":
+        return LOCKED_LINEUP_LABEL
+    if basis == "early":
+        return LOCKED_NO_LINEUP_LABEL
+    return LOCKED_LABEL
 
 
 def fixture_prediction_row(
     home_name: str, away_name: str, prediction: MatchPrediction, locked=None
 ) -> dict:
     """One upcoming-match row. `locked` is the prediction locked in for this
-    match (storage.repository.LockedPrediction) once it is within 48 hours of
-    kickoff, else None. A locked match shows the locked-in score and win/draw/
+    match (storage.repository.LockedPrediction) once its lineup is out or kickoff
+    is near, else None. A locked match shows the locked-in score and win/draw/
     loss figures -- the forecast that is graded on the Track Record -- and is
-    marked "Locked in"; any other shows the model's current forecast, marked
-    "Early", which can still change as teams play before it."""
+    marked "Locked" (with what it was made from); any other shows the model's
+    current forecast, marked "Early", which can still change before the lineup."""
     top_home, top_away, _ = prediction.top_scorelines[0]
     home_win, draw, away_win = prediction.home_win, prediction.draw, prediction.away_win
     if locked is not None:
@@ -917,7 +938,7 @@ def fixture_prediction_row(
         DRAW_COLUMN: _as_percent(draw),
         AWAY_WIN_COLUMN: _as_percent(away_win),
         "Predicted score": f"{top_home}-{top_away}",
-        STATUS_COLUMN: LOCKED_LABEL if locked is not None else EARLY_LABEL,
+        STATUS_COLUMN: locked_label(locked.basis) if locked is not None else EARLY_LABEL,
         OVER_2_5_COLUMN: _as_percent(prediction.over_2_5),
         BTTS_COLUMN: _as_percent(prediction.both_teams_to_score),
         # Hidden (never in a display column_order): styling keys off these,
@@ -1265,7 +1286,8 @@ def _render_squad_reference(
 
     st.caption(
         "Current squads (shown for reference - browsing this list has no effect; only players "
-        "flagged injured/absent on Team Detail affect the calculation above):"
+        "flagged injured/absent on Team Detail, or missing from an announced lineup, affect the "
+        "calculation below):"
     )
     cols = st.columns(2)
     for col, name, squad in ((cols[0], home_name, home_squad), (cols[1], away_name, away_squad)):
@@ -1486,6 +1508,43 @@ def render_head_to_head(h2h: HeadToHeadRecord, team_name: str, opponent_name: st
     )
 
 
+def _render_lineup_section(b, home_name: str, away_name: str) -> None:
+    """Who is missing from each side's usual starting XI, when the XI is known
+    (nothing when the forecast was made without one)."""
+    if b.home_lineup_absences is None and b.away_lineup_absences is None:
+        return
+    st.markdown("**Starting lineup**")
+    st.write(
+        "The starting XIs are announced, so this forecast is made from who is actually playing "
+        "instead of from the injury list. Each regular missing from his team's usual XI cuts the "
+        "team's attack (or raises what it concedes) in proportion to his own weight - the same "
+        "weight an injury to him would carry, applied at a gentler strength fitted on past "
+        "matches. A team whose usual XI is playing is not adjusted at all."
+    )
+    cols = st.columns(2)
+    for col, name, absences in (
+        (cols[0], home_name, b.home_lineup_absences),
+        (cols[1], away_name, b.away_lineup_absences),
+    ):
+        with col:
+            st.markdown(f"**{name}**")
+            if absences is None:
+                col.caption("Lineup not rated (no player stats for this club): injuries used instead.")
+            elif not absences:
+                col.write("The usual starting XI is playing: no adjustment.")
+            else:
+                col.table(
+                    [
+                        {
+                            "Missing from the usual XI": a.name,
+                            "Role": "Defense" if a.position == "defense" else "Attack",
+                            "Weight": f"{a.weight:.2f}",
+                        }
+                        for a in sorted(absences, key=lambda a: -a.weight)
+                    ]
+                )
+
+
 def render_prediction_breakdown(
     prediction: MatchPrediction,
     home_name: str,
@@ -1528,12 +1587,14 @@ def render_prediction_breakdown(
         )
         st.write(
             "Player data *does* feed into the adjusted numbers in step 1 below, but only for "
-            "whoever is actually flagged injured/absent on Team Detail's Injuries section - "
-            "simply being on the squad has no effect. Once a player is marked out, the *size* of "
-            "the hit to their team's attack/defense is based on that player's own real "
-            "goals/assists/minutes (and, when available, current-season xG/xA from Understat), "
-            "not a flat guess - see Team Detail's Injuries section for each flagged player's "
-            "computed weight."
+            "players who are missing. Before the lineups are out, that means whoever is flagged "
+            "injured/absent on Team Detail's Injuries section - simply being on the squad has no "
+            "effect. Once a team's starting XI is announced it takes over: whoever is missing "
+            "from the team's usual XI counts as absent (injured, suspended or rested alike), and "
+            "a flagged player who starts counts for nothing. Either way the *size* of the hit to "
+            "the team's attack/defense is based on that player's own real goals/assists/minutes "
+            "(and, when available, current-season xG/xA from Understat), not a flat guess - see "
+            "Team Detail's Injuries section for each flagged player's computed weight."
         )
         if b.home_xg_relative_strength is not None or b.away_xg_relative_strength is not None:
             st.write(
@@ -1546,6 +1607,7 @@ def render_prediction_breakdown(
                 "current-season stats coverage (e.g. UCL)."
             )
         _render_squad_reference(session, league, home_team_id, home_name, away_team_id, away_name)
+        _render_lineup_section(b, home_name, away_name)
 
         st.markdown("**1. Team strength going into this match**")
         cols = st.columns(2)
@@ -1556,7 +1618,7 @@ def render_prediction_breakdown(
             with col:
                 st.markdown(f"**{name}**")
                 if attack != base_attack:
-                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries/form/current stats)")
+                    col.write(f"Attack: {base_attack:.3f} → **{attack:.3f}** (adjusted for injuries or lineup, form and current stats)")
                 else:
                     col.write(f"Attack: **{attack:.3f}**")
                 if defense != base_defense:

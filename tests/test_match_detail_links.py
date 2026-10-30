@@ -373,3 +373,13 @@ def test_the_match_header_and_both_lineups_link_each_team():
     assert [m.value for m in at.markdown].count("**Chelsea**") == 2
     # Shown as "4-3-3"; the dashes are escaped like all feed text. Chelsea has no formation line.
     assert [c.value for c in at.caption if c.value.startswith("Formation")] == ["Formation 4\\-3\\-3"]
+
+
+def test_clubs_espn_spells_differently_are_still_matched():
+    score = espn_client._name_score
+    assert score("FC Koln", "FC Cologne") >= espn_client.TEAM_NAME_FUZZY_THRESHOLD
+    assert score("FC Koln", "1. FC Köln") >= espn_client.TEAM_NAME_FUZZY_THRESHOLD
+    assert score("Rennes", "Stade Rennais") >= espn_client.TEAM_NAME_FUZZY_THRESHOLD
+    # the aliases must not make different clubs look alike
+    assert score("FC Koln", "Mainz") < espn_client.TEAM_NAME_FUZZY_THRESHOLD
+    assert score("Rennes", "Stade Brestois 29") < espn_client.TEAM_NAME_FUZZY_THRESHOLD

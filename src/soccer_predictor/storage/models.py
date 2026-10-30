@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -205,10 +206,10 @@ class HistoricalTournamentGoal(Base):
 
 
 class PredictionRecord(Base):
-    """A prediction locked in the first time a fixture was seen as upcoming
-    with a trained model available -- never overwritten, even if the model
-    is later retrained, so this stays a genuine advance forecast to grade
-    against once the real result is known (see prediction/tracking.py).
+    """The final prediction for a fixture, locked in when its starting lineup is
+    announced (or just before kickoff if none is) -- never overwritten, even if
+    the model is later retrained, so this stays a genuine advance forecast to
+    grade against once the real result is known (see prediction/tracking.py).
     """
 
     __tablename__ = "prediction_records"
@@ -233,3 +234,10 @@ class PredictionRecord(Base):
     p_home: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     p_draw: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     p_away: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    # How the lock was made: "lineup" (the announced starting XI was used),
+    # "early" (locked just before kickoff with no usable lineup -- the injury-based
+    # forecast) or None for the older rule that locked 48 hours before kickoff.
+    basis: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # JSON of the XI and formations the forecast used (basis "lineup"), so the
+    # workings can be shown again after the match page no longer has them.
+    lineup_json: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)

@@ -45,6 +45,11 @@ class PredictionBreakdown:
     # can name the adjustment explicitly rather than leaving it opaque.
     home_xg_relative_strength: float | None = None
     away_xg_relative_strength: float | None = None
+    # Who was missing from each side's usual XI when the starting XI was known
+    # (model/lineup_adjustment.py), replacing that side's injury adjustment --
+    # None for a side rated without a lineup, [] for a lineup with nobody missing.
+    home_lineup_absences: list | None = None
+    away_lineup_absences: list | None = None
 
 
 @dataclass

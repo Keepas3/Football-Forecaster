@@ -1,0 +1,97 @@
+name: Lock lineups
+
+# Locks in a match's final forecast once its starting XIs are announced (about
+# an hour before kickoff), so the Track Record grades a forecast made from who
+# is actually playing. GitHub's own cron runs 2-6 hours late, far too slow for
+# that, so an outside pinger starts this workflow about every ten minutes (setup
+# is in the README, "Locking forecasts when lineups are announced"). Most pings
+# find nothing to do and finish in seconds: the first step asks the committed
+# database whether any match is about to start with no final forecast.
+#
+# Public repository, so runner minutes are free. If it ever turns private, ten-
+# minute pings would eat the monthly allowance and this needs rethinking.
+#
+# The scheduled refreshes (refresh-data, refresh-results) call the same locking
+# as a backstop, so a match is still caught if the pinger is down for a while.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # push the updated data/soccer.db
+  actions: read # see whether a refresh is running
+
+# Its own group, NOT refresh-data: GitHub keeps only the newest *pending* run per
+# group, so sharing it would let a ping cancel a queued daily refresh. A ping that
+# arrives while a lock run is going waits for it (older waiting pings are dropped,
+# which is fine: they are all the same question).
+concurrency:
+  group: lock-lineups
+  cancel-in-progress: false
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is any match waiting for its final forecast?
+        id: check
+        run: python3 scripts/lock_due_check.py
+
+      # The refreshes also rewrite data/soccer.db and push it. Never run beside one:
+      # two different versions of the file cannot be merged. The next ping, ten
+      # minutes on, tries again; the lock window is ninety minutes wide.
+      - name: Is a refresh running?
+        id: busy
+        if: steps.check.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          running=0
+          for state in in_progress queued; do
+            count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$state&per_page=50" \
+              --jq '[.workflow_runs[] | select(.path | test("workflows/refresh-(data|results)[.]yml"))] | length')
+            running=$((running + count))
+          done
+          echo "refresh runs active or waiting: $running"
+          if [ "$running" -gt 0 ]; then echo "busy=true" >> "$GITHUB_OUTPUT"; else echo "busy=false" >> "$GITHUB_OUTPUT"; fi
+
+      - if: steps.check.outputs.due == 'true' && steps.busy.outputs.busy == 'false'
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - if: steps.check.outputs.due == 'true' && steps.busy.outputs.busy == 'false'
+        run: uv sync --frozen
+
+      - name: Lock the forecasts that are due
+        if: steps.check.outputs.due == 'true' && steps.busy.outputs.busy == 'false'
+        run: |
+          before=$(python3 scripts/data_fingerprint.py)
+          uv run python scripts/lock_lineups.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            if [ "$before" = "$(python3 scripts/data_fingerprint.py)" ]; then
+              echo "Nothing was locked -- not committing"
+              exit 0
+            fi
+            git add data/soccer.db
+            git commit -m "Lock lineup forecasts"
+            if git pull --rebase && git push; then
+              exit 0
+            fi
+            # Someone else changed data/soccer.db while this ran (a SQLite file
+            # cannot be rebased): drop this commit, take the latest data and lock
+            # again on top of it. Locking is idempotent, so nothing is lost.
+            echo "Push raced with another update (attempt $attempt) -- redoing on the latest data"
+            git rebase --abort 2>/dev/null || true
+            git fetch origin main
+            git reset --hard origin/main
+            before=$(python3 scripts/data_fingerprint.py)
+            uv run python scripts/lock_lineups.py
+          done
+          echo "Could not push after 3 attempts"
+          exit 1

@@ -19,8 +19,9 @@ from soccer_predictor.dashboard.views.match_detail import plain
 from soccer_predictor.model.dixon_coles import DixonColesParams
 from soccer_predictor.model.team_facts import compute_head_to_head
 from soccer_predictor.prediction.service import predict_fixture
+from soccer_predictor.prediction.tracking import stored_lineup
 from soccer_predictor.storage.db import session_scope
-from soccer_predictor.storage.repository import matches_for_team
+from soccer_predictor.storage.repository import matches_for_team, prediction_record_for_match
 
 
 def render_fixture_workings(ref: FixtureRef, params: DixonColesParams, league: League, close_key: str) -> None:
@@ -42,8 +43,20 @@ def render_fixture_workings(ref: FixtureRef, params: DixonColesParams, league: L
             st.caption(f"No history on record between {plain(ref.home_name)} and {plain(ref.away_name)} yet.")
 
         with session_scope() as session:
+            # A match locked with its announced lineup is shown for that lineup.
+            home_lineup, away_lineup = stored_lineup(
+                prediction_record_for_match(session, league.code, ref.date, ref.home_id, ref.away_id)
+            )
             prediction = predict_fixture(
-                session, params, ref.home_id, ref.away_id, ref.home_name, ref.away_name, fixture_date=ref.date
+                session,
+                params,
+                ref.home_id,
+                ref.away_id,
+                ref.home_name,
+                ref.away_name,
+                fixture_date=ref.date,
+                home_lineup=home_lineup,
+                away_lineup=away_lineup,
             )
             render_prediction_breakdown(
                 prediction, ref.home_name, ref.away_name, session, league, ref.home_id, ref.away_id
