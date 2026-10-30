@@ -230,7 +230,9 @@ list, for example if a player recovers early or you made a mistake.
 
 The Predictor page's "AI notes" tab opens with a free what-if section that lets anyone try the same idea without
 a password and without spending the owner's Anthropic credit. A visitor picks
-a match, types a note ("their keeper is injured and the team has been
+an upcoming match from the next two weeks (which fills in the home and away
+teams; changing either by hand turns it into a hypothetical pairing of any two
+teams), types a note ("their keeper is injured and the team has been
 struggling to score"), and a free Gemini model reads it. The tab then shows
 the model's forecast with and without the note side by side (win/draw/loss,
 over 2.5, both teams score, likely score, expected goals), with a slider per

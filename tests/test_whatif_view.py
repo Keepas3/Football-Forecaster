@@ -82,6 +82,35 @@ def test_the_wording_uses_the_models_own_numbers():
     assert "attack −6.0%" in form and "goals conceded +6.0%" in form
 
 
+def test_upcoming_matches_are_soonest_first_labelled_and_skip_unknown_teams():
+    import pandas as pd
+
+    fixtures = pd.DataFrame(
+        {
+            "date": [dt.date(2026, 11, 1), dt.date(2026, 10, 31), dt.date(2026, 10, 31), dt.date(2026, 10, 31)],
+            "home_team_id": [1, 2, 1, 1],
+            "away_team_id": [2, 1, 3, 99],  # 99 is a team the model has no name for
+            "kickoff_utc": [
+                dt.datetime(2026, 11, 1, 14, 0), dt.datetime(2026, 10, 31, 17, 30), dt.datetime(2026, 10, 31, 12, 30), None,
+            ],
+        }
+    )
+    matches = whatif.upcoming_matches(fixtures, {1: "Chelsea", 2: "Man United", 3: "Arsenal"})
+    assert [m.label for m in matches] == [
+        "Sat 31 Oct: Chelsea v Arsenal",  # 12:30 before 17:30
+        "Sat 31 Oct: Man United v Chelsea",
+        "Sun 01 Nov: Chelsea v Man United",
+    ]
+    assert (matches[0].date, matches[0].home_id, matches[0].away_id) == (dt.date(2026, 10, 31), 1, 3)
+
+
+def test_no_fixtures_means_no_matches_to_pick():
+    import pandas as pd
+
+    empty = pd.DataFrame(columns=["date", "home_team_id", "away_team_id", "status", "kickoff_utc"])
+    assert whatif.upcoming_matches(empty, {1: "Chelsea"}) == []
+
+
 # --- the tab -----------------------------------------------------------------------------------------
 
 
@@ -272,7 +301,7 @@ def test_the_free_section_works_while_the_owner_section_stays_locked(db, monkeyp
     monkeypatch.setenv("NOTES_PASSWORD", "a-long-owner-password")
     at = AppTest.from_function(_combined_app, default_timeout=60).run()
     assert not at.exception
-    assert any("how could a note move the odds" in s.value for s in at.subheader)
+    assert any("Try it with the free model" in s.value for s in at.subheader)
     assert at.button[0].label == "Ask the AI"  # open to everyone
     assert at.text_input[0].label == "Password"  # the owner's gate, and no chat input without it
     assert not at.chat_input
@@ -287,3 +316,119 @@ def test_without_an_owner_password_only_the_free_section_is_usable(db, monkeypat
     assert not at.exception
     assert at.button[0].label == "Ask the AI"
     assert any("Adding notes is turned off" in i.value for i in at.info)
+
+
+# --- the upcoming-match picker -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def three_teams(db):
+    """The db fixture's two teams plus Man United and one fixture tomorrow: Chelsea v Man United."""
+    from soccer_predictor.storage.repository import upsert_fixture
+
+    session, arsenal_id, chelsea_id = db
+    united = get_or_create_team(session, "Man United", "EPL")
+    tomorrow = dt.date.today() + dt.timedelta(days=1)
+    upsert_fixture(session, "EPL", tomorrow, chelsea_id, united.id, "TIMED", dt.datetime.combine(tomorrow, dt.time(15, 0)))
+    session.commit()
+    return tomorrow, {"arsenal": arsenal_id, "chelsea": chelsea_id, "united": united.id}
+
+
+def _picker_app():
+    from soccer_predictor.config import League
+    from soccer_predictor.dashboard.views import predictor
+    from soccer_predictor.model.dixon_coles import DixonColesParams
+    from soccer_predictor.storage.repository import teams_for_league
+
+    with predictor.session_scope() as session:
+        names = teams_for_league(session, "EPL")
+    params = DixonColesParams(
+        league_code="EPL",
+        attack={t: 1.2 for t in names},
+        defense={t: 1.0 for t in names},
+        home_advantage=1.3,
+        rho=-0.1,
+        xi=0.0018,
+        fitted_at="2026-01-01T00:00:00",
+        n_matches=100,
+    )
+    predictor._render_whatif_section(League(code="EPL", name="English Premier League", seasons=["2627"]), params, names)
+
+
+def _open_picker():
+    from streamlit.testing.v1 import AppTest
+
+    return AppTest.from_function(_picker_app, default_timeout=60).run()
+
+
+def test_picking_an_upcoming_match_fills_in_both_teams(three_teams, monkeypatch):
+    tomorrow, _ = three_teams
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    at = _open_picker()
+    assert not at.exception
+    picker = at.selectbox(key="whatif_match_EPL")
+    assert picker.value is None and list(picker.options) == [f"{tomorrow:%a %d %b}: Chelsea v Man United"]
+    assert (at.selectbox(key="whatif_home_EPL").value, at.selectbox(key="whatif_away_EPL").value) == ("Arsenal", "Chelsea")
+
+    picker.select(picker.options[0]).run()
+    assert not at.exception
+    assert (at.selectbox(key="whatif_home_EPL").value, at.selectbox(key="whatif_away_EPL").value) == ("Chelsea", "Man United")
+    assert at.selectbox(key="whatif_match_EPL").value == picker.options[0]  # still shown as the picked match
+
+
+def test_changing_a_team_by_hand_makes_it_a_hypothetical_again(three_teams, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    at = _open_picker()
+    picker = at.selectbox(key="whatif_match_EPL")
+    picker.select(picker.options[0]).run()
+    at.selectbox(key="whatif_away_EPL").select("Arsenal").run()
+    assert not at.exception
+    assert at.selectbox(key="whatif_match_EPL").value is None
+    assert (at.selectbox(key="whatif_home_EPL").value, at.selectbox(key="whatif_away_EPL").value) == ("Chelsea", "Arsenal")
+
+
+def test_a_picked_match_is_forecast_for_its_own_day_and_a_hypothetical_for_today(three_teams, monkeypatch):
+    from soccer_predictor.ai import whatif_parser
+    from soccer_predictor.dashboard import whatif_access as wa
+    from soccer_predictor.dashboard.views import predictor
+
+    tomorrow, ids = three_teams
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    _fresh_limits(monkeypatch)
+    monkeypatch.setattr(wa, "COOLDOWN_SECONDS", 0.0)  # two asks in a row
+    whatif_parser.clear_cache()
+    monkeypatch.setattr(
+        whatif_parser, "parse_whatif_note", lambda note, hid, *a: WhatIfEntries(injuries=[_injury(hid, 0.5)])
+    )
+    forecast_days = []
+    real_predict = predictor.predict_fixture
+
+    def recording_predict(session, params, home_id, away_id, home_name, away_name, fixture_date=None, **extra):
+        forecast_days.append(fixture_date)
+        return real_predict(session, params, home_id, away_id, home_name, away_name, fixture_date, **extra)
+
+    monkeypatch.setattr(predictor, "predict_fixture", recording_predict)
+
+    at = _open_picker()
+    picker = at.selectbox(key="whatif_match_EPL")
+    picker.select(picker.options[0]).run()
+    at.text_area[0].set_value("their winger is out")
+    at.button[0].click().run()
+    assert not at.exception
+    assert at.session_state["whatif_result"]["date"] == tomorrow
+    assert forecast_days and set(forecast_days) == {tomorrow}  # both the model-only and the with-note forecast
+
+    forecast_days.clear()
+    at.selectbox(key="whatif_away_EPL").select("Arsenal").run()  # now a hypothetical pairing
+    at.text_area[0].set_value("a different note")
+    at.button[0].click().run()
+    assert not at.exception
+    assert at.session_state["whatif_result"]["date"] is None
+    assert forecast_days and set(forecast_days) == {None}
+
+
+def test_with_no_upcoming_fixtures_there_is_no_picker_just_the_team_boxes(db, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    at = _open_picker()
+    assert not at.exception
+    assert [s.label for s in at.selectbox] == ["Home team", "Away team"]

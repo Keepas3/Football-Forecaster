@@ -22,10 +22,12 @@ from soccer_predictor.dashboard import whatif_access as wa
 from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
 from soccer_predictor.dashboard.whatif import (
+    UpcomingMatch,
     build_adjustments,
     comparison_rows,
     describe_form_entry,
     describe_injury_entry,
+    upcoming_matches,
 )
 from soccer_predictor.dashboard.chat_notes import (
     add_reply,
@@ -356,21 +358,26 @@ def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
 WHATIF_RESULT_KEY = "whatif_result"
 
 
-def _ask_whatif(note: str, home_id: int, home_name: str, away_id: int, away_name: str) -> None:
+def _ask_whatif(
+    note: str, home_id: int, home_name: str, away_id: int, away_name: str, fixture_date: dt.date | None = None
+) -> None:
     """Runs one what-if ask (within the visitor and site-wide limits) and keeps
     the outcome in this session only -- an error message or the AI's entries.
-    Nothing is written to the database."""
+    Nothing is written to the database. `fixture_date` is the picked match's date
+    (None for a hypothetical pairing), so the forecast is made for that day."""
     cached = whatif_parser.cached_entries(home_id, away_id, note)
     if cached is not None:  # the same note on the same match: no quota used
         st.session_state[WHATIF_RESULT_KEY] = {
-            "home_id": home_id, "away_id": away_id, "entries": cached, "error": None,
+            "home_id": home_id, "away_id": away_id, "date": fixture_date, "entries": cached, "error": None,
             "n": st.session_state.get("whatif_runs", 0) + 1,
         }
         st.session_state["whatif_runs"] = st.session_state[WHATIF_RESULT_KEY]["n"]
         return
     verdict = wa.try_ask(st.session_state, note)
     if verdict != wa.OK:
-        st.session_state[WHATIF_RESULT_KEY] = {"home_id": home_id, "away_id": away_id, "error": wa.MESSAGES[verdict]}
+        st.session_state[WHATIF_RESULT_KEY] = {
+            "home_id": home_id, "away_id": away_id, "date": fixture_date, "error": wa.MESSAGES[verdict],
+        }
         return
     entries, error = None, None
     with st.spinner("Asking the AI..."):
@@ -385,7 +392,7 @@ def _ask_whatif(note: str, home_id: int, home_name: str, away_id: int, away_name
     runs = st.session_state.get("whatif_runs", 0) + 1
     st.session_state["whatif_runs"] = runs
     st.session_state[WHATIF_RESULT_KEY] = {
-        "home_id": home_id, "away_id": away_id, "entries": entries, "error": error, "n": runs,
+        "home_id": home_id, "away_id": away_id, "date": fixture_date, "entries": entries, "error": error, "n": runs,
     }
 
 
@@ -428,10 +435,11 @@ def _render_whatif_results(result: dict, params, team_names: dict[int, str], lea
         )
 
     adjustments = build_adjustments(entries, home_id, injury_scale, form_scale)
+    fixture_date = result.get("date")  # a picked match's day; None for a hypothetical pairing (today)
     with session_scope() as session:  # read-only: the what-if entries never go in the database
-        base = predict_fixture(session, params, home_id, away_id, home_name, away_name)
+        base = predict_fixture(session, params, home_id, away_id, home_name, away_name, fixture_date)
         adjusted = predict_fixture(
-            session, params, home_id, away_id, home_name, away_name,
+            session, params, home_id, away_id, home_name, away_name, fixture_date,
             extra_home_injuries=adjustments.home_injuries,
             extra_away_injuries=adjustments.away_injuries,
             extra_home_form=adjustments.home_form,
@@ -447,12 +455,27 @@ def _render_whatif_results(result: dict, params, team_names: dict[int, str], lea
     )
 
 
+def _fill_whatif_teams(
+    pick_key: str, home_key: str, away_key: str, matches: dict[str, UpcomingMatch], team_names: dict[int, str]
+) -> None:
+    """The match picker's on_change: put the picked match's teams in the home and away boxes."""
+    match = matches.get(st.session_state.get(pick_key))
+    if match is not None:
+        st.session_state[home_key] = team_names[match.home_id]
+        st.session_state[away_key] = team_names[match.away_id]
+
+
+def _forget_whatif_match(pick_key: str) -> None:
+    """A team changed by hand is no longer the picked match, so the picker is cleared."""
+    st.session_state[pick_key] = None
+
+
 def _render_whatif_section(league, params, team_names: dict[int, str]) -> None:
-    st.subheader("Try it: how could a note move the odds?")
+    st.subheader("Try it with the free model")
     st.caption(
-        "Free for everyone. Pick a match, type a note about a player or a team's form (e.g. \"their top "
-        "scorer is out for this one\"), and an AI reads it and shows how it would shift the odds. "
-        "Nothing you type is saved or changes anyone else's predictions."
+        "Open to everyone. Pick an upcoming match, or any two teams for a hypothetical, type a note "
+        "about a player or a team's form (e.g. \"their top scorer is out for this one\"), and an AI reads "
+        "it and shows how it would shift the odds."
     )
     if not gemini_api_key():
         st.info("The AI what-if is turned off on this site (no GEMINI_API_KEY is set).")
@@ -460,10 +483,37 @@ def _render_whatif_section(league, params, team_names: dict[int, str]) -> None:
 
     id_by_name = {name: team_id for team_id, name in team_names.items()}
     options = sorted(id_by_name)
+    pick_key, home_key, away_key = (f"whatif_{part}_{league.code}" for part in ("match", "home", "away"))
+
+    today, horizon = default_date_range()
+    with session_scope() as session:
+        matches = {m.label: m for m in upcoming_matches(fixtures_for_league(session, league.code, today, horizon), team_names)}
+    if matches:
+        st.selectbox(
+            "Upcoming match",
+            list(matches),
+            index=None,
+            placeholder="Pick a match to fill in the teams, or choose any two teams below",
+            key=pick_key,
+            on_change=_fill_whatif_teams,
+            args=(pick_key, home_key, away_key, matches, team_names),
+        )
     col1, col2 = st.columns(2)
-    home_choice = col1.selectbox("Home team", options, key=f"whatif_home_{league.code}")
+    home_choice = col1.selectbox(
+        "Home team", options, key=home_key, on_change=_forget_whatif_match, args=(pick_key,)
+    )
     away_choice = col2.selectbox(
-        "Away team", [t for t in options if t != home_choice], key=f"whatif_away_{league.code}"
+        "Away team",
+        [t for t in options if t != home_choice],
+        key=away_key,
+        on_change=_forget_whatif_match,
+        args=(pick_key,),
+    )
+    picked = matches.get(st.session_state.get(pick_key))
+    fixture_date = (
+        picked.date
+        if picked is not None and (picked.home_id, picked.away_id) == (id_by_name[home_choice], id_by_name[away_choice])
+        else None
     )
     note = st.text_area(
         "Your note",
@@ -474,7 +524,7 @@ def _render_whatif_section(league, params, team_names: dict[int, str]) -> None:
     )
     privacy_note = st.empty()  # filled after the button is handled, so the count is current
     if st.button("Ask the AI", key=f"whatif_ask_{league.code}"):
-        _ask_whatif(note, id_by_name[home_choice], home_choice, id_by_name[away_choice], away_choice)
+        _ask_whatif(note, id_by_name[home_choice], home_choice, id_by_name[away_choice], away_choice, fixture_date)
     privacy_note.caption(
         "Your note is sent to Google's Gemini API on its free tier, which Google may use to improve its "
         "products - please don't include personal details. "
@@ -702,11 +752,11 @@ def render() -> None:
         _render_whatif_section(league, params, team_names)
 
         st.divider()
-        st.subheader("Save notes that change the real predictions")
+        st.subheader("Change the predictions with the more advanced model")
         st.caption(
             'Type notes about players or teams (e.g. "Saka is injured, ~3 weeks out", '
-            '"Arsenal have been flat since the manager change"). An AI parses them into '
-            "structured entries below for you to review and save - nothing is applied to "
+            '"Arsenal have been flat since the manager change"). Claude, a more advanced model, parses '
+            "them into structured entries below for you to review and save - nothing is applied to "
             "predictions until you click Save. Saved notes change the forecasts everyone sees, "
             "so adding them is owner-only."
         )

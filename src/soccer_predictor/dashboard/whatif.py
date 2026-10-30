@@ -6,7 +6,10 @@ Streamlit, no database, no network.
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
+
+import pandas as pd
 
 from soccer_predictor.ai.whatif_parser import WhatIfEntries
 from soccer_predictor.model.form_adjustment import FORM_IMPACT_CAP, FormNoteEntry
@@ -27,6 +30,35 @@ class Adjustments:
     away_injuries: list[InjuryEntry] = field(default_factory=list)
     home_form: list[FormNoteEntry] = field(default_factory=list)
     away_form: list[FormNoteEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class UpcomingMatch:
+    """One fixture offered in the what-if's match picker."""
+
+    date: dt.date
+    home_id: int
+    away_id: int
+    label: str  # "Sat 31 Oct: Chelsea v Man United"
+
+
+def upcoming_matches(fixtures: pd.DataFrame, team_names: dict[int, str]) -> list[UpcomingMatch]:
+    """The fixtures (date, home_team_id, away_team_id, kickoff_utc) as picker entries,
+    soonest first. A fixture between teams the model has no name for is left out."""
+    if fixtures.empty:
+        return []
+    ordered = fixtures.assign(_kickoff=pd.to_datetime(fixtures["kickoff_utc"], errors="coerce")).sort_values(
+        ["date", "_kickoff"], na_position="last", kind="stable"
+    )
+    matches = []
+    for row in ordered.itertuples(index=False):
+        home, away = team_names.get(row.home_team_id), team_names.get(row.away_team_id)
+        if home is None or away is None:
+            continue
+        matches.append(
+            UpcomingMatch(row.date, row.home_team_id, row.away_team_id, f"{row.date:%a %d %b}: {home} v {away}")
+        )
+    return matches
 
 
 def build_adjustments(
