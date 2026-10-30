@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from soccer_predictor.config import load_leagues
+from soccer_predictor.dashboard import injury_table as it
 from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
@@ -20,7 +21,8 @@ from soccer_predictor.dashboard.components import (
     compute_top_scorer_and_assister,
     PREDICTION_STATUS_NOTE,
     fixture_prediction_row,
-    injury_line,
+    injury_column_config,
+    injury_source_note,
     fixtures_table_html,
     format_kickoff,
     live_sync_requirement_note,
@@ -31,10 +33,12 @@ from soccer_predictor.dashboard.components import (
     render_team_facts,
     render_team_rating_breakdown,
     results_table_html,
+    table_height,
     timezone_selector,
     youtube_search_url,
 )
 from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
+from soccer_predictor.ingest import injuries as injuries_module
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
@@ -644,24 +648,42 @@ def render() -> None:
                 st.dataframe(stats_rows, use_container_width=True, hide_index=True, height=stats_height)
 
     st.subheader("Injuries")
+    today = dt.date.today()
     with session_scope() as session:
-        team_injuries = get_injuries_for_team(session, team_id, team_canonical_name, dt.date.today())
+        team_injuries = get_injuries_for_team(session, team_id, team_canonical_name, today)
 
     if not team_injuries.entries:
         st.caption("No injuries on record.")
+        if league is not None and not injuries_module.has_automatic_feed(league):
+            st.caption(
+                f"This site has no automatic injury feed for {league.name}, so only entries added by hand "
+                "(config/injuries.yaml or saved AI notes) appear here."
+            )
     else:
-        for entry, source, return_date, note in zip(
-            team_injuries.entries,
-            team_injuries.sources,
-            team_injuries.expected_return_dates,
-            team_injuries.notes,
-        ):
-            st.write(injury_line(entry, source, return_date, note))
+        frame = it.players_frame(it.player_rows(team_canonical_name, team_injuries, today))
+        counts = it.summary_counts(frame)
+        st.caption(
+            f"{counts['players']} players: {counts[it.OUT]} out · "
+            f"{counts[it.DOUBTFUL]} doubtful · {counts[it.SUSPENDED]} suspended. "
+            "The biggest impact on the team comes first; click a column heading to sort."
+        )
+        st.dataframe(
+            frame.drop(columns="Team"),  # this is the team's own page
+            hide_index=True,
+            use_container_width=True,
+            height=table_height(len(frame)),
+            column_config=injury_column_config(),
+            key=f"team_injuries_{team_id}",
+        )
         if params is not None:
             adj_attack, adj_defense = adjust_strength(
                 params.attack[team_id], params.defense[team_id], team_injuries.entries
             )
             st.caption(
-                f"Attack {params.attack[team_id]:.2f} → {adj_attack:.2f}, "
-                f"Defense {params.defense[team_id]:.2f} → {adj_defense:.2f}"
+                f"What it does to the model's ratings: attack {params.attack[team_id]:.2f} → {adj_attack:.2f}, "
+                f"defence {params.defense[team_id]:.2f} → {adj_defense:.2f} "
+                "(defence is goals conceded, so a rise is worse)."
             )
+        source_note = injury_source_note(team_league_code)
+        if source_note:
+            st.caption(source_note)

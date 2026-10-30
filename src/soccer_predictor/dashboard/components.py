@@ -17,6 +17,7 @@ import streamlit as st
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
+from soccer_predictor.ingest import injuries as injuries_module
 from soccer_predictor.ingest.news import fetch_news, match_search_url, search_news
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.ingest.squad import fetch_squad_for_team
@@ -834,16 +835,55 @@ def _escape_markdown(text: str) -> str:
     return _MARKDOWN_SPECIAL.sub(r"\\\1", text or "")
 
 
-def injury_line(entry, source: str, return_date, note: str = "") -> str:
-    """One injury bullet: who, how much he matters, where it came from, any news.
-    Plain text (the callers pass it to st.write, which renders markdown, so the
-    parts that come from outside are escaped)."""
-    return_note = f", est. return {return_date}" if return_date else ""
-    news = f" - {_escape_markdown(note)}" if note else ""
-    return (
-        f"- {_escape_markdown(entry.player_name)} ({entry.position}, weight={entry.importance_weight:.2f}) "
-        f"- source: {source}{return_note}{news}"
-    )
+# Where the injuries table's pixels go: enough for every row without a tiny
+# scroll window, up to a cap (a longer list scrolls inside the table instead).
+INJURY_ROW_PX = 35
+INJURY_HEADER_PX = 38
+INJURY_TABLE_MAX_PX = 900
+
+
+def table_height(rows: int) -> int:
+    """Pixels for a dataframe that shows `rows` rows plus its header, up to a cap."""
+    return min(INJURY_HEADER_PX + INJURY_ROW_PX * rows + 4, INJURY_TABLE_MAX_PX)
+
+
+def injury_column_config() -> dict:
+    """How the injuries table's columns are formatted (dashboard/injury_table.py's
+    PLAYER_COLUMNS): shared by the Injuries tab and each team's page so they read alike."""
+    return {
+        "Chance of playing": st.column_config.NumberColumn(
+            "Chance of playing", format="%d%%", help="How likely he is to play the next match."
+        ),
+        "Expected back": st.column_config.DateColumn(
+            "Expected back",
+            format="D MMM YYYY",
+            help="Some feeds only say roughly when (\"mid-November\"); those show the middle of the month.",
+        ),
+        "Impact": st.column_config.ProgressColumn(
+            "Impact",
+            min_value=0.0,
+            max_value=1.0,
+            format="%.2f",
+            help="How much the model discounts the team for him (an attacker lowers its attack, "
+            "a defender or keeper raises the goals it concedes). A doubtful player counts for less.",
+        ),
+    }
+
+
+def injury_source_note(league_code: str) -> str | None:
+    """Where a league's automatic injury news comes from, or None if it has no
+    source that needs crediting."""
+    if league_code in injuries_module.BIWENGER_LEAGUES:
+        return (
+            "Automatic injury news for this competition comes from Biwenger's fantasy-football feed "
+            "(unofficial, so it can lag the clubs' own announcements)."
+        )
+    if league_code in injuries_module.STARTING11_LEAGUES:
+        return (
+            "Automatic injury news for this league comes from starting11.com, read once a day "
+            "(unofficial: it can lag the clubs' own announcements, and it gives no return dates)."
+        )
+    return None
 
 
 PREDICTION_STATUS_NOTE = (
