@@ -17,10 +17,12 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from soccer_predictor.dashboard import navigation  # noqa: E402
+from soccer_predictor.dashboard.components import inject_flag_font  # noqa: E402
 from soccer_predictor.storage.db import init_db  # noqa: E402
 
 st.set_page_config(page_title="Football Match Predictor", page_icon="⚽", layout="wide")
 init_db()
+inject_flag_font()
 
 pg = st.navigation(
     [

@@ -97,6 +97,26 @@ def league_option_label(league: League) -> str:
         name = f"{name} {year}"
     return f"{league.flag_emoji} {name}" if league.flag_emoji else name
 
+
+# Windows has no flag emoji: a country's flag shows as its two letters ("ES") and England's, a
+# tag sequence, as nothing useful. Twemoji's flags as a small web font (the country-flag-emoji-polyfill
+# package, pinned) fill the gap; `unicode-range` limits it to the flag characters, so no other text
+# ever uses it, and without it (offline) the picker falls back to the plain letters.
+FLAG_FONT_URL = "https://cdn.jsdelivr.net/npm/country-flag-emoji-polyfill@0.1.8/dist/TwemojiCountryFlags.woff2"
+FLAG_FONT_CSS = f"""
+@font-face{{font-family:"Twemoji Country Flags";font-display:swap;
+unicode-range:U+1F1E6-1F1FF,U+1F3F4,U+E0062-E007F;src:url("{FLAG_FONT_URL}") format("woff2");}}
+[data-testid="stSelectbox"] input,[data-testid="stSelectboxVirtualDropdown"] [role="option"]
+{{font-family:"Source Sans","Twemoji Country Flags",sans-serif;}}
+"""
+
+
+def inject_flag_font() -> None:
+    """Let every League picker (a selectbox, so plain text only) draw its flag emoji on any system.
+    Called once from the app entrypoint, so each page gets it."""
+    st.html(f"<style>{FLAG_FONT_CSS}</style>")
+
+
 # A shared session_state key (see timezone_selector) so picking a timezone
 # in any one fixtures table applies to every other one too, rather than
 # each table remembering its own independent choice.

@@ -50,7 +50,8 @@ class League:
     # A unicode flag emoji -- st.selectbox only renders plain text for its
     # options, so this is what shows next to the league name in the League
     # picker dropdown itself (flag_url is an <img>, only usable in the
-    # markdown header below the picker, not inside the dropdown).
+    # markdown header below the picker, not inside the dropdown). Systems
+    # without flag emoji get them from a web font (components.inject_flag_font).
     flag_emoji: str | None = None
     zones: list[TableZone] = field(default_factory=list)
     # "range" (default): a season spans two calendar years, e.g. "2425" ->

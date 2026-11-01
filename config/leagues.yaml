@@ -28,7 +28,9 @@ leagues:
     recent_results_form: true
     seasons: ["1516", "1617", "1718", "1819", "1920", "2021", "2122", "2223", "2324", "2425", "2526", "2627"]
     flag_url: https://flagcdn.com/w40/gb-eng.png
-    flag_emoji: "en"
+    # England's flag is a tag sequence (black flag + "gbeng" tag letters + cancel tag), written as
+    # escapes because the tag characters are invisible in an editor.
+    flag_emoji: "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
     zones:
       - {start: 1, end: 4, kind: qualify, label: "Champions League"}
       - {start: 18, end: 20, kind: relegation, label: "Relegation"}
