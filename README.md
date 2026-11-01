@@ -204,7 +204,9 @@ The dashboard only reads the latest persisted fit; it never trains live.
   where available, and historical per-season stats on request. The top
   players and the search results are sortable tables: a player's name opens
   their stats in a panel under the table (no page reload) and a club's name
-  opens that team's page.
+  opens that team's page. The top-players table ends with each player's
+  position (Goalkeeper, Defence, Midfield or Offence, as on a team's page),
+  which sorts goalkeepers first.
 - **Predictor**: the original single-league workflow: a fixtures tab,
   a sortable attack/defense leaderboard of this season's clubs (a team's
   name opens its Team Detail page, and its attack, defense or net strength

@@ -24,12 +24,15 @@ from soccer_predictor.dashboard.components import (
 )
 from soccer_predictor.ingest.asa_client import TEAM_NAME_OVERRIDES
 from soccer_predictor.ingest.squad import PlayerSearchResult
-from soccer_predictor.ingest.top_players import normalize_name
+from soccer_predictor.ingest.top_players import POSITION_ORDER, normalize_name
 from soccer_predictor.ingest.understat_client import TEAM_NAME_ALIASES
 
 # Stricter than the 75 the stats clients use to pair names: those pick the best of a few dozen
 # clubs for a team that must exist, whereas an unplaced club here just goes without a link.
 CLUB_MATCH_THRESHOLD = 85
+
+POSITION_HINT = "Click to sort, goalkeepers first"
+_NO_POSITION = len(POSITION_ORDER)
 
 
 def player_key(name: str, club: str) -> str:
@@ -126,13 +129,16 @@ def top_players_table_html(
 ) -> str:
     """The top-players list (ingest.top_players.table_rows) as a sortable table. The first
     columns are the rank, player and club; whatever follows (goals, assists, the ranked
-    metric...) is a number. `selected` is the `player` parameter's value, to mark that row."""
-    extra = [label for label in (rows[0] if rows else {}) if label not in ("#", "Player", "Club")]
+    metric...) is a number, apart from a last "Position" column when the source has one.
+    `selected` is the `player` parameter's value, to mark that row."""
+    extra = [label for label in (rows[0] if rows else {}) if label not in ("#", "Player", "Club", "Position")]
+    with_position = bool(rows) and "Position" in rows[0]
     columns = [
         TableColumn("#", sort="num", first="asc"),
         TableColumn("Player", left=True, sort="text", first="asc", hint="Click to sort; click a name for their stats"),
         TableColumn("Club", left=True, sort="text", first="asc", hint="Click to sort; click a club for the team's page"),
         *(TableColumn(label, sort="num") for label in extra),
+        *([TableColumn("Position", left=True, sort="num", first="asc", hint=POSITION_HINT)] if with_position else []),
     ]
     table_rows, keys = [], []
     for row in rows:
@@ -143,6 +149,8 @@ def top_players_table_html(
                 TableCell(_player_link(row["Player"], row["Club"], league_code, selected), row["Player"].casefold()),
                 _club_cell(row["Club"], club_ids.get(row["Club"]), league_code),
                 *(TableCell(_text(row[label]), _number(row[label])) for label in extra),
+                # goalkeepers first; a dash after every real position (an unset value would sort first)
+                *([TableCell(_text(row["Position"]), POSITION_ORDER.get(row["Position"], _NO_POSITION))] if with_position else []),
             ]
         )
     return sortable_table_html(columns, table_rows, selected=_selected_index(keys, selected))

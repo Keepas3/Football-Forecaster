@@ -827,6 +827,7 @@ class StatLeader:
     team: str
     goals: int
     assists: int
+    position: str | None = None  # a _POSITION_LABEL word, None when ESPN gives none
 
 
 @ttl_memo(300)
@@ -860,4 +861,5 @@ def fetch_stat_leaders(league_slug: str, season: int | None = None) -> list[Stat
                 StatLeader(name=name, team=(athlete.get("team") or {}).get("displayName") or "", goals=0, assists=0),
             )
             setattr(entry, field_name, _to_int(leader.get("value")) or 0)
+            entry.position = entry.position or _POSITION_LABEL.get((athlete.get("position") or {}).get("abbreviation"))
     return list(players.values())

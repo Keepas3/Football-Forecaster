@@ -13,6 +13,8 @@ integrated -- nothing here needs a new key or runs on a schedule:
 * Nations League, Asian Cup -- ESPN's league statistics (one call): goals and
   assists.
 
+Every source also gives each player's position, shown in the team page's wording.
+
 There is no free, legitimate source of player ratings or contract/market values
 outside MLS (the sites that publish them forbid scraping), so the page says so
 rather than inventing them.
@@ -49,6 +51,32 @@ METRIC_LABELS = {
 }
 
 
+# Where a player plays, in the words a team's page uses for its squad (football-data.org's, which
+# ESPN's roster labels follow too), so the two pages read alike. Each stats source spells it its
+# own way; the order is the usual goalkeeper-out one, for sorting.
+GOALKEEPER, DEFENCE, MIDFIELD, OFFENCE = "Goalkeeper", "Defence", "Midfield", "Offence"
+POSITION_ORDER = {GOALKEEPER: 0, DEFENCE: 1, MIDFIELD: 2, OFFENCE: 3}
+_UNDERSTAT_POSITIONS = {"GK": GOALKEEPER, "D": DEFENCE, "M": MIDFIELD, "F": OFFENCE}
+_ASA_POSITIONS = {
+    "GK": GOALKEEPER,
+    "CB": DEFENCE,
+    "FB": DEFENCE,
+    "DM": MIDFIELD,
+    "CM": MIDFIELD,
+    "AM": MIDFIELD,
+    "W": OFFENCE,
+    "ST": OFFENCE,
+}
+
+
+def position_label(position: str | None, spellings: dict[str, str]) -> str | None:
+    """A stats source's position text as a POSITION_ORDER word. Understat lists every position a
+    player has played ("F M S"): the first is his main one, and an "S" only marks appearances as a
+    substitute. None when the text names no position this knows."""
+    tokens = [t for t in (position or "").upper().split() if t != "S"]
+    return spellings.get(tokens[0]) if tokens else None
+
+
 @dataclass
 class TopPlayer:
     name: str
@@ -59,6 +87,7 @@ class TopPlayer:
     xg: float | None = None
     xa: float | None = None
     salary: float | None = None
+    position: str | None = None  # one of POSITION_ORDER's words; None: the source gives none
 
     @property
     def goals_plus_assists(self) -> int:
@@ -154,7 +183,9 @@ def format_metric(metric: str, value: float | None) -> str:
 
 def table_rows(players: list[TopPlayer], metric: str) -> list[dict]:
     """The page's table: rank, player, club, goals and assists, plus the ranked
-    metric's own column when it isn't one of those."""
+    metric's own column when it isn't one of those, and last the player's position
+    ("–" for one the source does not give) when the source gives any."""
+    with_position = any(p.position for p in players)
     rows = []
     for rank, player in enumerate(rank_players(players, metric), start=1):
         row = {"#": rank, "Player": player.name, "Club": player.team, "Goals": player.goals, "Assists": player.assists}
@@ -162,6 +193,8 @@ def table_rows(players: list[TopPlayer], metric: str) -> list[dict]:
             row[METRIC_LABELS[metric]] = format_metric(metric, metric_value(player, metric))
         elif metric == GOALS_PLUS_ASSISTS:
             row["G + A"] = player.goals_plus_assists
+        if with_position:
+            row["Position"] = player.position or "–"
         rows.append(row)
     return rows
 
@@ -179,12 +212,14 @@ def _football_data_scorers(competition_id: int) -> list[TopPlayer]:
     players = []
     for entry in data.get("scorers") or []:
         try:
+            section = entry["player"].get("section")  # football-data.org's own wording: "Offence", ...
             players.append(
                 TopPlayer(
                     name=entry["player"]["name"],
                     team=(entry.get("team") or {}).get("name") or "",
                     goals=int(entry.get("goals") or 0),
                     assists=int(entry.get("assists") or 0),
+                    position=section if section in POSITION_ORDER else None,
                 )
             )
         except (KeyError, TypeError, ValueError):
@@ -204,7 +239,16 @@ def fetch_top_players(league: League) -> TopPlayers:
             rows = understat_client.fetch_league_players(league.code, season)
         return TopPlayers(
             [
-                TopPlayer(r.name, r.team_title, r.goals, r.assists, r.minutes, r.xg, r.xa)
+                TopPlayer(
+                    r.name,
+                    r.team_title,
+                    r.goals,
+                    r.assists,
+                    r.minutes,
+                    r.xg,
+                    r.xa,
+                    position=position_label(r.position, _UNDERSTAT_POSITIONS),
+                )
                 for r in rows
             ],
             "Understat",
@@ -214,7 +258,20 @@ def fetch_top_players(league: League) -> TopPlayers:
     if league.code == "MLS":
         rows = asa_client.fetch_league_players(season)
         return TopPlayers(
-            [TopPlayer(r.name, r.team, r.goals, r.assists, r.minutes, r.xg, r.xa, r.salary) for r in rows],
+            [
+                TopPlayer(
+                    r.name,
+                    r.team,
+                    r.goals,
+                    r.assists,
+                    r.minutes,
+                    r.xg,
+                    r.xa,
+                    r.salary,
+                    position_label(r.position, _ASA_POSITIONS),
+                )
+                for r in rows
+            ],
             "American Soccer Analysis (salaries: MLS Players Association)",
             season,
         )
@@ -232,7 +289,7 @@ def fetch_top_players(league: League) -> TopPlayers:
         for edition in (None, *previous):
             leaders = espn_client.fetch_stat_leaders(league.espn_league_slug, edition)
             if leaders:
-                players = [TopPlayer(l.name, l.team, l.goals, l.assists) for l in leaders]
+                players = [TopPlayer(l.name, l.team, l.goals, l.assists, position=l.position) for l in leaders]
                 return TopPlayers(players, "ESPN", edition)
 
     return TopPlayers([], "", None)

@@ -111,6 +111,26 @@ def test_the_picked_player_is_marked_in_the_row_and_the_name():
     assert 'class="selected"' not in nobody and 'class="player on"' not in nobody
 
 
+def test_the_position_comes_last_after_the_numbers_and_sorts_goalkeepers_first():
+    rows = [
+        {**ROWS[0], "Position": "Offence"},
+        {**ROWS[1], "Position": "Goalkeeper"},
+        {"#": 3, "Player": "C", "Club": "X", "Goals": 1, "Assists": 0, "G + A": 1, "Position": "–"},
+    ]
+    markup = top_players_table_html(rows, "EPL", {})
+    assert re.findall(r"<th(?: [^>]*)?>(.*?)</th>", markup) == [
+        "#", "Player", "Club", "Goals", "Assists", "G + A", "Position",
+    ]
+    cells = [re.findall(r"<td[^>]*>", re.findall(r"<tr[^>]*>(.*?)</tr>", markup.split("<tbody>")[1], re.S)[i])[-1] for i in range(3)]
+    # the pitch order (goalkeeper 0 ... offence 3), with a dash after every real position
+    assert ['data-v="3"' in cells[0], 'data-v="0"' in cells[1], 'data-v="4"' in cells[2]] == [True] * 3
+    assert [_cells(markup, i)[-1] for i in range(3)] == ["Offence", "Goalkeeper", "–"]
+
+
+def test_a_list_without_positions_has_no_position_column():
+    assert "Position" not in top_players_table_html(ROWS, "EPL", {})
+
+
 def test_an_empty_list_still_draws_a_table():
     assert "<tbody></tbody>" in top_players_table_html([], "EPL", {})
 

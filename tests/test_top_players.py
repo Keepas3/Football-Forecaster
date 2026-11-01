@@ -70,6 +70,29 @@ def test_table_rows_add_the_ranked_metrics_own_column():
     assert table_rows(players, GOALS_PLUS_ASSISTS)[0]["G + A"] == 6
 
 
+def test_the_position_is_the_last_column_and_only_there_when_a_source_gives_one():
+    players = [_p("A", 5, 1), TopPlayer("B", "Club", 4, 0, position="Midfield")]
+    rows = table_rows(players, GOALS)
+    assert [list(r)[-1] for r in rows] == ["Position", "Position"]
+    assert [r["Position"] for r in rows] == ["–", "Midfield"]  # A's source gave none
+    assert list(table_rows(players, GOALS_PLUS_ASSISTS)[0]) == ["#", "Player", "Club", "Goals", "Assists", "G + A", "Position"]
+    assert "Position" not in table_rows([_p("A", 5, 1)], GOALS)[0]
+
+
+def test_each_sources_position_text_becomes_the_team_pages_wording():
+    understat, asa = top_players._UNDERSTAT_POSITIONS, top_players._ASA_POSITIONS
+    # Understat lists every position played: the first is the main one, "S" marks substitute appearances
+    assert [top_players.position_label(p, understat) for p in ("GK", "D S", "M", "F M S", "D M S", "f")] == [
+        "Goalkeeper", "Defence", "Midfield", "Offence", "Defence", "Offence",
+    ]
+    assert [top_players.position_label(p, asa) for p in ("GK", "CB", "FB", "DM", "CM", "AM", "W", "ST")] == [
+        "Goalkeeper", "Defence", "Defence", "Midfield", "Midfield", "Midfield", "Offence", "Offence",
+    ]
+    for nothing in (None, "", "S", "SUB", "ST"):  # "ST" is ASA's wording, not Understat's
+        assert top_players.position_label(nothing, understat) is None
+    assert set(top_players.POSITION_ORDER) == {"Goalkeeper", "Defence", "Midfield", "Offence"}
+
+
 # --- sources ---------------------------------------------------------------------------------
 
 
@@ -81,6 +104,7 @@ def test_understat_players_keep_the_current_club_of_a_mid_season_transfer(monkey
     monkeypatch.setattr(understat_client, "_fetch_league_players", lambda slug, season: rows)
     result = fetch_top_players(EPL)
     assert [(p.name, p.team, p.goals) for p in result.players] == [("Mover", "Chelsea", 4), ("Stayer", "Arsenal", 1)]
+    assert [p.position for p in result.players] == ["Offence", "Midfield"]  # "F S" and "M"
     assert (result.source, result.season) == ("Understat", 2026)
 
 
@@ -117,14 +141,15 @@ def test_asa_players_join_names_clubs_and_salaries_and_cope_with_traded_players(
         ("Striker", "One FC", 10, 3, 1234567.0),
         ("Midfielder", "Two FC", 1, 6, None),
     ]
+    assert [p.position for p in players] == ["Offence", "Midfield"]  # "ST" and "CM"
     assert SALARY in available_metrics(players) and XG_XA_PER_90 in available_metrics(players)
 
 
 def test_football_data_scorers_tolerate_missing_assists_and_failures(monkeypatch):
     payload = {
         "scorers": [
-            {"player": {"name": "Haaland"}, "team": {"name": "Man City"}, "goals": 4, "assists": None},
-            {"player": {"name": "Musiala"}, "team": {"name": "Bayern"}, "goals": 3, "assists": 2},
+            {"player": {"name": "Haaland", "section": "Offence"}, "team": {"name": "Man City"}, "goals": 4, "assists": None},
+            {"player": {"name": "Musiala", "section": "Somewhere new"}, "team": {"name": "Bayern"}, "goals": 3, "assists": 2},
             {"team": {"name": "no player"}},
         ]
     }
@@ -132,6 +157,7 @@ def test_football_data_scorers_tolerate_missing_assists_and_failures(monkeypatch
     monkeypatch.setattr(api_client, "get", lambda path, **kw: seen.update(path=path, **kw) or payload)
     result = fetch_top_players(UCL)
     assert [(p.name, p.team, p.goals, p.assists) for p in result.players] == [("Haaland", "Man City", 4, 0), ("Musiala", "Bayern", 3, 2)]
+    assert [p.position for p in result.players] == ["Offence", None]  # a section we do not know is left out
     assert seen["path"] == "/competitions/2001/scorers" and result.source.startswith("football-data.org")
 
     from soccer_predictor.ingest import memo  # the scorers are memoized: reset before each failure case
@@ -149,8 +175,13 @@ def test_football_data_scorers_tolerate_missing_assists_and_failures(monkeypatch
 
 
 def _leaders_payload():
+    positions = {"Kane": "F", "Haaland": "F", "Olise": "M"}
+
     def leader(athlete_id, name, team, value):
-        return {"value": value, "athlete": {"id": athlete_id, "displayName": name, "team": {"displayName": team}}}
+        athlete = {"id": athlete_id, "displayName": name, "team": {"displayName": team}}
+        if name in positions:
+            athlete["position"] = {"abbreviation": positions[name]}
+        return {"value": value, "athlete": athlete}
 
     return {
         "stats": [
@@ -163,8 +194,12 @@ def _leaders_payload():
 
 def test_espn_leaders_merge_goals_and_assists_by_player(monkeypatch):
     monkeypatch.setattr(espn_client, "get", lambda *a, **k: _leaders_payload())
-    leaders = {l.name: (l.team, l.goals, l.assists) for l in espn_client.fetch_stat_leaders("uefa.nations")}
-    assert leaders == {"Kane": ("England", 6, 0), "Haaland": ("Norway", 5, 3), "Olise": ("France", 0, 4)}
+    found = espn_client.fetch_stat_leaders("uefa.nations")
+    assert {l.name: (l.team, l.goals, l.assists) for l in found} == {
+        "Kane": ("England", 6, 0), "Haaland": ("Norway", 5, 3), "Olise": ("France", 0, 4)
+    }
+    # ESPN's one-letter position, in the team page's wording
+    assert {l.name: l.position for l in found} == {"Kane": "Offence", "Haaland": "Offence", "Olise": "Midfield"}
 
 
 def test_espn_leaders_empty_on_failure(monkeypatch):
