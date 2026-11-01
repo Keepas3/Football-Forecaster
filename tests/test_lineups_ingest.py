@@ -113,6 +113,37 @@ def test_an_understat_squad_is_priced_like_an_injury_would_be(monkeypatch):
     assert squad["Striker"].minutes == 900
 
 
+def test_each_player_carries_where_he_plays_and_what_he_has_done_for_the_team_page(monkeypatch):
+    players = [
+        UnderstatPlayerStats("Keeper", "Arsenal", "GK S", 900, 0, 0, 0.0, 0.0),
+        UnderstatPlayerStats("Defender", "Arsenal", "D M S", 800, 1, 2, 0.2, 0.1),
+        UnderstatPlayerStats("Midfielder", "Arsenal", "M", 700, 3, 4, 2.0, 3.0),
+        UnderstatPlayerStats("Striker", "Arsenal", "F S", 600, 9, 1, 8.0, 1.0),
+        UnderstatPlayerStats("Bench", "Arsenal", "S", 50, 0, 0, 0.0, 0.0),
+        UnderstatPlayerStats("Unlisted", "Arsenal", None, 40, 0, 0, 0.0, 0.0),
+    ]
+    monkeypatch.setattr(injuries, "understat_squad", lambda *a: players)
+    squad = {p.name: p for p in lineups.expected_squad("Arsenal", EPL)}
+    assert {name: p.role for name, p in squad.items()} == {
+        "Keeper": "GK", "Defender": "DEF", "Midfielder": "MID", "Striker": "FWD", "Bench": "", "Unlisted": "",
+    }
+    assert (squad["Striker"].goals, squad["Striker"].assists) == (9, 1)
+    assert (squad["Striker"].xg, squad["Striker"].xa) == (8.0, 1.0)  # what the chances-created rate is added up from
+
+
+def test_mls_positions_are_placed_on_the_pitch_too(monkeypatch):
+    def asa(name, position, goals=0, assists=0):
+        return AsaPlayerStats(name, position, 900, goals, assists, 1.0, 1.0, 0, 0, 0.0)
+
+    positions = {"Keeper": "GK", "Centre": "CB", "Full": "FB", "Holding": "DM", "Central": "CM", "Playmaker": "AM", "Wing": "W", "Striker": "ST"}
+    monkeypatch.setattr(asa_client, "fetch_team_season", lambda name, season: [asa(n, p, 4, 3) for n, p in positions.items()])
+    squad = {p.name: p for p in lineups.expected_squad("LAFC", MLS)}
+    assert {name: p.role for name, p in squad.items()} == {
+        "Keeper": "GK", "Centre": "DEF", "Full": "DEF", "Holding": "MID", "Central": "MID", "Playmaker": "MID", "Wing": "FWD", "Striker": "FWD",
+    }
+    assert (squad["Wing"].goals, squad["Wing"].assists) == (4, 3)
+
+
 def test_a_champions_league_club_borrows_its_domestic_stats(monkeypatch):
     calls = []
     monkeypatch.setattr(injuries, "understat_squad", lambda *a: calls.append(a) or [_understat("Striker", "F", 900)])

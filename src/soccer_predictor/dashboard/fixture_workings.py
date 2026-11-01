@@ -9,6 +9,7 @@ import streamlit as st
 
 from soccer_predictor.config import League
 from soccer_predictor.dashboard.components import (
+    FIXTURE_PANEL_CSS,
     FIXTURE_PARAM,
     SCROLL_TO_BREAKDOWN_JS,
     FixtureRef,
@@ -27,8 +28,9 @@ from soccer_predictor.storage.repository import matches_for_team, prediction_rec
 def render_fixture_workings(ref: FixtureRef, params: DixonColesParams, league: League, close_key: str) -> None:
     """Head-to-head and the full Poisson/Dixon-Coles workings for `ref`, a match in
     `league` that `params` (that league's model) predicts, with a Close button that
-    drops the `fixture` parameter again."""
-    st.html(f"<script>{SCROLL_TO_BREAKDOWN_JS}</script>", unsafe_allow_javascript=True)
+    drops the `fixture` parameter again. The panel's own heading stays below Streamlit's
+    fixed header when the page scrolls to it."""
+    st.html(f"<style>{FIXTURE_PANEL_CSS}</style><script>{SCROLL_TO_BREAKDOWN_JS}</script>", unsafe_allow_javascript=True)
     with st.container(key="fixture_breakdown", border=True):
         st.markdown(f"#### How {plain(ref.home_name)} v {plain(ref.away_name)} was predicted")
         if st.button("Close", key=close_key):

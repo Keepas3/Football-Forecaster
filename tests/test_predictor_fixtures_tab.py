@@ -162,3 +162,41 @@ def test_a_fixture_that_is_not_in_the_table_is_dropped_from_the_link(page):
 def test_the_date_range_in_a_link_is_used_only_when_it_is_a_real_range(query, expected):
     default = (dt.date(2026, 10, 29), dt.date(2026, 11, 12))
     assert predictor.date_range_from_url(query, default) == (expected or default)
+
+
+# ---- opening the workings in place: the click script types into a hidden box ----
+
+
+def _pick(at, value):
+    at.text_input(key="fixture_pick").set_value(value).run()
+    return at
+
+
+def test_a_click_on_the_predicted_score_opens_its_workings_without_reloading(page):
+    run, _, (home_id, away_id) = page
+    key = f"{home_id}-{away_id}-{MATCH_DAY.isoformat()}"
+    at = _pick(run(), f"{key}@1000")
+    assert not at.exception
+    assert 'class="selected"' in _table(at)
+    assert any("How Arsenal v Chelsea was predicted" in m.value for m in at.markdown)
+    assert at.query_params["fixture"] == [key]  # the address still names the match
+
+
+def test_the_workings_close_and_only_a_new_click_brings_them_back(page):
+    run, _, (home_id, away_id) = page
+    key = f"{home_id}-{away_id}-{MATCH_DAY.isoformat()}"
+    at = _pick(run(), f"{key}@1000")
+    at.button(key="close_fixture_breakdown_EPL").click().run()
+    assert not _close_buttons(at) and "fixture" not in at.query_params
+    at.run()  # a rerun for any other reason must not bring the old click back
+    assert not _close_buttons(at)
+    _pick(at, f"{key}@2000")  # the script stamps each click with the time
+    assert _close_buttons(at) == ["close_fixture_breakdown_EPL"]
+
+
+def test_a_click_that_names_no_match_in_the_table_is_ignored(page):
+    run, _, _ = page
+    for junk in ("nonsense@1", "9-9-2026-01-01@2"):
+        at = _pick(run(), junk)
+        assert not at.exception
+        assert not _close_buttons(at) and "fixture" not in at.query_params

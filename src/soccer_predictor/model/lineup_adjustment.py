@@ -58,6 +58,16 @@ class ExpectedPlayer:
     weight: float  # importance weight, same scale as an injury's
     minutes: float
     is_keeper: bool = False
+    # Where he plays ("GK" | "DEF" | "MID" | "FWD"; "" when the source's position is not
+    # one we know) and his season goals and assists: not used to rate a lineup, only so
+    # the team page can draw the usual XI and list what each player has done.
+    role: str = ""
+    goals: int = 0
+    assists: int = 0
+    # His season expected goals and assists, the figures a team's chances-created rate
+    # (ingest/player_importance.py::resolve_current_attack_detail) is added up from.
+    xg: float = 0.0
+    xa: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from soccer_predictor.ingest.player_importance import (
     aggregate_asa_team_output,
     aggregate_understat_team_output,
     resolve_api_importance_weight,
+    resolve_current_attack_detail,
     resolve_current_attack_strength,
     resolve_team_goals_and_assists,
     resolve_team_historical_stats,
@@ -506,6 +507,42 @@ def test_resolve_current_attack_strength_mls_uses_asa(monkeypatch):
 
     result = resolve_current_attack_strength("Atlanta United FC", "MLS")
     assert result == pytest.approx(0.8)  # 10 / mean(10,15)=12.5 -> 0.8
+
+
+def test_resolve_current_attack_detail_shows_the_rates_behind_the_ratio(monkeypatch):
+    _understat_league(
+        monkeypatch,
+        {
+            "Team A": [_understat_player("A1", minutes=900, xg=10.0)],  # 10 matches, rate 1.0
+            "Team B": [_understat_player("B1", minutes=1800, xg=40.0, xa=10.0)],  # 20 matches, (40+7)/20 = 2.35
+            "Team C": [_understat_player("C1", minutes=900, xg=5.0)],  # rate 0.5
+            "Team D": [_understat_player("D1", minutes=90, xg=3.0)],  # too early in the season: not counted
+        },
+    )
+
+    detail = resolve_current_attack_detail("Team B", "EPL")
+
+    assert detail.matches_played == 20
+    assert detail.team_rate == pytest.approx(2.35)
+    assert detail.teams_compared == 3
+    assert detail.league_mean_rate == pytest.approx((1.0 + 2.35 + 0.5) / 3)
+    assert detail.ratio == pytest.approx(detail.team_rate / detail.league_mean_rate)
+    assert resolve_current_attack_strength("Team B", "EPL") == detail.ratio
+
+
+def test_resolve_current_attack_detail_is_none_where_the_strength_is(monkeypatch):
+    assert resolve_current_attack_detail("Real Madrid", "UCL") is None  # no chance data for the competition
+    _understat_league(monkeypatch, {})
+    assert resolve_current_attack_detail("Arsenal", "EPL") is None
+    _understat_league(
+        monkeypatch,
+        {
+            "Team A": [_understat_player("A1", minutes=90, xg=2.0)],  # one match: too early
+            "Team B": [_understat_player("B1", minutes=900, xg=15.0)],
+            "Team C": [_understat_player("C1", minutes=900, xg=5.0)],
+        },
+    )
+    assert resolve_current_attack_detail("Team A", "EPL") is None
 
 
 def test_resolve_team_historical_stats_ucl_still_none_even_with_session(db_session):

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import html
 import json
 import time
 from dataclasses import dataclass
@@ -140,7 +141,9 @@ def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
 
 def _parse_player(row: dict) -> UnderstatPlayerStats:
     return UnderstatPlayerStats(
-        name=row["player_name"],
+        # Understat sends an apostrophe as the entity "&#039;" ("Nico O&#039;Reilly"), which
+        # would show up like that on screen and never match the same player in a lineup.
+        name=html.unescape(row["player_name"]),
         team_title=row["team_title"],
         position=row.get("position") or None,
         minutes=int(row.get("time") or 0),

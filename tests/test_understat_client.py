@@ -114,6 +114,15 @@ def test_fetch_team_season_parses_numeric_fields(monkeypatch):
     assert saka.minutes == 2200
 
 
+def test_an_apostrophe_understat_sends_as_an_html_entity_is_a_real_apostrophe(monkeypatch):
+    rows = [_row("Nico O&#039;Reilly", "Manchester City", minutes=300), _row("Rico Lewis", "Manchester City", minutes=90)]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda *a, **k: rows)
+
+    names = {p.name for p in understat_client.fetch_team_season("Manchester City", "EPL", 2026)}
+
+    assert names == {"Nico O'Reilly", "Rico Lewis"}
+
+
 def test_fetch_team_season_parses_extended_fields(monkeypatch):
     rows = [
         _row(

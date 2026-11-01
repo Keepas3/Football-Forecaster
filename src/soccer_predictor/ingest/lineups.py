@@ -31,6 +31,9 @@ STARTERS_PER_SIDE = 11
 # player's main position, a trailing "S" marks appearances as a substitute.
 _UNDERSTAT_DEFENSE = {"GK", "D"}
 _ASA_DEFENSE = {"GK", "CB", "FB"}
+# Where each source's main position plays, for drawing the usual XI on a pitch.
+_UNDERSTAT_ROLES = {"GK": "GK", "D": "DEF", "M": "MID", "F": "FWD"}
+_ASA_ROLES = {"GK": "GK", "CB": "DEF", "FB": "DEF", "DM": "MID", "CM": "MID", "AM": "MID", "W": "FWD", "ST": "FWD"}
 
 
 @dataclass(frozen=True)
@@ -105,7 +108,12 @@ def _bucket(position: str | None, defense_positions: set[str]) -> tuple[str, boo
     return ("defense" if main in defense_positions else "attack"), main == "GK"
 
 
-def _expected_player(player, bucket: tuple[str, bool], totals) -> ExpectedPlayer:
+def _role(position: str | None, roles: dict[str, str]) -> str:
+    tokens = [t for t in (position or "").upper().split() if t != "S"]
+    return roles.get(tokens[0], "") if tokens else ""
+
+
+def _expected_player(player, bucket: tuple[str, bool], totals, roles: dict[str, str]) -> ExpectedPlayer:
     position, is_keeper = bucket
     if position == "defense":
         weight = compute_defense_importance(player.minutes, totals.max_minutes, None)
@@ -117,6 +125,11 @@ def _expected_player(player, bucket: tuple[str, bool], totals) -> ExpectedPlayer
         weight=weight if weight is not None else MIN_IMPORTANCE_WEIGHT,
         minutes=player.minutes or 0,
         is_keeper=is_keeper,
+        role=_role(player.position, roles),
+        goals=player.goals or 0,
+        assists=player.assists or 0,
+        xg=player.xg or 0.0,
+        xa=player.xa or 0.0,
     )
 
 
@@ -128,9 +141,9 @@ def expected_squad(team_name: str, league: League) -> list[ExpectedPlayer]:
     if league.code == "MLS":
         players = asa_client.fetch_team_season(team_name, season)
         totals = player_importance.aggregate_asa_team_output(players)
-        return [_expected_player(p, _bucket(p.position, _ASA_DEFENSE), totals) for p in players]
+        return [_expected_player(p, _bucket(p.position, _ASA_DEFENSE), totals, _ASA_ROLES) for p in players]
     if league.code in understat_client.UNDERSTAT_LEAGUE_SLUG or league.code == "UCL":
         players = injuries.understat_squad(team_name, team_name, league, season)
         totals = player_importance.aggregate_understat_team_output(players)
-        return [_expected_player(p, _bucket(p.position, _UNDERSTAT_DEFENSE), totals) for p in players]
+        return [_expected_player(p, _bucket(p.position, _UNDERSTAT_DEFENSE), totals, _UNDERSTAT_ROLES) for p in players]
     return []

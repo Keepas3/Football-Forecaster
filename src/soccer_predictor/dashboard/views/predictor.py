@@ -6,6 +6,7 @@ sidebar nav; can also be pre-seeded with a league via ?league=<code>.
 from __future__ import annotations
 
 import datetime as dt
+import html
 import time
 from uuid import uuid4
 
@@ -20,7 +21,13 @@ from soccer_predictor.dashboard import injury_table as it
 from soccer_predictor.dashboard import notes_access as na
 from soccer_predictor.dashboard import whatif_access as wa
 from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
+from soccer_predictor.dashboard.injury_tables import (
+    injury_players_table_html,
+    parse_injury_team,
+    team_impact_table_html,
+)
 from soccer_predictor.dashboard.note_format import describe_form_note, describe_injury
+from soccer_predictor.dashboard.rating_workings import render_rating_workings
 from soccer_predictor.dashboard.whatif import (
     UpcomingMatch,
     build_adjustments,
@@ -37,24 +44,36 @@ from soccer_predictor.dashboard.chat_notes import (
 )
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
-    LEADERBOARD_DISPLAY_COLUMNS,
+    INJURY_PANEL_CSS,
+    INJURY_PARAM,
     LOCK_GROUP_LABELS,
+    SCROLL_TO_INJURY_JS,
     _escape_markdown,
     FixtureRef,
+    apply_fixture_pick,
+    apply_injury_pick,
+    apply_rating_pick,
     fixtures_table_html,
-    injury_column_config,
+    inject_fixture_links,
+    inject_injury_links,
+    inject_rating_links,
+    inject_standings_sort,
     injury_source_note,
     PREDICTION_STATUS_NOTE,
+    RATING_PARAM,
+    TIMEZONE_QUERY_KEY,
     fixture_prediction_row,
+    current_season_leaderboard,
     format_kickoff,
-    leaderboard_dataframe,
+    leaderboard_table_html,
     league_option_label,
     live_sync_requirement_note,
     parse_fixture_key,
+    parse_rating_key,
     render_prediction_breakdown,
     scoreline_chart,
     style_fixture_predictions,
-    table_height,
+    team_page_href,
     timezone_selector,
 )
 from soccer_predictor.ingest import injuries as injuries_module
@@ -74,8 +93,13 @@ from soccer_predictor.storage.repository import (
     delete_injury,
     fixtures_for_league,
     locked_predictions_for_league,
+    team_crests_for_league,
     teams_for_league,
 )
+
+LEADERBOARD_TAB = "Team Strength Leaderboard"
+INJURIES_TAB = "Injuries"
+TEAM_IMPACT_TAB = "Team impact"
 
 
 def _safe_index(options: list, value, default: int = 0) -> int:
@@ -279,10 +303,9 @@ def _render_chat_history(team_names: dict[int, str]) -> None:
                     st.rerun()
 
 
-def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
-    """Everyone currently listed as out, doubtful or suspended, as a table that
-    can be filtered, searched and sorted, plus what that does to each team's
-    ratings (dashboard/injury_table.py)."""
+def _injury_data(params, team_names: dict[int, str]) -> tuple[pd.DataFrame, dict]:
+    """Everyone currently listed as out, doubtful or suspended (injury_table.players_frame), and
+    each team's ratings with its entries, which the team-impact table is worked out from."""
     today = dt.date.today()
     rows, ratings = [], {}
     with session_scope() as session:
@@ -290,8 +313,47 @@ def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
             team_injuries = get_injuries_for_team(session, team_id, team_name, today)
             rows += it.player_rows(team_name, team_injuries, today)
             ratings[team_name] = (params.attack[team_id], params.defense[team_id], team_injuries.entries)
-    frame = it.players_frame(rows)
+    return it.players_frame(rows), ratings
 
+
+def _render_team_injuries(league, frame: pd.DataFrame, team: str, team_ids: dict[str, int], close_key: str) -> None:
+    """Who is out for `team`, under the team-impact table, with a Close button that drops the
+    `injuries` parameter again."""
+    team_frame = frame[frame["Team"] == team].reset_index(drop=True)  # biggest impact first
+    counts = it.summary_counts(team_frame)
+    st.html(f"<style>{INJURY_PANEL_CSS}</style><script>{SCROLL_TO_INJURY_JS}</script>", unsafe_allow_javascript=True)
+    with st.container(key="injury_breakdown", border=True):
+        st.markdown(f"#### Injured players: {_escape_markdown(team)}")
+        if st.button("Close", key=close_key):
+            del st.query_params[INJURY_PARAM]
+            st.rerun()
+        st.caption(
+            f"{counts['players']} listed: {counts[it.OUT]} out · {counts[it.DOUBTFUL]} doubtful · "
+            f"{counts[it.SUSPENDED]} suspended. The biggest impact on the team comes first."
+        )
+        st.markdown(injury_players_table_html(team_frame, team_ids, league.code, show_team=False), unsafe_allow_html=True)
+        st.markdown(
+            f'<a href="{html.escape(team_page_href(league.code, team_ids[team]))}" target="_self">'
+            f"Open {html.escape(team)}'s page</a> for its schedule, squad and results.",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_injuries_tab(
+    league,
+    frame: pd.DataFrame,
+    ratings: dict,
+    team_ids: dict[str, int],
+    selected: str | None,
+    tz_name: str,
+    page_params: str,
+) -> None:
+    """Everyone currently listed as out, doubtful or suspended, as a table that
+    can be filtered, searched and sorted, plus what that does to each team's
+    ratings (dashboard/injury_table.py). A team's name opens its page; in the
+    team-impact table its number of players listed opens who is out, under the table
+    (`selected` is that team, if one is open; `tz_name` and `page_params` ride in the
+    link to it)."""
     if frame.empty:
         st.info("No injuries on record.")
         if not injuries_module.has_automatic_feed(league):
@@ -309,7 +371,9 @@ def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
     source_note = injury_source_note(league.code)
     if source_note:
         st.caption(source_note)
-    players_tab, teams_tab = st.tabs(["Players", "Team impact"])
+    inject_standings_sort()
+    # A team's list is opened from the team-impact table, so that is the sub-tab a link to it lands on.
+    players_tab, teams_tab = st.tabs(["Players", TEAM_IMPACT_TAB], default=TEAM_IMPACT_TAB if selected else None)
 
     with players_tab:
         col_team, col_status, col_position, col_search = st.columns([2, 2, 1.4, 2])
@@ -320,39 +384,33 @@ def _render_injuries_tab(league, params, team_names: dict[int, str]) -> None:
         positions = col_position.multiselect(
             "Position", sorted(frame["Position"].unique()), key=f"inj_position_{league.code}"
         )
-        # The grid is a canvas, invisible to the browser's own Ctrl+F -- hence a search box.
         query = col_search.text_input("Search player", key=f"inj_query_{league.code}")
         shown = it.filter_players(frame, teams, statuses, positions, query)
         if shown.empty:
             st.info("No player matches those filters.")
         else:
-            st.dataframe(
-                shown,
-                hide_index=True,
-                use_container_width=True,
-                height=table_height(len(shown)),
-                column_config=injury_column_config(),
-                key=f"inj_table_{league.code}",
+            st.markdown(injury_players_table_html(shown, team_ids, league.code), unsafe_allow_html=True)
+            st.caption(
+                "Click a team's name for its page, or a column heading to sort. Within each team the biggest "
+                "impact comes first."
             )
-            st.caption("Click a column heading to sort. Within each team the biggest impact comes first.")
 
     with teams_tab:
         impact = it.team_impact_frame(ratings)
-        st.dataframe(
-            impact,
-            hide_index=True,
-            use_container_width=True,
-            height=table_height(len(impact)),
-            column_config={
-                "Attack change": st.column_config.NumberColumn("Attack change", format="%+.1f%%"),
-                "Defence change": st.column_config.NumberColumn("Defence change", format="%+.1f%%"),
-            },
-            key=f"inj_teams_table_{league.code}",
+        inject_injury_links()
+        st.markdown(
+            team_impact_table_html(
+                impact, team_ids, league.code, tz_name, page_params, team_ids.get(selected) if selected else None
+            ),
+            unsafe_allow_html=True,
         )
         st.caption(
             "The model's attack and defence ratings for each team before and after these players are "
-            "taken out. Defence is goals conceded, so a rise there is worse. Teams most affected come first."
+            "taken out. Defence is goals conceded, so a rise there is worse. Teams most affected come first. "
+            "Click a team's name for its page, or its number of players listed to see who is out."
         )
+        if selected:
+            _render_team_injuries(league, frame, selected, team_ids, f"close_injury_breakdown_{league.code}")
 
 
 WHATIF_RESULT_KEY = "whatif_result"
@@ -617,16 +675,42 @@ def render() -> None:
 
     id_by_name = {name: team_id for team_id, name in team_names.items()}
 
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start, end = date_range
+    else:
+        start, end = default_date_range()
+
+    with session_scope() as session:
+        leaderboard_df = current_season_leaderboard(session, league, params, team_names)
+
+    # The leaderboard figure whose workings are open: named in the URL by the figure's
+    # link, and only ever a team on the leaderboard (anything else is dropped). A link
+    # reloads the page, which would land on the first tab, so the leaderboard is opened.
+    apply_rating_pick()
+    rating_selected = None
+    if st.query_params.get(RATING_PARAM) is not None:
+        rating_selected = parse_rating_key(st.query_params[RATING_PARAM])
+        if rating_selected is None or rating_selected[0] not in set(leaderboard_df["team_id"]):
+            del st.query_params[RATING_PARAM]
+            rating_selected = None
+
+    # The same for a team's injured players, opened from the Injuries tab's team-impact table by
+    # its players-listed link: named in the URL by the team's id, and only ever a team with
+    # someone listed. That link would also land on the first tab, so the Injuries tab is opened.
+    injuries_frame, injury_ratings = _injury_data(params, team_names)
+    apply_injury_pick()
+    injury_selected = None
+    if st.query_params.get(INJURY_PARAM) is not None:
+        injury_selected = parse_injury_team(st.query_params[INJURY_PARAM], id_by_name, set(injuries_frame["Team"]))
+        if injury_selected is None:
+            del st.query_params[INJURY_PARAM]
+
+    opened_tab = LEADERBOARD_TAB if rating_selected is not None else INJURIES_TAB if injury_selected else None
     fixtures_tab, leaderboard_tab, injuries_tab, notes_tab = st.tabs(
-        ["Upcoming Fixtures", "Team Strength Leaderboard", "Injuries", "AI notes"]
+        ["Upcoming Fixtures", LEADERBOARD_TAB, INJURIES_TAB, "AI notes"], default=opened_tab
     )
 
     with fixtures_tab:
-        if isinstance(date_range, tuple) and len(date_range) == 2:
-            start, end = date_range
-        else:
-            start, end = default_date_range()
-
         with session_scope() as session:
             fixtures_df = fixtures_for_league(session, league.code, start, end)
 
@@ -668,6 +752,7 @@ def render() -> None:
             # The match whose workings are open: named in the URL by the predicted-score
             # link, and only ever one of the rows shown (anything else is dropped).
             selected_index = None
+            apply_fixture_pick()
             if st.query_params.get(FIXTURE_PARAM) is not None:
                 wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
                 selected_index = next(
@@ -676,6 +761,7 @@ def render() -> None:
                 if selected_index is None:
                     del st.query_params[FIXTURE_PARAM]
 
+            inject_fixture_links()
             st.markdown(
                 fixtures_table_html(
                     rows,
@@ -724,27 +810,48 @@ def render() -> None:
                 )
 
     with leaderboard_tab:
-        leaderboard_df = leaderboard_dataframe(params, team_names)
-        # Same reasoning as the Leagues page's standings search: this grid
-        # is a canvas, invisible to the browser's own Ctrl+F.
         search_query = st.text_input(
             "Search team", placeholder="e.g. Man City", key=f"leaderboard_search_{league.code}"
         )
-        if search_query:
-            leaderboard_df = leaderboard_df[
-                leaderboard_df["Team"].str.contains(search_query, case=False, na=False, regex=False)
-            ]
-        if search_query and leaderboard_df.empty:
+        if search_query and not leaderboard_df["Team"].str.contains(search_query, case=False, na=False, regex=False).any():
             st.info(f'No team matches "{search_query}".')
         else:
-            st.dataframe(
-                leaderboard_df,
-                use_container_width=True,
-                column_order=LEADERBOARD_DISPLAY_COLUMNS,
+            with session_scope() as session:
+                crest_urls = team_crests_for_league(session, league.code)
+            inject_standings_sort()
+            inject_rating_links()
+            st.markdown(
+                leaderboard_table_html(
+                    leaderboard_df,
+                    league.code,
+                    crest_urls,
+                    search_query,
+                    tz_name=st.query_params.get(TIMEZONE_QUERY_KEY, ""),
+                    page_params=f"&from={start.isoformat()}&to={end.isoformat()}",
+                    selected=rating_selected,
+                ),
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Click a team's name for its page, with its squad and how each player counts toward these "
+                "ratings, a figure to see how it is calculated, or a column heading to sort. Net strength is "
+                "attack minus defense, and the table starts ranked by it."
+            )
+        if rating_selected is not None:
+            render_rating_workings(
+                *rating_selected, leaderboard_df, params, league, f"close_rating_breakdown_{league.code}"
             )
 
     with injuries_tab:
-        _render_injuries_tab(league, params, team_names)
+        _render_injuries_tab(
+            league,
+            injuries_frame,
+            injury_ratings,
+            id_by_name,
+            injury_selected,
+            tz_name=st.query_params.get(TIMEZONE_QUERY_KEY, ""),
+            page_params=f"&from={start.isoformat()}&to={end.isoformat()}",
+        )
 
     with notes_tab:
         # Top: the free what-if for everyone. Below: the owner-only notes that are

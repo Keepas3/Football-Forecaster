@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from soccer_predictor.dashboard import pitch
 from soccer_predictor.ingest.espn_client import LineupPlayer, TeamMatchInfo
 
@@ -177,3 +179,71 @@ def test_every_label_fits_its_pill_whatever_the_name_or_the_crowding():
             drawn = squeezed if squeezed is not None else len(text) * pitch.LABEL_CHAR_EM * size
             assert drawn <= width - pitch.LABEL_PAD + 1e-9, (slot, text)
             assert size >= pitch.LABEL_MIN_FONT
+
+
+# --- a team's usual XI (the team page's Squad strength) -------------------------------------------
+
+
+def _slots(*roles):
+    return [pitch.SquadSlot(f"Player {chr(65 + i)}", role, f"−{i}%", role in ("GK", "DEF")) for i, role in enumerate(roles)]
+
+
+def _row_y(svg, name):
+    """How far down the pitch the circle belonging to `name`'s label is drawn."""
+    for group in re.findall(r'<g transform="translate\(([\d.]+) ([\d.]+)\)">(.*?)</g>', svg):
+        if f">{name.split()[-1].upper()}</text>" in group[2]:
+            return float(group[1])
+    raise AssertionError(name)
+
+
+def test_the_usual_xi_is_drawn_in_lines_from_the_keeper_up_the_pitch():
+    svg = pitch.squad_pitch_svg("Arsenal", _slots("GK", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "FWD", "FWD", "FWD"))
+    assert svg.startswith("<svg") and svg.endswith("</svg>") and "Arsenal usual starting eleven" in svg
+    ys = [_row_y(svg, f"Player {chr(65 + i)}") for i in range(11)]
+    assert ys[0] == pitch.GOALKEEPER_Y
+    assert len({ys[1], ys[2], ys[3], ys[4]}) == 1 and len({ys[5], ys[6], ys[7]}) == 1 and len({ys[8], ys[9], ys[10]}) == 1
+    assert ys[0] > ys[1] > ys[5] > ys[8] >= pitch.TOP_LINE_Y
+    assert all(f"−{i}%" in svg for i in range(11))
+
+
+def test_a_role_nobody_recognises_is_drawn_with_the_midfielders():
+    svg = pitch.squad_pitch_svg("Team", _slots("GK", "DEF", "MID", "", "FWD"))
+    assert _row_y(svg, "Player C") == _row_y(svg, "Player D")
+
+
+def test_a_team_with_no_keeper_still_fills_the_pitch():
+    svg = pitch.squad_pitch_svg("Team", _slots("DEF", "MID", "FWD"))
+    assert _row_y(svg, "Player A") == pitch.LOWEST_OUTFIELD_Y and _row_y(svg, "Player C") == pitch.TOP_LINE_Y
+
+
+def test_defenders_and_attackers_get_different_circles_and_nothing_means_no_graphic():
+    svg = pitch.squad_pitch_svg("Team", _slots("DEF", "FWD"))
+    assert f'fill="{pitch.DEFENDER_FILL}"' in svg and f'fill="{pitch.ATTACKER_FILL}"' in svg
+    assert pitch.squad_pitch_svg("Team", []) == ""
+
+
+def test_the_most_important_player_of_a_line_stands_in_the_middle():
+    assert pitch.centre_out([1, 2, 3, 4, 5]) == [4, 2, 1, 3, 5]
+    assert pitch.centre_out([1, 2]) == [2, 1] and pitch.centre_out([]) == []
+    svg = pitch.squad_pitch_svg("Team", _slots("MID", "MID", "MID"))  # A is the most important
+    xs = {name: float(re.search(rf'translate\(([\d.]+) [\d.]+\)">(?:(?!</g>).)*>{name.upper()}</text>', svg).group(1)) for name in "ABC"}
+    assert xs["B"] < xs["A"] < xs["C"] and xs["A"] == pitch.VIEW_WIDTH / 2
+
+
+def test_names_and_figures_on_the_squad_pitch_are_escaped():
+    slot = pitch.SquadSlot("Bad <script>", "FWD", "<b>1</b>")
+    svg = pitch.squad_pitch_svg('Team "x" <i>', [slot])
+    assert "<script>" not in svg and "<SCRIPT>" not in svg and "&lt;SCRIPT&gt;" in svg
+    assert "<b>1</b>" not in svg and "&lt;b&gt;1&lt;/b&gt;" in svg
+    assert "<i>" not in svg
+
+
+def test_both_pitches_share_the_same_grass_and_markings():
+    team = _team("4-4-2", ["G", "LB", "CD-L", "CD-R", "RB", "LM", "CM-L", "CM-R", "RM", "CF-L", "CF-R"], name="Spain")
+    match, squad = pitch.pitch_svg(team), pitch.squad_pitch_svg("Spain", _slots("GK"))
+    assert 'aria-label="Spain starting lineup, 4-4-2"' in match and 'aria-label="Spain usual starting eleven"' in squad
+
+    def background(svg):
+        return re.sub(r'aria-label="[^"]*"', "", svg.split("<g transform")[0])
+
+    assert background(match) == background(squad) and "<line" in background(match)

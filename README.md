@@ -191,16 +191,29 @@ The dashboard only reads the latest persisted fit; it never trains live.
   model. For MLS, the table splits into Eastern and Western Conference. A
   zone marker highlights Champions League/Concacaf Champions Cup
   qualification and relegation spots where that applies. Click a team's
-  row to open Team Detail: crest, the model's attack/defense rating,
+  row to open Team Detail: crest, the model's attack/defense rating with
+  its net strength and last results, a squad-strength section (the usual
+  XI on a pitch beside a table of every player, showing what the model
+  takes off the team's attack or defense when each one is missing),
   upcoming schedule with predictions, recent results (each linking to a
   YouTube search for that match), current squad, historical per-player
   stats, and injuries.
 - **Players**: search for any player by name across a chosen league,
   without needing to know their club first. Shows the matched player's
   current club, position, age, current-season expected goals/assists
-  where available, and historical per-season stats on request.
+  where available, and historical per-season stats on request. The top
+  players and the search results are sortable tables: a player's name opens
+  their stats in a panel under the table (no page reload) and a club's name
+  opens that team's page.
 - **Predictor**: the original single-league workflow: a fixtures tab,
-  full attack/defense leaderboard, injuries tab, and the chat notes tab.
+  a sortable attack/defense leaderboard of this season's clubs (a team's
+  name opens its Team Detail page, and its attack, defense or net strength
+  figure opens a panel under the table showing how that number is built),
+  injuries tab (two sortable tables, one row per injured player and one per
+  team with the model's ratings before and after; a team's name opens its
+  page, a player's name opens their stats on the Players page, and a team's
+  number of players listed opens who is out under the table),
+  and the chat notes tab.
   Its sidebar also shows the running prediction-accuracy counters
   described above. Reaching it via a `?league=` link pre-selects that
   league.

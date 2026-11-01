@@ -29,6 +29,7 @@ from soccer_predictor.model.results_form_adjustment import AVERAGE_POINTS_PER_MA
 from soccer_predictor.model.scoreline_matrix import DEFAULT_DISPERSION, build_matrix, marginal_pmf
 from soccer_predictor.model.standings import FormGame, TeamStanding
 from soccer_predictor.model.team_facts import HeadToHeadRecord, TeamFacts
+from soccer_predictor.storage.repository import team_ids_in_season
 
 
 def season_not_yet_scheduled(league: League, season: str, today: dt.date | None = None) -> bool:
@@ -593,11 +594,21 @@ table.fb-table th[data-sort]{cursor:pointer;user-select:none;}
 table.fb-table th[data-sort]:hover{opacity:1;}
 table.fb-table th[aria-sort=ascending]::after{content:" ▲";font-size:0.7em;}
 table.fb-table th[aria-sort=descending]::after{content:" ▼";font-size:0.7em;}
+table.fb-table.compact th,table.fb-table.compact td{padding-left:5px;padding-right:5px;}
 table.fb-table a.team{color:inherit;text-decoration:none;font-weight:600;}
 table.fb-table a.team:hover{text-decoration:underline;}
+table.fb-table a.player{color:inherit;font-weight:600;text-decoration:underline dotted;text-underline-offset:3px;}
+table.fb-table a.player:hover,table.fb-table a.player.on{text-decoration:underline solid;}
+table.fb-table a.club,table.fb-table a.profile{color:inherit;text-decoration:none;}
+table.fb-table a.club:hover,table.fb-table a.profile:hover{text-decoration:underline;}
+table.fb-table a.stat,table.fb-table a.injured{color:inherit;text-decoration:underline dotted;text-underline-offset:3px;}
+table.fb-table a.stat:hover,table.fb-table a.stat.on,table.fb-table a.injured:hover,table.fb-table a.injured.on{text-decoration:underline solid;}
+table.fb-table tr.selected td{background:rgba(128,128,128,0.20);}
 table.fb-table a.search{text-decoration:none;white-space:nowrap;}
 table.fb-table .form span{cursor:help;margin-right:1px;}
 table.fb-table img.crest{height:18px;width:auto;vertical-align:middle;border-radius:2px;}
+table.fb-table .impact{display:inline-block;width:3rem;height:6px;border-radius:3px;margin-right:6px;vertical-align:middle;overflow:hidden;background:rgba(128,128,128,0.25);}
+table.fb-table .impact i{display:block;height:100%;background:var(--primary-color,#ff4b4b);}
 </style>"""
 
 
@@ -757,19 +768,194 @@ def standings_table_html(
     )
 
 
-LEADERBOARD_DISPLAY_COLUMNS = (
-    "Team",
-    "Attack",
-    "Attack (from results only)",
-    "Defense (goals-conceded multiplier, lower is better)",
-    "Net strength",
-)
+class TableColumn(NamedTuple):
+    """One column of sortable_table_html. `sort` is "num" or "text" for a column
+    a header click sorts (None for one that cannot be), `first` the direction of
+    the first click ("asc" | "desc"), `hint` the header's hover text."""
+
+    label: str
+    left: bool = False
+    sort: str | None = None
+    first: str = "desc"
+    hint: str = ""
 
 
-def leaderboard_dataframe(params: DixonColesParams, team_names: dict[int, str]) -> pd.DataFrame:
-    """Includes a `team_id` column for callers that need to map a selected
-    row back to a team (e.g. clickable rankings) -- pass
-    `column_order=LEADERBOARD_DISPLAY_COLUMNS` to st.dataframe to hide it.
+class TableCell(NamedTuple):
+    """`markup` is already HTML-escaped; `value` is what a click on the header sorts by."""
+
+    markup: str
+    value: float | str | None = None
+
+
+def sortable_table_html(
+    columns: list[TableColumn], rows: list[list[TableCell]], compact: bool = False, selected: int | None = None
+) -> str:
+    """A click-to-sort table in the standings table's style (call
+    inject_standings_sort() once on the page for the sorting). A cell with no
+    sort value sorts as -1, so on a numeric column it comes after every real one
+    when the biggest is shown first. `compact` tightens the cell padding for a
+    table that has to fit in half a page. `selected` is the index in `rows` of
+    the row to highlight."""
+    head = []
+    for column in columns:
+        css = ' class="left"' if column.left else ""
+        sort = (
+            f' data-sort="{column.sort}" data-first="{column.first}" title="{html.escape(column.hint or "Click to sort", quote=True)}"'
+            if column.sort
+            else (f' title="{html.escape(column.hint, quote=True)}"' if column.hint else "")
+        )
+        head.append(f"<th{css}{sort}>{html.escape(column.label)}</th>")
+    body = []
+    for index, row in enumerate(rows):
+        cells = []
+        for column, cell in zip(columns, row):
+            value = cell.value if cell.value is not None else (-1 if column.sort == "num" else "")
+            data = f' data-v="{html.escape(str(value), quote=True)}"' if column.sort else ""
+            css = ' class="left"' if column.left else ""
+            cells.append(f"<td{css}{data}>{cell.markup}</td>")
+        selected_class = ' class="selected"' if index == selected else ""
+        body.append(f"<tr{selected_class}>{''.join(cells)}</tr>")
+    return (
+        f'{STANDINGS_TABLE_CSS}<div class="fb-table-wrap"><table class="fb-table{" compact" if compact else ""}">'
+        f"<thead><tr>{''.join(head)}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def _signed_number(value: float, places: int = 2) -> str:
+    return f"{'+' if value >= 0 else '−'}{abs(value):.{places}f}"
+
+
+LEADERBOARD_DEFENSE_COLUMN = "Defense (goals-conceded multiplier, lower is better)"
+
+# The URL parameter that opens how one leaderboard figure is built, under the table:
+# "<team id>-<attack|defense|net>". The figure's link reloads the Predictor with it set.
+RATING_PARAM = "rating"
+RATING_KINDS = ("attack", "defense", "net")
+
+
+def rating_key(team_id: int, kind: str) -> str:
+    return f"{team_id}-{kind}"
+
+
+def parse_rating_key(text: str | None) -> tuple[int, str] | None:
+    """(team id, "attack" | "defense" | "net") from a `rating` URL parameter, None if it isn't one."""
+    try:
+        team, kind = (text or "").split("-", 1)
+        team_id = int(team)
+    except ValueError:
+        return None
+    return (team_id, kind) if team_id > 0 and kind in RATING_KINDS else None
+
+
+def team_page_href(league_code: str, team_id: int) -> str:
+    return f"/team_detail?league={urllib.parse.quote(league_code)}&team={team_id}"
+
+
+def page_link_start(league_code: str, tz_name: str = "", page_params: str = "") -> str:
+    """The start of a link back to the Predictor ("?league=..."), carrying the page's timezone
+    and `page_params` ("&name=value..." already URL-encoded) so they survive the reload."""
+    tz_part = f"&tz={urllib.parse.quote(tz_name, safe='/')}" if tz_name else ""
+    return f"?league={urllib.parse.quote(league_code)}{tz_part}{page_params}"
+
+
+LEADERBOARD_COLUMNS = [
+    TableColumn("#", sort="num", first="asc"),
+    TableColumn("", left=True),  # the crest
+    TableColumn("Team", left=True, sort="text", first="asc", hint="Click to sort; click a name for the team's page"),
+    TableColumn(
+        "Attack",
+        sort="num",
+        hint="Scoring strength, adjusted for this season's chances created. Higher is better. Click a figure to see how it is calculated",
+    ),
+    TableColumn(
+        "Attack (results only)",
+        sort="num",
+        hint="The same rating from match results alone, before the adjustment. Click a figure to see how it is calculated",
+    ),
+    TableColumn(
+        "Defense (lower is better)",
+        sort="num",
+        first="asc",
+        hint="Goals conceded compared with an average team. Click a figure to see how it is calculated",
+    ),
+    TableColumn(
+        "Net strength",
+        sort="num",
+        hint="Attack minus defense: the table is ranked by this. Click a figure to see how it is calculated",
+    ),
+]
+
+
+def leaderboard_table_html(
+    leaderboard: pd.DataFrame,
+    league_code: str,
+    crest_urls: dict[int, str],
+    name_filter: str = "",
+    tz_name: str = "",
+    page_params: str = "",
+    selected: tuple[int, str] | None = None,
+) -> str:
+    """The team-strength leaderboard (from leaderboard_dataframe) as a sortable
+    HTML table. A team's name opens its page; each attack, defense and net strength
+    figure reloads this page with `rating=` set, which shows how that figure is built
+    under the table. Ranks come from the full leaderboard, so filtering with
+    `name_filter` (case-insensitive substring) keeps each team's real rank.
+    `selected` is the (team id, kind) whose workings are open: its row is marked, and
+    so is the figure. `tz_name` and `page_params` ("&name=value..." already URL-encoded)
+    travel in those links so the page's timezone and date range survive the reload.
+    Everything from the database is HTML-escaped."""
+    needle = name_filter.casefold()
+    page_start = page_link_start(league_code, tz_name, page_params)
+
+    def figure(team_id: int, kind: str, text: str, value: float) -> TableCell:
+        href = f"{page_start}&{RATING_PARAM}={rating_key(team_id, kind)}"
+        picked = " on" if selected == (team_id, kind) else ""
+        link = (
+            f'<a class="stat{picked}" href="{html.escape(href)}" target="_self" '
+            f'title="How this is calculated">{text}</a>'
+        )
+        return TableCell(link, value)
+
+    kept_rows = []
+    selected_row = None
+    for rank, row in enumerate(leaderboard.to_dict("records"), start=1):
+        team, team_id = row["Team"], row["team_id"]
+        if needle and needle not in team.casefold():
+            continue
+        if selected is not None and selected[0] == team_id:
+            selected_row = len(kept_rows)
+        crest = _safe_image_url(crest_urls.get(team_id))
+        crest_html = f'<img class="crest" src="{html.escape(crest)}" alt="">' if crest else ""
+        attack, results_only = row["Attack"], row["Attack (from results only)"]
+        defense, net = row[LEADERBOARD_DEFENSE_COLUMN], row["Net strength"]
+        kept_rows.append(
+            [
+                TableCell(str(rank), rank),
+                TableCell(crest_html),
+                TableCell(
+                    f'<a class="team" href="{html.escape(team_page_href(league_code, team_id))}" '
+                    f'target="_self">{html.escape(team)}</a>',
+                    team.casefold(),
+                ),
+                figure(team_id, "attack", f"{attack:.2f}", attack),
+                figure(team_id, "attack", f"{results_only:.2f}", results_only),
+                figure(team_id, "defense", f"{defense:.2f}", defense),
+                figure(team_id, "net", f"<b>{_signed_number(net)}</b>", net),
+            ]
+        )
+    return sortable_table_html(LEADERBOARD_COLUMNS, kept_rows, selected=selected_row)
+
+
+def leaderboard_dataframe(
+    params: DixonColesParams, team_names: dict[int, str], team_ids: set[int] | None = None
+) -> pd.DataFrame:
+    """Includes a `team_id` column for callers that need to map a row back to
+    a team (the leaderboard table links each name to its team page).
+
+    The model also rates clubs from earlier seasons that have since left the
+    league. `team_ids`, when it names at least two of the rated teams, limits
+    the leaderboard to them (see current_season_leaderboard); otherwise every
+    rated team is listed.
 
     "Attack" is current-form-adjusted (same
     ingest.player_importance.resolve_current_attack_strength /
@@ -781,8 +967,11 @@ def leaderboard_dataframe(params: DixonColesParams, team_names: dict[int, str]) 
     value, so the ranking itself reflects the current-form signal too, not
     just each fixture's own prediction.
     """
+    listed = [team_id for team_id in params.attack if team_ids is None or team_id in team_ids]
+    if team_ids is not None and len(listed) < 2:
+        listed = list(params.attack)
     rows = []
-    for team_id in params.attack:
+    for team_id in listed:
         base_attack = params.attack[team_id]
         team_name = team_names.get(team_id, f"team#{team_id}")
         relative_xg_strength = resolve_current_attack_strength(team_name, params.league_code)
@@ -793,11 +982,23 @@ def leaderboard_dataframe(params: DixonColesParams, team_names: dict[int, str]) 
                 "Team": team_name,
                 "Attack": adjusted_attack,
                 "Attack (from results only)": base_attack,
-                "Defense (goals-conceded multiplier, lower is better)": params.defense[team_id],
+                LEADERBOARD_DEFENSE_COLUMN: params.defense[team_id],
                 "Net strength": adjusted_attack - params.defense[team_id],
             }
         )
     return pd.DataFrame(rows).sort_values("Net strength", ascending=False).reset_index(drop=True)
+
+
+def current_season_leaderboard(
+    session: Session, league: League | None, params: DixonColesParams, team_names: dict[int, str]
+) -> pd.DataFrame:
+    """The leaderboard of the clubs in `league`'s current (latest configured) season:
+    those with a result in it or a fixture still to play. A competition whose
+    current edition has not started (the next World Cup) lists every rated team."""
+    team_ids = (
+        team_ids_in_season(session, league.code, str(league.seasons[-1]), dt.date.today()) if league is not None else None
+    )
+    return leaderboard_dataframe(params, team_names, team_ids)
 
 
 # Plain-English headers for the model's probabilities (shown as 0-100 values,
@@ -1067,9 +1268,9 @@ class FixtureRef(NamedTuple):
 
 
 # The URL parameter that opens one fixture's prediction workings under the table, and a
-# script that scrolls them into view once per page load (the predicted-score link reloads
-# the page at the top, and they sit below the table). Static text, no data in it; it
-# polls briefly because Streamlit draws the page in stages.
+# script that scrolls them into view (they sit below the table, and a page opened straight
+# on them starts at the top). Static text, no data in it; it polls briefly because
+# Streamlit draws the page in stages.
 FIXTURE_PARAM = "fixture"
 SCROLL_TO_BREAKDOWN_JS = """
 (function () {
@@ -1082,6 +1283,133 @@ SCROLL_TO_BREAKDOWN_JS = """
   }, 150);
 })();
 """
+
+
+# The same script for the panel under the leaderboard (see RATING_PARAM), and for each panel
+# a margin that keeps its heading clear of Streamlit's fixed header when it is scrolled to.
+SCROLL_TO_RATING_JS = SCROLL_TO_BREAKDOWN_JS.replace("fixture_breakdown", "rating_breakdown")
+RATING_PANEL_CSS = ".st-key-rating_breakdown{scroll-margin-top:4.5rem;}"
+FIXTURE_PANEL_CSS = ".st-key-fixture_breakdown{scroll-margin-top:4.5rem;}"
+
+# A click on a table link that opens a panel under the table (a leaderboard figure, a
+# predicted score) does it without reloading the page: the script types the link's value for
+# the panel's URL parameter (plus the time, so clicking the same link again still counts as a
+# change) into a hidden text box and presses Enter in it, which makes Streamlit rerun with it
+# (see _apply_pick), then runs `scroll`, which scrolls to the panel once it is there. Anything but a
+# plain left click (a new tab, say), or a page without the box, follows the link as usual. Like
+# the sort script it listens on `document`, once per parameter.
+_IN_PLACE_LINKS_JS = """
+(function () {
+  if (window.__fbInPlace_PARAM) return;
+  window.__fbInPlace_PARAM = true;
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest ? event.target.closest('SELECTOR') : null;
+    if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    var input = document.querySelector('.st-key-BOXKEY input');
+    var value = new URL(link.getAttribute('href'), window.location.href).searchParams.get('PARAM');
+    if (!input || !value) return;
+    event.preventDefault();
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value + '@' + Date.now());
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+SCROLL
+  });
+})();
+"""
+
+
+def _in_place_links_js(selector: str, param: str, box_key: str, scroll_js: str) -> str:
+    script = _IN_PLACE_LINKS_JS.replace("SELECTOR", selector).replace("BOXKEY", box_key).replace("SCROLL", scroll_js)
+    return script.replace("PARAM", param)  # last: `param` is also in the names above
+
+
+def _inject_in_place_links(js: str, box_key: str) -> None:
+    """Adds `js` to the page and draws the hidden text box (keyed `box_key`) that carries a
+    click to Python. The script commits the box with an Enter key press rather than by focusing
+    and leaving it: a browser that is not the active window sends no focus events."""
+    hide = f".st-key-{box_key}{{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;}}"
+    st.html(f"<style>{hide}</style><script>{js}</script>", unsafe_allow_javascript=True)
+    st.text_input("Show workings", key=box_key, label_visibility="collapsed")
+
+
+def _apply_pick(box_key: str, param: str) -> None:
+    """Turns a click typed into the box as "<value>@<time>" into URL parameter `param`, once per click."""
+    picked = st.session_state.get(box_key) or ""
+    if picked and picked != st.session_state.get(f"_{box_key}_applied"):
+        st.session_state[f"_{box_key}_applied"] = picked
+        st.query_params[param] = picked.rsplit("@", 1)[0]  # the time is last; the value may hold an "@"
+
+
+RATING_PICK_KEY = "rating_pick"
+RATING_LINKS_JS = _in_place_links_js("table.fb-table a.stat", RATING_PARAM, RATING_PICK_KEY, SCROLL_TO_RATING_JS)
+
+
+def inject_rating_links() -> None:
+    """Call once per page render, next to the leaderboard table: its figures open their
+    workings in place."""
+    _inject_in_place_links(RATING_LINKS_JS, RATING_PICK_KEY)
+
+
+def apply_rating_pick() -> None:
+    """Turns a click on a leaderboard figure into the `rating` URL parameter. Call early in the
+    page's script, before reading the parameter."""
+    _apply_pick(RATING_PICK_KEY, RATING_PARAM)
+
+
+FIXTURE_PICK_KEY = "fixture_pick"
+FIXTURE_LINKS_JS = _in_place_links_js("table.fb-fixtures a.score", FIXTURE_PARAM, FIXTURE_PICK_KEY, SCROLL_TO_BREAKDOWN_JS)
+
+
+def inject_fixture_links() -> None:
+    """Call once per page render, next to an upcoming-matches table: its predicted scores open
+    how they were calculated in place."""
+    _inject_in_place_links(FIXTURE_LINKS_JS, FIXTURE_PICK_KEY)
+
+
+def apply_fixture_pick() -> None:
+    """Turns a click on a predicted score into the `fixture` URL parameter. Call early in the
+    page's script, before reading the parameter."""
+    _apply_pick(FIXTURE_PICK_KEY, FIXTURE_PARAM)
+
+
+# The Players page: a click on a player's name opens their stats under the table.
+PLAYER_PARAM = "player"
+SCROLL_TO_PLAYER_JS = SCROLL_TO_BREAKDOWN_JS.replace("fixture_breakdown", "player_detail")
+PLAYER_PANEL_CSS = ".st-key-player_detail{scroll-margin-top:4.5rem;}"
+PLAYER_PICK_KEY = "player_pick"
+PLAYER_LINKS_JS = _in_place_links_js("table.fb-table a.player", PLAYER_PARAM, PLAYER_PICK_KEY, SCROLL_TO_PLAYER_JS)
+
+
+def inject_player_links() -> None:
+    """Call once per page render, next to a players table: a player's name opens their stats in place."""
+    _inject_in_place_links(PLAYER_LINKS_JS, PLAYER_PICK_KEY)
+
+
+def apply_player_pick() -> None:
+    """Turns a click on a player's name into the `player` URL parameter. Call early in the
+    page's script, before reading the parameter."""
+    _apply_pick(PLAYER_PICK_KEY, PLAYER_PARAM)
+
+
+# The Predictor's Injuries tab: a click on a team's "Players listed" figure opens who is out
+# for that team under the table. The parameter is the team's id.
+INJURY_PARAM = "injuries"
+SCROLL_TO_INJURY_JS = SCROLL_TO_BREAKDOWN_JS.replace("fixture_breakdown", "injury_breakdown")
+INJURY_PANEL_CSS = ".st-key-injury_breakdown{scroll-margin-top:4.5rem;}"
+INJURY_PICK_KEY = "injury_pick"
+INJURY_LINKS_JS = _in_place_links_js("table.fb-table a.injured", INJURY_PARAM, INJURY_PICK_KEY, SCROLL_TO_INJURY_JS)
+
+
+def inject_injury_links() -> None:
+    """Call once per page render, next to the team-impact table: a team's players-listed figure
+    opens its injured players in place."""
+    _inject_in_place_links(INJURY_LINKS_JS, INJURY_PICK_KEY)
+
+
+def apply_injury_pick() -> None:
+    """Turns a click on a players-listed figure into the `injuries` URL parameter. Call early in
+    the page's script, before reading the parameter."""
+    _apply_pick(INJURY_PICK_KEY, INJURY_PARAM)
 
 
 def fixture_key(ref: FixtureRef) -> str:

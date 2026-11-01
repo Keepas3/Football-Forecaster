@@ -91,7 +91,20 @@ def _estimate_matches_played(max_minutes: int) -> int:
     return max(1, round(max_minutes / 90))
 
 
-def resolve_current_attack_strength(team_name: str, league_code: str) -> float | None:
+@dataclass(frozen=True)
+class CurrentAttackDetail:
+    """What resolve_current_attack_detail measured: `team_rate` and `league_mean_rate`
+    are (xG + 0.7*xA) per match, over `matches_played` for the team and `teams_compared`
+    clubs for the mean; `ratio` is their quotient (1.0 = a league-average attack)."""
+
+    team_rate: float
+    league_mean_rate: float
+    matches_played: int
+    teams_compared: int
+    ratio: float
+
+
+def resolve_current_attack_detail(team_name: str, league_code: str) -> CurrentAttackDetail | None:
     """How `team_name`'s current-season attacking output (goals+xG-weighted
     assists, per match) compares to its own league's current average --
     values are centered on 1.0, the same convention dixon_coles.py's own
@@ -135,12 +148,14 @@ def resolve_current_attack_strength(team_name: str, league_code: str) -> float |
         return None
 
     rates: dict[str, float] = {}
+    matches_played_by_title: dict[str, int] = {}
     for title, players in teams_totals.items():
         totals = aggregate(players)
         matches_played = _estimate_matches_played(totals.max_minutes)
         if matches_played < MIN_MATCHES_FOR_CURRENT_FORM:
             continue
         rates[title] = totals.xg_contribution_total / matches_played
+        matches_played_by_title[title] = matches_played
 
     if matched_title not in rates or len(rates) < 2:
         return None
@@ -149,7 +164,19 @@ def resolve_current_attack_strength(team_name: str, league_code: str) -> float |
     if league_mean_rate <= 0:
         return None
 
-    return rates[matched_title] / league_mean_rate
+    return CurrentAttackDetail(
+        team_rate=rates[matched_title],
+        league_mean_rate=league_mean_rate,
+        matches_played=matches_played_by_title[matched_title],
+        teams_compared=len(rates),
+        ratio=rates[matched_title] / league_mean_rate,
+    )
+
+
+def resolve_current_attack_strength(team_name: str, league_code: str) -> float | None:
+    """Just the `ratio` of resolve_current_attack_detail (None whenever that is None)."""
+    detail = resolve_current_attack_detail(team_name, league_code)
+    return None if detail is None else detail.ratio
 
 
 def find_understat_player(

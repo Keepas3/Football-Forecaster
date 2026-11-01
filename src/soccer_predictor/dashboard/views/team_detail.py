@@ -13,6 +13,7 @@ import streamlit as st
 from soccer_predictor.config import load_leagues
 from soccer_predictor.dashboard import injury_table as it
 from soccer_predictor.dashboard import navigation
+from soccer_predictor.dashboard import squad_strength as ss
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
     HOME_WIN_COLUMN,
@@ -20,10 +21,14 @@ from soccer_predictor.dashboard.components import (
     align_rows,
     compute_top_scorer_and_assister,
     PREDICTION_STATUS_NOTE,
+    apply_fixture_pick,
     fixture_prediction_row,
+    inject_fixture_links,
+    inject_standings_sort,
     injury_column_config,
     injury_source_note,
     fixtures_table_html,
+    current_season_leaderboard,
     format_kickoff,
     live_sync_requirement_note,
     parse_fixture_key,
@@ -38,9 +43,11 @@ from soccer_predictor.dashboard.components import (
     youtube_search_url,
 )
 from soccer_predictor.dashboard.fixture_workings import render_fixture_workings
+from soccer_predictor.dashboard.pitch import squad_pitch_svg
 from soccer_predictor.ingest import injuries as injuries_module
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
+from soccer_predictor.ingest.lineups import expected_squad
 from soccer_predictor.ingest.player_importance import (
     resolve_current_attack_strength,
     resolve_team_goals_and_assists,
@@ -74,6 +81,8 @@ from soccer_predictor.storage.repository import (
 # How many past results a team's page lists, and how many the "Show more" button reveals.
 RECENT_RESULTS_DEFAULT = 10
 RECENT_RESULTS_MAX = 25
+
+PITCH_WIDTH_PX = 360  # the usual-XI pitch, in the left column of Squad strength
 
 # football-data.org's position strings, ordered goalkeeper-out rather than
 # alphabetically, with a fallback for any value not seen before.
@@ -168,6 +177,40 @@ def _schedule_entries(session, frame, league_code, params, names, locked_predict
             )
         )
     return entries
+
+
+def _render_squad_strength(league, team_name: str) -> None:
+    """The usual XI on a pitch beside a table of every player: what each one counts
+    for in the team's attack and defence ratings."""
+    st.subheader("Squad strength")
+    if league is None:
+        st.caption("Squad strength unavailable.")
+        return
+    squad = expected_squad(team_name, league)
+    if not squad:
+        st.caption(
+            "No player stats are available for this team this season, so it can't be broken down player by player."
+        )
+        return
+
+    inject_standings_sort()
+    pitch_col, table_col = st.columns([2, 3])
+    with pitch_col:
+        pitch = squad_pitch_svg(team_name, ss.usual_xi_slots(squad))
+        if pitch:
+            st.image(pitch, width=PITCH_WIDTH_PX)  # an image, so the SVG can never run script
+        st.caption(
+            "The usual XI: the goalkeeper and the ten outfield players with the most minutes this season. "
+            "A white circle is how much of the team's attack is lost without that player; a yellow one is "
+            "how much more the team concedes."
+        )
+    with table_col:
+        st.markdown(ss.squad_table_html(ss.player_strengths(squad)), unsafe_allow_html=True)
+        st.caption(
+            "Attack and Defense are what the model takes off this team when that player is out or left out of "
+            "the named lineup, the same figures it uses for injuries and lineups: attackers and midfielders "
+            "count toward attack, defenders and goalkeepers toward defense. Click a heading to sort."
+        )
 
 
 def render() -> None:
@@ -289,7 +332,23 @@ def render() -> None:
         else:
             attack_display = f"**{current_attack:.2f}**"
         st.write(f"Attack {attack_display} · Defense **{params.defense[team_id]:.2f}** (lower is better)")
+        with session_scope() as session:
+            board = current_season_leaderboard(session, league, params, team_names)
+        # A club no longer in the league is not on the leaderboard, but still has its own figures.
+        strength = ss.team_strength(board, team_id) or ss.TeamStrength(
+            attack=current_attack,
+            attack_results_only=params.attack[team_id],
+            defense=params.defense[team_id],
+            net=current_attack - params.defense[team_id],
+            rank=None,
+        )
+        st.markdown(ss.strength_line(strength))
+        form = ss.recent_form(recent_df, team_id, team_names)
+        if form:
+            st.markdown(f"Recent results, oldest to newest: {ss.form_html(form)}", unsafe_allow_html=True)
         render_team_rating_breakdown(params, team_id, team_canonical_name, recent_df)
+
+    _render_squad_strength(league, team_canonical_name)
 
     other = _other_competitions(team_id, leagues, dt.date.today(), dt.date.today() + dt.timedelta(days=60))
     include_other = False
@@ -353,6 +412,7 @@ def render() -> None:
         # The match whose workings are open: named in the URL by the predicted-score
         # link, and only ever one of the rows shown that has a prediction.
         selected_index = None
+        apply_fixture_pick()
         if st.query_params.get(FIXTURE_PARAM) is not None:
             wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
             selected_index = next(
@@ -366,6 +426,7 @@ def render() -> None:
             if selected_index is None:
                 del st.query_params[FIXTURE_PARAM]
 
+        inject_fixture_links()
         st.markdown(
             fixtures_table_html(
                 rows,

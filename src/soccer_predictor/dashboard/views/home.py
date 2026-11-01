@@ -21,9 +21,11 @@ from soccer_predictor.dashboard.components import (
     ZONE_MARKER,
     FixtureRef,
     PREDICTION_STATUS_NOTE,
+    apply_fixture_pick,
     fixture_prediction_row,
     fixtures_table_html,
     format_kickoff,
+    inject_fixture_links,
     league_option_label,
     live_sync_requirement_note,
     next_match_labels,
@@ -327,6 +329,7 @@ def render() -> None:
             # The match whose workings are open: named in the URL by the predicted-score
             # link, and only ever one of the rows shown (anything else is dropped).
             selected_index = None
+            apply_fixture_pick()
             if params is not None and st.query_params.get(FIXTURE_PARAM) is not None:
                 wanted = parse_fixture_key(st.query_params[FIXTURE_PARAM])
                 selected_index = next(
@@ -335,6 +338,7 @@ def render() -> None:
                 if selected_index is None:
                     del st.query_params[FIXTURE_PARAM]
 
+            inject_fixture_links()
             st.markdown(
                 fixtures_table_html(
                     fixture_rows,

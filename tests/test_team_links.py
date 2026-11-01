@@ -4,6 +4,7 @@ and the Team Detail page's "Include other competitions" toggle."""
 from __future__ import annotations
 
 import datetime as dt
+import re
 from types import SimpleNamespace
 
 import pandas as pd
@@ -257,3 +258,13 @@ def test_another_competitions_match_gets_a_predicted_score_link_once_it_has_a_mo
 def test_no_toggle_when_the_team_has_no_other_competitions(monkeypatch):
     at = _team_page(monkeypatch, with_other_games=False)
     assert not at.exception and len(at.toggle) == 0
+
+
+def test_a_predicted_score_on_a_team_page_opens_in_place_when_clicked(monkeypatch):
+    at = _team_page(monkeypatch, ucl_params=_ucl_params())
+    at.toggle[0].set_value(True).run()
+    key = next(re.search(r"fixture=(500-501-[0-9-]+)", m.value).group(1) for m in at.markdown if "fixture=500-501-" in m.value)
+    at.text_input(key="fixture_pick").set_value(f"{key}@1").run()
+    assert not at.exception
+    assert at.query_params["fixture"] == [key]
+    assert 'class="selected"' in _schedule_markup(at)

@@ -11,11 +11,27 @@ those clients, same as Team Detail's own squad/player-stats sections.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 
 import streamlit as st
 
 from soccer_predictor.config import load_leagues, load_manual_captains, load_manual_star_players
-from soccer_predictor.dashboard.components import league_option_label
+from soccer_predictor.dashboard.components import (
+    PLAYER_PANEL_CSS,
+    PLAYER_PARAM,
+    SCROLL_TO_PLAYER_JS,
+    apply_player_pick,
+    inject_player_links,
+    inject_standings_sort,
+    league_option_label,
+)
+from soccer_predictor.dashboard.players_table import (
+    club_team_ids,
+    parse_player_key,
+    player_key,
+    search_results_table_html,
+    top_players_table_html,
+)
 from soccer_predictor.ingest import understat_client
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
@@ -41,7 +57,7 @@ from soccer_predictor.ingest.top_players import (
     table_rows,
 )
 from soccer_predictor.storage.db import session_scope
-from soccer_predictor.storage.repository import team_crests_for_league
+from soccer_predictor.storage.repository import all_alias_texts, team_crests_for_league, teams_for_league
 
 
 def _season_label(season, single_year: bool = False) -> str:
@@ -151,7 +167,15 @@ def _render_current_season(league, row, source: str, name: str, team_name: str) 
         st.caption(f"League standing: {standing}.")
 
 
-def _render_top_players(league, selected_key: str) -> None:
+def _club_team_ids(league, rows: list[dict]) -> dict[str, int]:
+    """Our team behind each club of the top list, so the club's name can link to its page."""
+    with session_scope() as session:
+        teams = teams_for_league(session, league.code)
+        aliases = all_alias_texts(session, "api", league.code) + all_alias_texts(session, "csv", league.code)
+    return club_team_ids({row["Club"] for row in rows}, teams, aliases)
+
+
+def _render_top_players(league, selected: str | None) -> None:
     """The default view when nothing is searched: the league's top players.
     See ingest/top_players.py for where each league's numbers come from."""
     top = fetch_top_players(league)
@@ -175,27 +199,16 @@ def _render_top_players(league, selected_key: str) -> None:
     if not rows:
         st.info("No player has enough minutes yet for that ranking.")
     else:
-        event = st.dataframe(
-            rows,
-            use_container_width=True,
-            hide_index=True,
-            height=35 * (len(rows) + 1) + 3,
-            on_select="rerun",
-            selection_mode="single-row",
-            key=f"players_top_{league.code}_{metric}",
+        st.markdown(
+            top_players_table_html(rows, league.code, _club_team_ids(league, rows), selected),
+            unsafe_allow_html=True,
         )
-        selected_rows = event.selection.rows if event and event.selection else []
-        if selected_rows:
-            row = rows[selected_rows[0]]
-            with session_scope() as session:
-                found = find_squad_entry(session, league, row["Player"], row["Club"])
-            if found is not None:
-                st.session_state[selected_key] = found
-            else:
-                st.caption(f"No squad entry found for {row['Player']}.")
 
     season = f", {_season_label(top.season, league.season_display == "single_year")} season" if top.season else ""
-    notes = [f"Source: {top.source}{season}. Click a row for the player's page, or search by name above."]
+    notes = [
+        f"Source: {top.source}{season}. Click a player's name for their stats below the table, a club's name "
+        "for its page, or search by name above."
+    ]
     if SALARY not in metrics:
         notes.append("Ratings and contract values aren't available from any free source for this league.")
     if metric == XG_XA_PER_90:
@@ -203,11 +216,65 @@ def _render_top_players(league, selected_key: str) -> None:
     st.caption(" ".join(notes))
 
 
+SELECTED_PLAYER_KEY = "players_selected"
+
+
+def _at_the_named_club(found: PlayerSearchResult | None, club: str, own_clubs: list[str]) -> bool:
+    """Whether a squad entry looked up for a player at `club` is fit to open. `find_squad_entry`
+    falls back to a surname match at any club, because a stats source spells clubs its own way;
+    but when `club` is one of our own team names (a link from another page of this app) a
+    player of that surname elsewhere is somebody else, so the entry has to be at that club."""
+    if found is None:
+        return False
+    if normalize_name(club) not in {normalize_name(name) for name in own_clubs}:
+        return True
+    return normalize_name(found.team_name) == normalize_name(club)
+
+
+def _selected_player(league, key: str | None, known: Sequence[PlayerSearchResult] = ()) -> PlayerSearchResult | None:
+    """The squad entry the `player` URL parameter (`key`) names: one of the search results
+    already in hand (`known`), else looked up in the league's squads. When it names nobody
+    there, the parameter is dropped and the page says so."""
+    if key is None:
+        return None
+    parsed = parse_player_key(key)
+    found = None
+    if parsed is not None:
+        cached = st.session_state.get(SELECTED_PLAYER_KEY)
+        if cached and cached[0] == (league.code, key):
+            return cached[1]
+        found = next((r for r in known if player_key(r.player.name, r.team_name) == key), None)
+        if found is None:
+            with session_scope() as session:
+                found = find_squad_entry(session, league, *parsed)
+                own_clubs = list(teams_for_league(session, league.code).values())
+            found = found if _at_the_named_club(found, parsed[1], own_clubs) else None
+    if found is None:
+        del st.query_params[PLAYER_PARAM]
+        if parsed is not None:
+            at_club = f" at {parsed[1]}" if parsed[1] else ""
+            st.caption(
+                f"No squad entry found for {parsed[0]}{at_club}. The squad list may spell the name differently: "
+                "try searching for part of it above."
+            )
+        return None
+    st.session_state[SELECTED_PLAYER_KEY] = ((league.code, key), found)
+    return found
+
+
+def _forget_player() -> None:
+    """The player picked belongs to the league that was showing: changing league drops them."""
+    if PLAYER_PARAM in st.query_params:
+        del st.query_params[PLAYER_PARAM]
+
+
 def render() -> None:
     leagues = load_leagues()
     if not leagues:
         st.error("No leagues configured in config/leagues.yaml.")
         st.stop()
+
+    apply_player_pick()  # a click on a player's name, before the parameter is read below
 
     query_league = st.query_params.get("league")
     st.session_state.setdefault(
@@ -221,12 +288,16 @@ def render() -> None:
             options=list(leagues.keys()),
             format_func=lambda c: league_option_label(leagues[c]),
             key="players_league",
+            on_change=_forget_player,
         )
 
     league = leagues[league_code]
     st.title(f"{league.name} Players")
 
-    selected_key = f"players_selected_{league.code}"
+    selected = st.query_params.get(PLAYER_PARAM)
+    results: list[PlayerSearchResult] = []
+    inject_standings_sort()
+    inject_player_links()
 
     search_query = st.text_input("Search player name", placeholder="e.g. Salah")
     if search_query:
@@ -236,31 +307,26 @@ def render() -> None:
         if not results:
             st.info(f'No player matches "{search_query}".')
         else:
-            result_rows = [
-                {"Name": r.player.name, "Position": r.player.position, "Club": r.team_name} for r in results
-            ]
-            height = 35 * (len(result_rows) + 1) + 3
-            event = st.dataframe(
-                result_rows,
-                use_container_width=True,
-                hide_index=True,
-                height=height,
-                on_select="rerun",
-                selection_mode="single-row",
-                key=f"players_search_results_{league.code}",
-            )
-            selected_rows = event.selection.rows if event and event.selection else []
-            if selected_rows:
-                st.session_state[selected_key] = results[selected_rows[0]]
+            st.markdown(search_results_table_html(results, league.code, selected), unsafe_allow_html=True)
+            st.caption("Click a player's name for their stats below the table, or a club's name for its page.")
     else:
-        _render_top_players(league, selected_key)
+        _render_top_players(league, selected)
 
-    selection: PlayerSearchResult | None = st.session_state.get(selected_key)
+    selection = _selected_player(league, selected, results)
     if selection is None:
         return
 
+    st.html(f"<style>{PLAYER_PANEL_CSS}</style><script>{SCROLL_TO_PLAYER_JS}</script>", unsafe_allow_javascript=True)
+    with st.container(key="player_detail", border=True):
+        if st.button("Close", key=f"close_player_{league.code}"):
+            del st.query_params[PLAYER_PARAM]
+            st.rerun()
+        _render_player(league, selection)
+
+
+def _render_player(league, selection: PlayerSearchResult) -> None:
+    """One player's page: who they are, this season's numbers, and (opt-in) any past season's."""
     player = selection.player
-    st.divider()
     header_cols = st.columns([1, 4])
     with session_scope() as session:
         crest_url = team_crests_for_league(session, league.code).get(selection.team_id, "")

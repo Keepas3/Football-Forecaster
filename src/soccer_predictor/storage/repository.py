@@ -434,6 +434,20 @@ def match_count_for_season(session: Session, league_code: str, season: str) -> i
     ) or 0
 
 
+def team_ids_in_season(session: Session, league_code: str, season: str, as_of: dt.date) -> set[int]:
+    """The clubs actually in `season` of a league: every team with a result in it or a
+    fixture still to play on or after `as_of` (a promoted club's first fixtures count
+    before it has played). Empty for an edition that has no matches or fixtures yet,
+    such as the next World Cup."""
+    played = session.execute(
+        select(Match.home_team_id, Match.away_team_id).where(Match.league_code == league_code, Match.season == season)
+    ).all()
+    to_play = session.execute(
+        select(Fixture.home_team_id, Fixture.away_team_id).where(Fixture.league_code == league_code, Fixture.date >= as_of)
+    ).all()
+    return {team_id for row in (*played, *to_play) for team_id in row}
+
+
 def matches_for_team(session: Session, team_id: int) -> pd.DataFrame:
     """Newest-first: this feeds a "recent results" display, unlike
     matches_for_league (which feeds the trainer and doesn't care about order).

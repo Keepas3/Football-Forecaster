@@ -25,6 +25,12 @@ from __future__ import annotations
 CURRENT_FORM_IMPACT_CAP = 0.15  # max +/-15% swing on attack
 
 
+def current_attack_shift(relative_xg_strength: float) -> float:
+    """The fraction `relative_xg_strength` (centered on 1.0) moves attack by:
+    its distance from 1.0 limited to +/-1, times CURRENT_FORM_IMPACT_CAP."""
+    return max(-1.0, min(1.0, relative_xg_strength - 1.0)) * CURRENT_FORM_IMPACT_CAP
+
+
 def adjust_for_current_attack_form(base_attack: float, relative_xg_strength: float | None) -> float:
     """`relative_xg_strength` is centered on 1.0 (this team's current-season
     attacking rate vs. their league's current average) -- None (no
@@ -33,5 +39,4 @@ def adjust_for_current_attack_form(base_attack: float, relative_xg_strength: flo
     """
     if relative_xg_strength is None:
         return base_attack
-    shift = max(-1.0, min(1.0, relative_xg_strength - 1.0)) * CURRENT_FORM_IMPACT_CAP
-    return base_attack * (1.0 + shift)
+    return base_attack * (1.0 + current_attack_shift(relative_xg_strength))

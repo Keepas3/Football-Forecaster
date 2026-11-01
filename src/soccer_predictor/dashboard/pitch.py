@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 
 from soccer_predictor.ingest.espn_client import LineupPlayer, TeamMatchInfo
 
@@ -176,16 +177,12 @@ def _badges(player: LineupPlayer, x: float) -> str:
     return "".join(parts)
 
 
-def pitch_svg(team: TeamMatchInfo) -> str:
-    """The team's starting XI as a vertical pitch, goalkeeper at the bottom. ""
-    when there is no lineup (the caller shows a note instead)."""
-    lines = starting_lines(team)
-    if not lines:
-        return ""
+def _pitch_background(label: str) -> list[str]:
+    """The opening <svg> tag and the grass and markings, as SVG elements."""
     parts = [
         f'<svg viewBox="0 0 {VIEW_WIDTH} {VIEW_HEIGHT}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%;max-width:420px;height:auto;display:block;margin:0 auto" role="img" '
-        f'aria-label="{html.escape(team.name)} starting lineup, {html.escape(team.formation or "")}">',
+        f'aria-label="{html.escape(label)}">',
         f'<rect width="{VIEW_WIDTH}" height="{VIEW_HEIGHT}" rx="10" fill="#2e7d32"/>',
     ]
     for i in range(8):  # mowing stripes
@@ -201,16 +198,28 @@ def pitch_svg(team: TeamMatchInfo) -> str:
         f'<rect x="110" y="{VIEW_HEIGHT - 82}" width="180" height="70" {line}/>',
         f'<rect x="150" y="{VIEW_HEIGHT - 38}" width="100" height="26" {line}/>',
     ]
+    return parts
+
+
+def _outfield_y(index: int, count: int) -> float:
+    """How far up the pitch outfield line `index` (0 = the one nearest the goalkeeper) of `count` is."""
+    if count == 1:
+        return (LOWEST_OUTFIELD_Y + TOP_LINE_Y) / 2
+    return LOWEST_OUTFIELD_Y - index * (LOWEST_OUTFIELD_Y - TOP_LINE_Y) / (count - 1)
+
+
+def pitch_svg(team: TeamMatchInfo) -> str:
+    """The team's starting XI as a vertical pitch, goalkeeper at the bottom. ""
+    when there is no lineup (the caller shows a note instead)."""
+    lines = starting_lines(team)
+    if not lines:
+        return ""
+    parts = _pitch_background(f"{team.name} starting lineup, {team.formation or ''}")
 
     outfield_lines = len(lines) - 1
     badge_layers = []  # drawn after every player, so a neighbour's circle never covers a minute
     for row, players in enumerate(lines):
-        if row == 0:
-            y = GOALKEEPER_Y
-        elif outfield_lines == 1:
-            y = (LOWEST_OUTFIELD_Y + TOP_LINE_Y) / 2
-        else:
-            y = LOWEST_OUTFIELD_Y - (row - 1) * (LOWEST_OUTFIELD_Y - TOP_LINE_Y) / (outfield_lines - 1)
+        y = GOALKEEPER_Y if row == 0 else _outfield_y(row - 1, outfield_lines)
         slot = VIEW_WIDTH / (len(players) + 1)  # how far apart the players of this line are
         for index, player in enumerate(players):
             x = slot * (index + 1)
@@ -233,5 +242,71 @@ def pitch_svg(team: TeamMatchInfo) -> str:
             if badges:
                 badge_layers.append(f'<g transform="translate({x:.1f} {y:.1f})">{badges}</g>')
     parts += badge_layers
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+ROLE_ORDER = ("GK", "DEF", "MID", "FWD")  # from the goalkeeper up the pitch
+ATTACKER_FILL = "#ffffff"
+DEFENDER_FILL = "#ffe08a"
+
+
+@dataclass(frozen=True)
+class SquadSlot:
+    """One player of a team's usual XI: `figure` is the short text in his circle
+    (what the team loses without him) and `defensive` says whether it counts
+    against the defence rather than the attack, which sets the circle's colour."""
+
+    name: str
+    role: str  # one of ROLE_ORDER; anything else is drawn with the midfielders
+    figure: str
+    defensive: bool = False
+
+
+def centre_out(items: list) -> list:
+    """`items`, most important first, arranged along a line with the first in the
+    middle and the rest alternating outwards."""
+    ordered: list = []
+    for index, item in enumerate(items):
+        if index % 2 == 0:
+            ordered.append(item)
+        else:
+            ordered.insert(0, item)
+    return ordered
+
+
+def squad_pitch_svg(team_name: str, slots: list[SquadSlot]) -> str:
+    """A team's usual XI as a vertical pitch, goalkeeper at the bottom. `slots` go
+    most important first; each line puts its most important player in the middle
+    (the stats have no left or right). "" when there are no players."""
+    by_role: dict[str, list[SquadSlot]] = {role: [] for role in ROLE_ORDER}
+    for slot in slots:
+        by_role[slot.role if slot.role in by_role else "MID"].append(slot)
+    keeper = by_role["GK"]
+    outfield = [centre_out(by_role[role]) for role in ROLE_ORDER[1:] if by_role[role]]
+    lines = ([centre_out(keeper)] if keeper else []) + outfield
+    if not lines:
+        return ""
+    parts = _pitch_background(f"{team_name} usual starting eleven")
+    for row, players in enumerate(lines):
+        y = GOALKEEPER_Y if keeper and row == 0 else _outfield_y(row - (1 if keeper else 0), len(outfield))
+        space = VIEW_WIDTH / (len(players) + 1)
+        for index, player in enumerate(players):
+            x = space * (index + 1)
+            label = _label(player.name)
+            width, font_size, squeezed = label_box(label, space)
+            squeeze = f' textLength="{squeezed:.1f}" lengthAdjust="spacingAndGlyphs"' if squeezed else ""
+            fill = DEFENDER_FILL if player.defensive else ATTACKER_FILL
+            parts.append(
+                f'<g transform="translate({x:.1f} {y:.1f})">'
+                f'<circle r="{RADIUS}" fill="{fill}" stroke="#0b1d3a" stroke-width="1.5"/>'
+                f'<text y="5" font-size="13" font-weight="700" fill="#0b1d3a" text-anchor="middle" '
+                f'font-family="sans-serif">{html.escape(player.figure)}</text>'
+                f'<rect x="{-width / 2:.1f}" y="{RADIUS + 4}" width="{width:.1f}" height="18" rx="9" '
+                f'fill="#e9ecef" opacity="0.92"/>'
+                f'<text y="{RADIUS + 16.5 + (LABEL_FONT - font_size) * 0.35:.1f}" font-size="{font_size:.1f}" '
+                f'font-weight="700" fill="#2b2f36" text-anchor="middle" font-family="sans-serif"{squeeze}>'
+                f'{html.escape(label)}</text></g>'
+            )
     parts.append("</svg>")
     return "".join(parts)
