@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from soccer_predictor.config import League
 from soccer_predictor.ingest import api_client
 from soccer_predictor.ingest.fixtures import ninety_minute_score, sync_results_to_db
+from soccer_predictor.ingest.historical_csv import ingest_into_db
 from soccer_predictor.storage.models import Base
 from soccer_predictor.storage.repository import get_or_create_team, matches_for_league, upsert_team_alias
 
@@ -118,3 +120,31 @@ def test_sync_results_to_db_skips_unresolved_teams(monkeypatch):
         # counts toward `skipped`.
         assert synced == 0
         assert skipped == 1
+
+
+def test_a_result_from_the_api_and_the_csv_for_the_same_match_is_one_row(monkeypatch):
+    """A domestic league's latest round comes from the API first and from the CSV a day or more later;
+    the CSV must update that row, not add a second one (which would count the game twice)."""
+    monkeypatch.setattr(api_client, "get", lambda *args, **kwargs: RAW_RESPONSE)
+    league = League(code="EPL", name="English Premier League", csv_code="E0", api_competition_id=2021, seasons=["2425"])
+    with _session() as s:
+        city = get_or_create_team(s, "Man City", "EPL")
+        upsert_team_alias(s, city, "Manchester City FC", source="api")
+        upsert_team_alias(s, city, "Man City", source="csv")
+        inter = get_or_create_team(s, "Inter", "EPL")
+        upsert_team_alias(s, inter, "Inter FC", source="api")
+        upsert_team_alias(s, inter, "Inter", source="csv")
+        s.commit()
+
+        assert sync_results_to_db(s, league, "2425") == (1, 0)
+        s.commit()
+        csv_rows = pd.DataFrame(
+            [{"date": dt.date(2024, 9, 17), "home_team_name": "Man City", "away_team_name": "Inter",
+              "home_goals": 2, "away_goals": 0}]
+        )
+        assert ingest_into_db(s, "EPL", "2425", csv_rows) == (1, 0)
+        s.commit()
+
+        frame = matches_for_league(s, "EPL")
+        assert len(frame) == 1
+        assert (frame.iloc[0]["home_goals"], frame.iloc[0]["away_goals"]) == (2, 0)

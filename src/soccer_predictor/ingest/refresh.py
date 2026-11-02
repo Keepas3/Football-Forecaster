@@ -95,19 +95,24 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
         except MissingApiKey as exc:
             result.fixtures_error = str(exc)
 
-        if league.csv_code is None:
-            # Only these leagues rely on football-data.org for match
-            # *history* too (domestic leagues get it from the CSV
-            # pipeline, see fetch_historical_data.py) -- keep the current
-            # season's results fresh the same way fixtures are above.
-            try:
-                with session_scope() as session:
+        # The current season's results. A league with no football-data.co.uk CSV
+        # (cups, Nations League) has no other source, so its teams are seeded from
+        # the API too. A domestic league's history is the CSV (see
+        # fetch_historical_data.py), but that file is published a day or more after
+        # the games, so the latest round was missing from the form column, the
+        # table and the Track Record until then. football-data.org marks a game
+        # finished within minutes: it supplies the recent results here, and the CSV
+        # later writes over the same rows (matches are keyed on league, date and
+        # teams, so there is never a second row).
+        try:
+            with session_scope() as session:
+                if league.csv_code is None:
                     seed_teams_from_api(session, league)
-                    result.results_synced, result.results_skipped = sync_results_to_db(
-                        session, league, league.seasons[-1]
-                    )
-            except (MissingApiKey, requests.RequestException) as exc:
-                result.results_error = str(exc)
+                result.results_synced, result.results_skipped = sync_results_to_db(
+                    session, league, league.seasons[-1]
+                )
+        except (MissingApiKey, requests.RequestException) as exc:
+            result.results_error = str(exc)
 
     # Injuries first, so the forecasts locked below already count them. The slow
     # per-team ESPN sync is for the full refresh only; the Premier League, La Liga

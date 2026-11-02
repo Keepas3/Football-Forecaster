@@ -158,6 +158,7 @@ def _record_calls(monkeypatch):
     monkeypatch.setattr(refresh, "sync_results_to_db_espn", fake("results_espn_full", (99, 0)))
     monkeypatch.setattr(refresh, "sync_recent_results_to_db_espn", fake("results_espn_recent", (6, 0)))
     monkeypatch.setattr(refresh, "sync_fixtures_to_db", fake("fixtures_fd", (7, 0)))
+    monkeypatch.setattr(refresh, "sync_results_to_db", fake("results_fd", (3, 0)))
     monkeypatch.setattr(refresh, "load_latest_params", lambda *a, **k: None)
     monkeypatch.setattr(refresh.injuries_module, "sync_injuries_to_db", fake("injuries", (5, 0)))
     return calls
@@ -189,8 +190,9 @@ def test_quick_refresh_of_a_football_data_league_skips_only_injuries(monkeypatch
 
     result = refresh.refresh_league(serie_a, quick=True)
 
-    assert [n for n, _ in calls] == ["fixtures_fd"]
-    assert result.fixtures_synced == 7 and result.injuries_synced == 0
+    # the recent results are one more request, so the form column and table don't wait for the CSV
+    assert [n for n, _ in calls] == ["fixtures_fd", "results_fd"]
+    assert result.fixtures_synced == 7 and result.results_synced == 3 and result.injuries_synced == 0
 
 
 def test_quick_refresh_of_la_liga_and_the_champions_league_also_pulls_their_single_request_injury_feeds(monkeypatch):

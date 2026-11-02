@@ -455,7 +455,10 @@ uv run pytest
   season in each league's `seasons` list continuously as real games are
   played, so `scripts/fetch_historical_data.py` always re-downloads that
   one season's CSV (every earlier season is treated as concluded and only
-  fetched once). For MLS, the same applies through ESPN instead of a CSV.
+  fetched once). That file is published a day or more after the games, so
+  the refresh also takes each league's finished matches from football-data.org
+  (one request a league) and the CSV later writes over the same rows. For
+  MLS, the same applies through ESPN instead of a CSV.
   Re-run periodically, and `run_training.py` after, to pick up new results.
 - **Prediction accuracy tracking only covers predictions made after the
   feature shipped.** A prediction is only graded if it was locked in as a

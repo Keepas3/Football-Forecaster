@@ -32,19 +32,22 @@ def _patch_common(monkeypatch, params=None):
     monkeypatch.setattr(refresh, "session_scope", lambda: _FakeSession())
 
 
-def test_csv_league_never_calls_results_sync(monkeypatch):
+def test_csv_league_also_takes_recent_results_from_the_api_without_seeding_its_teams(monkeypatch):
+    """The CSV is published a day or more after the games, so the latest round (and with it the form
+    column) would otherwise be missing; the API supplies it, and the CSV later writes over the same rows."""
     _patch_common(monkeypatch)
     monkeypatch.setattr(refresh, "sync_fixtures_to_db", lambda *a, **k: (10, 0))
+    monkeypatch.setattr(refresh, "sync_results_to_db", lambda *a, **k: (9, 1))
 
     def fail_if_called(*a, **k):
-        raise AssertionError("sync_results_to_db should never be called for a CSV-backed league")
+        raise AssertionError("a CSV-backed league's teams come from the CSV pipeline, not the API")
 
-    monkeypatch.setattr(refresh, "sync_results_to_db", fail_if_called)
+    monkeypatch.setattr(refresh, "seed_teams_from_api", fail_if_called)
 
     result = refresh.refresh_league(CSV_LEAGUE)
 
     assert result.fixtures_synced == 10
-    assert result.results_synced == 0
+    assert (result.results_synced, result.results_skipped) == (9, 1)
     assert result.results_error is None
     assert result.injuries_synced == 5
     assert result.injuries_skipped == 1
@@ -114,9 +117,25 @@ def test_fixtures_failure_does_not_block_later_steps(monkeypatch):
     assert result.injuries_synced == 5
 
 
+def test_a_failed_results_fetch_for_a_csv_league_is_captured_and_later_steps_still_run(monkeypatch):
+    _patch_common(monkeypatch, params=object())
+    monkeypatch.setattr(refresh, "sync_fixtures_to_db", lambda *a, **k: (10, 0))
+
+    def raise_error(*a, **k):
+        raise requests.RequestException("api down")
+
+    monkeypatch.setattr(refresh, "sync_results_to_db", raise_error)
+
+    result = refresh.refresh_league(CSV_LEAGUE)
+
+    assert result.results_error == "api down" and result.results_synced == 0
+    assert result.locks_created == 3 and result.injuries_synced == 5
+
+
 def test_no_trained_model_means_zero_snapshots_no_error(monkeypatch):
     _patch_common(monkeypatch, params=None)
     monkeypatch.setattr(refresh, "sync_fixtures_to_db", lambda *a, **k: (0, 0))
+    monkeypatch.setattr(refresh, "sync_results_to_db", lambda *a, **k: (0, 0))
 
     result = refresh.refresh_league(CSV_LEAGUE)
 

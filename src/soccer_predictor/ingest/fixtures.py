@@ -96,10 +96,10 @@ def sync_fixtures_to_db(session: Session, league: League) -> tuple[int, int]:
 def fetch_finished_matches(league: League, season_year: int) -> list[dict]:
     """Raw API rows for one season of this league's completed matches.
 
-    Only used for leagues with no football-data.co.uk CSV (see
-    League.csv_code) -- those are the only ones missing a `matches` history
-    to build standings/train from, since domestic leagues get theirs from
-    the CSV pipeline instead (scripts/fetch_historical_data.py).
+    The only history for a league with no football-data.co.uk CSV (see
+    League.csv_code). A domestic league gets its history from the CSV
+    pipeline (scripts/fetch_historical_data.py), whose latest round arrives a
+    day or more late, so this fills in those games until the CSV catches up.
     """
     data = api_client.get(
         f"/competitions/{league.api_competition_id}/matches",
