@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import time
+
+import pytest
 import requests
 
 from soccer_predictor.ingest import understat_client
@@ -302,3 +307,86 @@ def test_clubs_understat_spells_differently_are_found_by_alias(monkeypatch):
 
     assert {p.name for p in understat_client.fetch_team_season("FC Koln", "BUNDESLIGA", 2026)} == {"Said El Mala"}
     assert {p.name for p in understat_client.fetch_team_season("M'gladbach", "BUNDESLIGA", 2026)} == {"Haris Tabakovic"}
+
+
+# --- when Understat cannot be reached ---------------------------------------------------------------
+
+
+def _connect_timeout(*args, **kwargs):
+    raise requests.ConnectTimeout("understat.com did not answer")
+
+
+def test_a_host_that_does_not_answer_gets_one_short_attempt_and_is_then_left_alone(tmp_path, monkeypatch):
+    """Understat has been seen not accepting connections at all. Waiting out three 15-second connect
+    timeouts for every league, every visit made the Players page take minutes."""
+    monkeypatch.setattr(understat_client, "CACHE_DIR", tmp_path)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs)
+        raise requests.ConnectTimeout("understat.com did not answer")
+
+    monkeypatch.setattr(understat_client.http_session, "post", post)
+
+    with pytest.raises(requests.ConnectionError):
+        understat_client._fetch_league_players("EPL", 2026)
+    assert len(calls) == 1
+    assert calls[0]["single_attempt"] is True  # no connect retries
+    assert calls[0]["timeout"] == (understat_client.CONNECT_TIMEOUT_SECONDS, understat_client.READ_TIMEOUT_SECONDS)
+    assert understat_client.CONNECT_TIMEOUT_SECONDS <= 5
+
+    with pytest.raises(requests.ConnectionError):  # another league, a moment later: refused without a request
+        understat_client._fetch_league_players("Serie A", 2026)
+    assert len(calls) == 1
+
+    monkeypatch.setattr(understat_client, "_unreachable_until", 0.0)  # the rest is over
+    with pytest.raises(requests.ConnectionError):
+        understat_client._fetch_league_players("EPL", 2026)
+    assert len(calls) == 2
+
+
+def test_the_public_functions_just_return_nothing_while_it_is_unreachable(tmp_path, monkeypatch):
+    monkeypatch.setattr(understat_client, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(understat_client.http_session, "post", _connect_timeout)
+
+    assert understat_client.fetch_league_players("EPL", 2026) == []
+    assert understat_client.fetch_team_season("Arsenal", "EPL", 2026) == []
+    assert understat_client.fetch_all_teams_totals("EPL", 2026) == {}
+
+
+def test_a_saved_copy_of_any_age_is_used_when_understat_cannot_be_reached(tmp_path, monkeypatch):
+    monkeypatch.setattr(understat_client, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(understat_client.http_session, "post", _connect_timeout)
+    cache_file = understat_client._cache_path("EPL", 2026)
+    cache_file.write_text(json.dumps(LEAGUE_ROWS), encoding="utf-8")
+    week_ago = time.time() - 7 * 24 * 3600
+    os.utime(cache_file, (week_ago, week_ago))  # long past its day
+
+    assert understat_client._fetch_league_players("EPL", 2026) == LEAGUE_ROWS  # tried, failed, used the old copy
+    assert understat_client._fetch_league_players("EPL", 2026) == LEAGUE_ROWS  # and while it rests
+    assert understat_client.fetch_league_players("EPL", 2026) != []
+
+
+def test_a_server_error_uses_the_saved_copy_without_putting_understat_to_rest(tmp_path, monkeypatch):
+    monkeypatch.setattr(understat_client, "CACHE_DIR", tmp_path)
+    cache_file = understat_client._cache_path("EPL", 2026)
+    cache_file.write_text(json.dumps(LEAGUE_ROWS), encoding="utf-8")
+    old = time.time() - 3 * 24 * 3600
+    os.utime(cache_file, (old, old))
+
+    class ServerError:
+        def raise_for_status(self):
+            raise requests.HTTPError("503 Service Unavailable")
+
+    monkeypatch.setattr(understat_client.http_session, "post", lambda *a, **k: ServerError())
+
+    assert understat_client._fetch_league_players("EPL", 2026) == LEAGUE_ROWS
+    assert understat_client._unreachable_until == 0.0  # it answered, so it is asked again next time
+
+
+def test_a_fresh_saved_copy_is_used_without_asking_understat(tmp_path, monkeypatch):
+    monkeypatch.setattr(understat_client, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(understat_client.http_session, "post", lambda *a, **k: pytest.fail("fresh copy: no request"))
+    understat_client._cache_path("EPL", 2026).write_text(json.dumps(LEAGUE_ROWS), encoding="utf-8")
+
+    assert understat_client._fetch_league_players("EPL", 2026) == LEAGUE_ROWS

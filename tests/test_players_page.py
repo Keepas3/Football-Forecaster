@@ -15,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 
 from soccer_predictor.dashboard.views import players as players_view
 from soccer_predictor.ingest import defensive_players as dp
+from soccer_predictor.ingest import top_players
 from soccer_predictor.ingest.defensive_players import DefensivePlayer, DefensivePlayers
 from soccer_predictor.ingest.squad import PlayerSearchResult, SquadPlayer
 from soccer_predictor.ingest.top_players import TopPlayer, TopPlayers
@@ -110,6 +111,18 @@ def test_the_top_players_are_an_html_table_with_player_and_club_links(page):
     assert ">Mystery FC<" in markup and "Mystery FC</a>" not in markup  # a club we cannot place is plain text
     assert not _close_buttons(at) and 'class="selected"' not in markup
     assert any("Click a player's name for their stats below the table" in c.value for c in at.caption)
+
+
+def test_the_page_says_where_the_list_came_from_when_the_full_player_source_is_down(page, monkeypatch):
+    run, _ = page
+    fallback = TopPlayers([TopPlayer("Bukayo Saka", "Arsenal FC", 5, 3)], top_players.UNDERSTAT_FALLBACK_SOURCE, None)
+    monkeypatch.setattr(players_view, "fetch_top_players", lambda league: fallback)
+
+    at = run()
+
+    assert not at.exception and _table(at) is not None
+    notes = " ".join(c.value for c in at.caption)
+    assert "Source: football-data.org (top scorers only: Understat's full player list is not available just now)." in notes
 
 
 def test_a_click_on_a_players_name_opens_their_stats_under_the_table_without_reloading(page):

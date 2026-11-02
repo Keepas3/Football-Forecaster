@@ -36,6 +36,7 @@ TOP_N = 15
 # goal would otherwise top the list.
 MIN_MINUTES_PER_90 = 450
 SCORERS_CACHE_TTL_SECONDS = 6 * 3600
+UNDERSTAT_FALLBACK_SOURCE = "football-data.org (top scorers only: Understat's full player list is not available just now)"
 
 GOALS = "goals"
 ASSISTS = "assists"
@@ -237,6 +238,12 @@ def fetch_top_players(league: League) -> TopPlayers:
         if not rows:  # a new season with nothing played yet: show last season's
             season -= 1
             rows = understat_client.fetch_league_players(league.code, season)
+        if not rows and league.api_competition_id is not None:
+            # Understat is down (it has no official API and sometimes is) or has nothing: the
+            # league's top scorers, which a free API keeps, beat a page with no players on it.
+            scorers = _football_data_scorers(league.api_competition_id)
+            if scorers:
+                return TopPlayers(scorers, UNDERSTAT_FALLBACK_SOURCE, None)
         return TopPlayers(
             [
                 TopPlayer(

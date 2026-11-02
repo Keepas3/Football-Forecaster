@@ -28,8 +28,10 @@ def _no_real_year_scoreboard_requests(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _clear_in_memory_caches():
     """ttl_memo results would otherwise carry one test's patched data into the next."""
-    from soccer_predictor.ingest import memo
+    from soccer_predictor.ingest import memo, understat_client
 
     memo.clear_all()
+    understat_client._unreachable_until = 0.0  # the rest it takes after a failed request
     yield
     memo.clear_all()
+    understat_client._unreachable_until = 0.0

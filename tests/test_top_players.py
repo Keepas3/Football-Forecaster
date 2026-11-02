@@ -294,3 +294,63 @@ def test_league_rankings_share_ranks_on_ties_and_skip_metrics_the_source_lacks()
     standings_c = {label: (rank, total) for label, rank, total in top_players.league_rankings(players, players[2])}
     assert standings_c["xG + xA per 90"] == (1, 1) and standings_c["Salary (guaranteed)"] == (1, 1)
     assert standings_c["Goals"] == (3, 3)
+
+
+# --- when Understat cannot be reached ----------------------------------------------------------------
+
+EPL_WITH_API = League(code="EPL", name="English Premier League", seasons=["2526", "2627"], csv_code="E0", api_competition_id=2021)
+SCORERS = {
+    "scorers": [
+        {"player": {"name": "Haaland", "section": "Offence"}, "team": {"name": "Man City"}, "goals": 9, "assists": 2},
+        {"player": {"name": "Saka", "section": "Offence"}, "team": {"name": "Arsenal"}, "goals": 5, "assists": 6},
+    ]
+}
+
+
+def _understat_down(monkeypatch):
+    seen = []
+
+    def down(slug, season):
+        seen.append(season)
+        raise requests.ConnectTimeout("understat.com did not answer")
+
+    monkeypatch.setattr(understat_client, "_fetch_league_players", down)
+    return seen
+
+
+def test_the_league_shows_its_top_scorers_when_understat_is_down(monkeypatch):
+    _understat_down(monkeypatch)
+    monkeypatch.setattr(api_client, "get", lambda path, **kw: SCORERS)
+
+    result = fetch_top_players(EPL_WITH_API)
+
+    assert [(p.name, p.team, p.goals, p.assists) for p in result.players] == [("Haaland", "Man City", 9, 2), ("Saka", "Arsenal", 5, 6)]
+    assert result.source == top_players.UNDERSTAT_FALLBACK_SOURCE and result.season is None
+    assert available_metrics(result.players) == [GOALS, "assists", GOALS_PLUS_ASSISTS]  # no minutes, so no xG + xA
+
+
+def test_understat_is_still_preferred_when_it_answers(monkeypatch):
+    rows = [{"player_name": "Mover", "team_title": "Arsenal", "position": "F", "time": "900", "goals": "4", "assists": "1", "xG": "3.2", "xA": "0.9"}]
+    monkeypatch.setattr(understat_client, "_fetch_league_players", lambda slug, season: rows)
+    monkeypatch.setattr(api_client, "get", lambda *a, **k: pytest.fail("Understat answered: no need for the scorers"))
+
+    assert fetch_top_players(EPL_WITH_API).source == "Understat"
+
+
+def test_with_nothing_from_either_source_the_league_has_no_players_rather_than_an_error(monkeypatch):
+    _understat_down(monkeypatch)
+
+    def down(*a, **k):
+        raise requests.RequestException("down")
+
+    monkeypatch.setattr(api_client, "get", down)
+
+    result = fetch_top_players(EPL_WITH_API)
+    assert result.players == [] and result.source == "Understat"
+
+
+def test_a_league_without_a_football_data_competition_has_no_fallback(monkeypatch):
+    _understat_down(monkeypatch)
+    monkeypatch.setattr(api_client, "get", lambda *a, **k: pytest.fail("this league has no competition to ask about"))
+
+    assert fetch_top_players(EPL).players == []  # EPL above has no api_competition_id

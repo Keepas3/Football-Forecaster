@@ -50,6 +50,14 @@ CACHE_DIR = DATA_DIR / "cache" / "understat"
 CACHE_TTL_SECONDS = 24 * 3600
 # How long a parsed whole-league result is kept in memory (see ingest/memo.py).
 TOTALS_MEMO_SECONDS = 300
+# Understat has no official API and is sometimes unreachable (checked 2026-11: connections to it
+# simply time out). A page waits on it, so give up on connecting quickly, and once a request has
+# failed to connect or has timed out leave it alone for a while: every league page and every visitor
+# would otherwise each wait out their own connect timeouts (about 90 seconds for the Players page).
+CONNECT_TIMEOUT_SECONDS = 4
+READ_TIMEOUT_SECONDS = 15
+OUTAGE_BACKOFF_SECONDS = 600
+_unreachable_until = 0.0  # time.monotonic() until which requests are refused (see _request_league_players)
 
 TEAM_NAME_FUZZY_THRESHOLD = 75  # same tolerance as this app's other team-name matching (e.g. asa_client.py)
 # Our football-data.org club names that fuzzy matching cannot resolve on its own, mapped
@@ -107,32 +115,67 @@ def _cache_path(league_slug: str, season: int) -> Path:
     return CACHE_DIR / f"{key}.json"
 
 
+def _cached_players(cache_file: Path, max_age: float | None) -> list[dict] | None:
+    """The saved rows, or None when there are none, they are unreadable, or they are older
+    than `max_age` seconds (None: any age)."""
+    try:
+        if max_age is not None and time.time() - cache_file.stat().st_mtime >= max_age:
+            return None
+        return json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _request_league_players(league_slug: str, season: int) -> list[dict] | None:
+    """One POST for the whole league: its rows, or None if Understat says it has none to give.
+    Raises requests.RequestException, straight away while Understat is being left alone after
+    a failed connection or a timeout (OUTAGE_BACKOFF_SECONDS)."""
+    global _unreachable_until
+    if time.monotonic() < _unreachable_until:
+        raise requests.ConnectionError("Understat did not answer a moment ago; not asking again yet")
+    try:
+        response = http_session.post(
+            f"{BASE_URL}/main/getPlayersStats/",
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{BASE_URL}/league/{league_slug}/{season}",
+            },
+            data={"league": league_slug, "season": str(season)},
+            timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
+            single_attempt=True,
+        )
+    except (requests.ConnectionError, requests.Timeout):
+        _unreachable_until = time.monotonic() + OUTAGE_BACKOFF_SECONDS
+        raise
+    response.raise_for_status()
+    data = response.json()
+    if not data.get("success"):
+        return None
+    return data.get("players", [])
+
+
 def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
     """Raw player rows for every team in `league_slug`/`season` -- one POST
     covers the whole league, so team resolution below is a local fuzzy
     match, the same fetch-once-match-locally approach asa_client.py uses.
+    When Understat cannot be reached the last saved copy is used, however old:
+    last week's numbers beat none.
     """
     cache_file = _cache_path(league_slug, season)
-    if cache_file.exists():
-        age = time.time() - cache_file.stat().st_mtime
-        if age < CACHE_TTL_SECONDS:
-            return json.loads(cache_file.read_text(encoding="utf-8"))
+    fresh = _cached_players(cache_file, CACHE_TTL_SECONDS)
+    if fresh is not None:
+        return fresh
 
-    response = http_session.post(
-        f"{BASE_URL}/main/getPlayersStats/",
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{BASE_URL}/league/{league_slug}/{season}",
-        },
-        data={"league": league_slug, "season": str(season)},
-        timeout=15,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if not data.get("success"):
+    try:
+        players = _request_league_players(league_slug, season)
+    except (requests.RequestException, ValueError):
+        stale = _cached_players(cache_file, None)
+        if stale is not None:
+            return stale
+        raise
+    if players is None:
         return []
-    players = data.get("players", [])
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(json.dumps(players), encoding="utf-8")

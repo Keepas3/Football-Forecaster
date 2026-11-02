@@ -279,7 +279,8 @@ def _render_defending(league, name: str, team_name: str) -> None:
 def _render_top_players(league, selected: str | None) -> None:
     """The default view when nothing is searched: the league's top players.
     See ingest/top_players.py for where each league's numbers come from."""
-    top = fetch_top_players(league)
+    with st.spinner("Loading the league's players..."):  # a cold start fetches them over the network
+        top = fetch_top_players(league)
     if not top.players:
         st.caption("Type a player or club name to search across every team in this league.")
         return
