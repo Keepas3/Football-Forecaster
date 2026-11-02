@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from soccer_predictor.model.dixon_coles import DixonColesParams
-from soccer_predictor.prediction import tracking
 from soccer_predictor.prediction.tracking import (
     NO_SKILL_PROBS,
     _log_loss,

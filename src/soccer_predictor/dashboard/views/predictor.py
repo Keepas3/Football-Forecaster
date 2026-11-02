@@ -316,6 +316,10 @@ def _injury_data(params, team_names: dict[int, str]) -> tuple[pd.DataFrame, dict
     return it.players_frame(rows), ratings
 
 
+def _close_team_injuries() -> None:
+    st.query_params.pop(INJURY_PARAM, None)
+
+
 def _render_team_injuries(league, frame: pd.DataFrame, team: str, team_ids: dict[str, int], close_key: str) -> None:
     """Who is out for `team`, under the team-impact table, with a Close button that drops the
     `injuries` parameter again."""
@@ -324,9 +328,7 @@ def _render_team_injuries(league, frame: pd.DataFrame, team: str, team_ids: dict
     st.html(f"<style>{INJURY_PANEL_CSS}</style><script>{SCROLL_TO_INJURY_JS}</script>", unsafe_allow_javascript=True)
     with st.container(key="injury_breakdown", border=True):
         st.markdown(f"#### Injured players: {_escape_markdown(team)}")
-        if st.button("Close", key=close_key):
-            del st.query_params[INJURY_PARAM]
-            st.rerun()
+        st.button("Close", key=close_key, on_click=_close_team_injuries)
         st.caption(
             f"{counts['players']} listed: {counts[it.OUT]} out · {counts[it.DOUBTFUL]} doubtful · "
             f"{counts[it.SUSPENDED]} suspended. The biggest impact on the team comes first."
@@ -339,21 +341,32 @@ def _render_team_injuries(league, frame: pd.DataFrame, team: str, team_ids: dict
         )
 
 
+def _selected_injury_team(frame: pd.DataFrame, team_ids: dict[str, int]) -> str | None:
+    """The team whose injured players the `injuries` URL parameter has open: only ever a team with
+    someone listed, so anything else drops the parameter."""
+    if st.query_params.get(INJURY_PARAM) is None:
+        return None
+    team = parse_injury_team(st.query_params[INJURY_PARAM], team_ids, set(frame["Team"]))
+    if team is None:
+        del st.query_params[INJURY_PARAM]
+    return team
+
+
+@st.fragment
 def _render_injuries_tab(
-    league,
-    frame: pd.DataFrame,
-    ratings: dict,
-    team_ids: dict[str, int],
-    selected: str | None,
-    tz_name: str,
-    page_params: str,
+    league, frame: pd.DataFrame, ratings: dict, team_ids: dict[str, int], tz_name: str, page_params: str
 ) -> None:
     """Everyone currently listed as out, doubtful or suspended, as a table that
     can be filtered, searched and sorted, plus what that does to each team's
     ratings (dashboard/injury_table.py). A team's name opens its page; in the
     team-impact table its number of players listed opens who is out, under the table
-    (`selected` is that team, if one is open; `tz_name` and `page_params` ride in the
-    link to it)."""
+    (`tz_name` and `page_params` ride in the link to it).
+
+    A fragment, so a click here, or a filter, reruns only this tab rather than the whole
+    page (every fixture's forecast, the leaderboard): that was most of the wait. It
+    reads the open team from the URL itself for the same reason."""
+    apply_injury_pick()
+    selected = _selected_injury_team(frame, team_ids)
     if frame.empty:
         st.info("No injuries on record.")
         if not injuries_module.has_automatic_feed(league):
@@ -699,11 +712,7 @@ def render() -> None:
     # someone listed. That link would also land on the first tab, so the Injuries tab is opened.
     injuries_frame, injury_ratings = _injury_data(params, team_names)
     apply_injury_pick()
-    injury_selected = None
-    if st.query_params.get(INJURY_PARAM) is not None:
-        injury_selected = parse_injury_team(st.query_params[INJURY_PARAM], id_by_name, set(injuries_frame["Team"]))
-        if injury_selected is None:
-            del st.query_params[INJURY_PARAM]
+    injury_selected = _selected_injury_team(injuries_frame, id_by_name)
 
     opened_tab = LEADERBOARD_TAB if rating_selected is not None else INJURIES_TAB if injury_selected else None
     fixtures_tab, leaderboard_tab, injuries_tab, notes_tab = st.tabs(
@@ -848,7 +857,6 @@ def render() -> None:
             injuries_frame,
             injury_ratings,
             id_by_name,
-            injury_selected,
             tz_name=st.query_params.get(TIMEZONE_QUERY_KEY, ""),
             page_params=f"&from={start.isoformat()}&to={end.isoformat()}",
         )

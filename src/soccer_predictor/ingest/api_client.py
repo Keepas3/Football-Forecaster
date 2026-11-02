@@ -16,7 +16,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-import requests
 
 from soccer_predictor.config import DATA_DIR, football_data_org_api_key
 from soccer_predictor.ingest import http_session

@@ -123,31 +123,6 @@ def match_detail_query_params(
     return params
 
 
-def render_match_detail_button(
-    league: League,
-    home_id: int,
-    away_id: int,
-    date: dt.date,
-    key: str,
-    from_team_id: int | None = None,
-    season: str | None = None,
-) -> None:
-    """A "Match details" button that opens this page for the given match.
-    Does nothing for leagues with no ESPN slug. Pass `from_team_id` when the
-    button sits on a team's page so Back returns to that team."""
-    if not league.espn_league_slug:
-        return
-    # Imported here, not at module level: navigation imports every view (this
-    # one included), so a top-level import would be circular.
-    from soccer_predictor.dashboard import navigation
-
-    if st.button("Match details →", key=key):
-        st.switch_page(
-            navigation.match_detail_page(),
-            query_params=match_detail_query_params(league.code, home_id, away_id, date, from_team_id, season),
-        )
-
-
 def _int_param(name: str) -> int | None:
     try:
         return int(st.query_params.get(name))

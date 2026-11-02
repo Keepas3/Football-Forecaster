@@ -15,7 +15,6 @@ was best on the other half -- the number to believe.
 from __future__ import annotations
 
 import datetime as dt
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -111,7 +110,3 @@ def paired_bootstrap(
     rng = np.random.default_rng(seed)
     means = difference[rng.integers(0, len(difference), size=(resamples, len(difference)))].mean(axis=1)
     return float(difference.mean()), float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
-
-
-def mean_or_nan(values: np.ndarray) -> float:
-    return float(values.mean()) if len(values) else math.nan

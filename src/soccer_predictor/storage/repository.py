@@ -34,20 +34,9 @@ def update_team_crest(session: Session, team_id: int, crest_url: str | None) -> 
         team.crest_url = crest_url
 
 
-def update_api_football_team_id(session: Session, team_id: int, api_football_team_id: int | None) -> None:
-    """Sets Team.api_football_team_id. Never clobbers a known id with a
-    falsy one -- same "learn once, keep forever" pattern as update_team_crest.
-    """
-    if not api_football_team_id:
-        return
-    team = session.get(Team, team_id)
-    if team is not None:
-        team.api_football_team_id = api_football_team_id
-
-
 def update_espn_team_id(session: Session, team_id: int, espn_team_id: int | None) -> None:
     """Sets Team.espn_team_id. Never clobbers a known id with a falsy one --
-    same "learn once, keep forever" pattern as update_api_football_team_id.
+    same "learn once, keep forever" pattern as update_team_crest.
     """
     if not espn_team_id:
         return

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
@@ -154,3 +154,54 @@ def test_a_blank_or_unmatched_club_query_adds_nothing(club_session, monkeypatch)
     assert squad.search_players_in_league(club_session, LEAGUE, "Zzzznonexistent", include_club=True) == []
     # an empty query is not "every club": the page never searches for one, but the function stays safe
     assert squad._clubs_named(club_session, LEAGUE, {1: "Arsenal"}, "   ") == set()
+
+
+# --- how much work a search is -------------------------------------------------------------------
+
+
+def _count_statements(session, run) -> int:
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, *args):
+        seen.append(statement)
+
+    engine = session.get_bind()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        run()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return len(seen)
+
+
+def test_a_search_costs_the_same_number_of_queries_however_many_teams_the_league_has(session, monkeypatch):
+    """The Players page searches every team of the league each time a player is opened. Matching the
+    API's names to our teams used to cost two queries per team per entry, which took over a second
+    for the Premier League (relegated clubs stay in the table)."""
+    monkeypatch.setattr(api_client, "get", lambda *a, **k: RAW_RESPONSE)
+
+    def search():
+        assert [r.player.name for r in squad.search_players_in_league(session, LEAGUE, "saka", include_club=True)] == ["Bukayo Saka"]
+
+    few = _count_statements(session, search)
+    for number in range(30):  # clubs the API's response has no entry for
+        get_or_create_team(session, f"Old Club {number}", "EPL")
+    session.commit()
+    many = _count_statements(session, search)
+
+    assert many - few <= 1  # at most the one extra row-fetching query, never one per team
+
+
+def test_a_team_the_api_has_no_entry_for_has_no_squad(session, monkeypatch):
+    monkeypatch.setattr(api_client, "get", lambda *a, **k: RAW_RESPONSE)
+    old = get_or_create_team(session, "Old Club", "EPL")
+    arsenal = get_or_create_team(session, "Arsenal", "EPL")
+    session.commit()
+
+    assert squad.fetch_squad_for_team(session, LEAGUE, old.id) is None
+    assert [p.name for p in squad.fetch_squad_for_team(session, LEAGUE, arsenal.id)] == ["Bukayo Saka", "Kepa Arrizabalaga"]
+    # a caller that already worked the entries out hands them in, and nothing is looked up again
+    entries = squad._raw_entries_by_team_id(session, LEAGUE)
+    assert set(entries) == {arsenal.id, get_or_create_team(session, "Chelsea", "EPL").id}
+    assert squad.fetch_squad_for_team(session, LEAGUE, arsenal.id, raw_entries={}) is None
+    assert squad.fetch_squad_for_team(session, LEAGUE, arsenal.id, raw_entries=entries) is not None

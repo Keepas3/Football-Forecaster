@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import check_grad, minimize
 
-from soccer_predictor.model import dixon_coles as dc
 from soccer_predictor.model.dixon_coles import _fit_objective, _neg_log_likelihood, fit_league
 from soccer_predictor.model.time_weighting import match_weights
 

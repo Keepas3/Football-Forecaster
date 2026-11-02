@@ -14,7 +14,6 @@ import re
 import streamlit as st
 
 from soccer_predictor.config import League, load_leagues
-from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
     LIVE_MATCH_WINDOW,

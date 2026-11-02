@@ -16,7 +16,6 @@ from soccer_predictor.dashboard import navigation
 from soccer_predictor.dashboard import squad_strength as ss
 from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
-    HOME_WIN_COLUMN,
     FixtureRef,
     align_rows,
     compute_top_scorer_and_assister,
@@ -503,7 +502,7 @@ def render() -> None:
         )
         if len(results_all) > RECENT_RESULTS_DEFAULT:
             toggle_label = (
-                f"Show fewer results"
+                "Show fewer results"
                 if show_more
                 else f"Show more results (up to {min(len(results_all), RECENT_RESULTS_MAX)})"
             )

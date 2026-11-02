@@ -182,7 +182,7 @@ def test_the_team_impact_table_links_each_team_and_its_players_listed_figure(pag
     assert _names(markup, 1) == ["1", "2"]
     hrefs = re.findall(r'href="([^"]*)"', markup)
     assert f"/team_detail?league=EPL&amp;team={ids['Man City']}" in hrefs
-    assert f"?league=EPL&amp;from=" in " ".join(h for h in hrefs if "injuries=" in h)
+    assert "?league=EPL&amp;from=" in " ".join(h for h in hrefs if "injuries=" in h)
     assert any(h.endswith(f"&amp;injuries={ids['Arsenal']}") for h in hrefs)
 
 

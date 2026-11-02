@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 import soccer_predictor.ingest.player_importance as player_importance
 from soccer_predictor.ingest.player_importance import (
     DEFAULT_API_IMPORTANCE_WEIGHT,
-    AsaTeamTotals,
-    UnderstatTeamTotals,
     aggregate_asa_team_output,
     aggregate_understat_team_output,
     resolve_api_importance_weight,

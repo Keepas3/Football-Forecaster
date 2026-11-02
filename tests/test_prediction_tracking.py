@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from soccer_predictor.prediction.tracking import LOCK_GROUPS, compute_prediction_accuracy
 from soccer_predictor.storage.models import Base, PredictionRecord
 from soccer_predictor.storage.repository import (
-    all_prediction_records,
     get_or_create_team,
     upsert_match,
 )

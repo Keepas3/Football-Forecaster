@@ -17,7 +17,7 @@ from soccer_predictor.config import League
 from soccer_predictor.ingest import api_client, espn_client
 from soccer_predictor.storage.models import Team
 from soccer_predictor.ingest.top_players import normalize_name
-from soccer_predictor.storage.repository import all_alias_texts, find_team_by_alias, teams_for_league
+from soccer_predictor.storage.repository import all_alias_texts, teams_for_league
 
 SQUAD_CACHE_TTL_SECONDS = 24 * 3600  # squads change slowly outside transfer windows
 
@@ -57,24 +57,41 @@ def _fetch_raw_teams(league: League) -> list[dict]:
     return data.get("teams", [])
 
 
-def _find_raw_team_entry(session: Session, league: League, team_id: int) -> dict | None:
+def _raw_entries_by_team_id(session: Session, league: League) -> dict[int, dict]:
+    """football-data.org's entry for each of our teams that has one, from one pass over the
+    (disk-cached) response and ONE query for the league's API aliases. Looking each entry up with
+    find_team_by_alias instead cost two queries apiece, and a search that asks for every team in the
+    league (35 of them in the Premier League, counting clubs since relegated) repeated that for
+    each: about 500 queries, a second or more, every time a player was clicked."""
+    team_by_api_name = dict(all_alias_texts(session, "api", league.code))
+    by_team: dict[int, dict] = {}
     for entry in _fetch_raw_teams(league):
-        team = find_team_by_alias(session, entry.get("name", ""), source="api", league_code=league.code)
-        if team is not None and team.id == team_id:
-            return entry
-    return None
+        team_id = team_by_api_name.get(entry.get("name", ""))
+        if team_id is not None:
+            by_team.setdefault(team_id, entry)
+    return by_team
 
 
-def fetch_squad_for_team(session: Session, league: League, team_id: int) -> list[SquadPlayer] | None:
+def _find_raw_team_entry(session: Session, league: League, team_id: int) -> dict | None:
+    return _raw_entries_by_team_id(session, league).get(team_id)
+
+
+def fetch_squad_for_team(
+    session: Session, league: League, team_id: int, raw_entries: dict[int, dict] | None = None
+) -> list[SquadPlayer] | None:
     """Returns this team's squad, or None if unavailable -- no API key, a
     network error, or this team's API-side name isn't a known alias yet
     (e.g. it's never appeared in a live fixture sync). Degrades to None
     rather than raising, same as ingest/league_meta.py's emblem fetch.
+    A caller that asks for many teams in a row passes `raw_entries`
+    (_raw_entries_by_team_id) so it is worked out once.
     """
     if league.data_source == "espn":
         return _fetch_squad_for_team_espn(session, league, team_id)
 
-    entry = _find_raw_team_entry(session, league, team_id)
+    if raw_entries is None:
+        raw_entries = _raw_entries_by_team_id(session, league)
+    entry = raw_entries.get(team_id)
     if entry is None:
         return None
     return [
@@ -135,9 +152,10 @@ def search_players_in_league(
     query_lower = query.lower()
     teams = teams_for_league(session, league.code)
     clubs = _clubs_named(session, league, teams, query) if include_club else set()
+    raw_entries = None if league.data_source == "espn" else _raw_entries_by_team_id(session, league)
     results: list[PlayerSearchResult] = []
     for team_id, team_name in teams.items():
-        squad = fetch_squad_for_team(session, league, team_id) or []
+        squad = fetch_squad_for_team(session, league, team_id, raw_entries) or []
         for player in squad:
             if team_id in clubs or query_lower in player.name.lower():
                 results.append(PlayerSearchResult(team_id=team_id, team_name=team_name, player=player))

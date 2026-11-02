@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from types import SimpleNamespace
 
 import pandas as pd
 import pytest

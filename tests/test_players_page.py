@@ -261,7 +261,6 @@ def _show(page, role, **query):
 
 def _run_with_role(run, role, **query):
     """The page with the Show switch already on `role` (the control's own state, set before the run)."""
-    from soccer_predictor.dashboard.views import players as view
 
     def app():
         from soccer_predictor.dashboard.views import players as v
