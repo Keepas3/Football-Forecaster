@@ -7,6 +7,9 @@ for other reasons such as leaving the club), a one-line news item ("Ankle injury
 injuries this app has found: ESPN's injury fields are empty for every league and
 football-data.org has none.
 
+The same feed carries every player's season totals (tackles, clean sheets, saves...); the
+goalkeepers' and defenders' feed the Players page's rankings (ingest/defensive_players.py).
+
 Caveats worth knowing: the feed is public and needs no key but is undocumented
 and not offered under a data licence, so it can change or be restricted without
 notice (every function here degrades to "nothing" if it does), and it covers the
@@ -26,11 +29,14 @@ from rapidfuzz import fuzz, process
 
 from soccer_predictor.config import DATA_DIR
 from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest.memo import ttl_memo
 
-URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
+URL ="https://fantasy.premierleague.com/api/bootstrap-static/"
 CACHE_FILE = DATA_DIR / "cache" / "fpl" / f"{hashlib.sha256(URL.encode()).hexdigest()}.json"
 # Injury news changes through the week (press conferences, training), but not by the minute.
 CACHE_TTL_SECONDS = 3 * 3600
+# How long the parsed player list is kept in memory (see ingest/memo.py).
+PLAYERS_MEMO_SECONDS = 300
 
 # FPL's element_type -> this app's position bucket (goalkeepers and defenders
 # count as "defense"; midfielders and forwards as "attack", as everywhere else).
@@ -114,6 +120,74 @@ def parse_injuries(data: dict) -> list[FplInjury]:
         except (KeyError, TypeError, ValueError):
             continue
     return injuries
+
+
+@dataclass
+class FplPlayer:
+    """A defender's or goalkeeper's season totals from the same feed, for the Players page's
+    defender and goalkeeper rankings (ingest/defensive_players.py)."""
+
+    name: str  # full name, as in FplInjury
+    team_name: str  # FPL's name for the club
+    role: str  # "defender" | "goalkeeper"
+    minutes: int
+    # Tackles plus clearances, blocks and interceptions: FPL's "defensive contribution" for a defender.
+    defensive_actions: int
+    clean_sheets: int  # matches he played 60+ minutes in without the team conceding
+    goals_conceded: int  # by the team while he was on the pitch
+    expected_goals_conceded: float  # the team's, while he was on the pitch
+    saves: int
+    penalties_saved: int
+    goals: int
+    assists: int
+
+
+# element_type -> role; midfielders and forwards are the stats sources' business, not this feed's here.
+_ROLES = {1: "goalkeeper", 2: "defender"}
+
+
+def _count(value: object) -> int:
+    return int(value or 0)
+
+
+def parse_players(data: dict) -> list[FplPlayer]:
+    """Every goalkeeper and defender in a feed payload."""
+    teams = {t["id"]: t["name"] for t in data.get("teams") or [] if "id" in t and "name" in t}
+    players = []
+    for element in data.get("elements") or []:
+        role = _ROLES.get(element.get("element_type"))
+        if role is None:
+            continue
+        try:
+            players.append(
+                FplPlayer(
+                    name=f"{element.get('first_name', '')} {element.get('second_name', '')}".strip()
+                    or element["web_name"],
+                    team_name=teams[element["team"]],
+                    role=role,
+                    minutes=_count(element.get("minutes")),
+                    defensive_actions=_count(element.get("tackles"))
+                    + _count(element.get("clearances_blocks_interceptions")),
+                    clean_sheets=_count(element.get("clean_sheets")),
+                    goals_conceded=_count(element.get("goals_conceded")),
+                    expected_goals_conceded=float(element.get("expected_goals_conceded") or 0),
+                    saves=_count(element.get("saves")),
+                    penalties_saved=_count(element.get("penalties_saved")),
+                    goals=_count(element.get("goals_scored")),
+                    assists=_count(element.get("assists")),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return players
+
+
+@ttl_memo(PLAYERS_MEMO_SECONDS)
+def fetch_players() -> list[FplPlayer]:
+    """The league's goalkeepers and defenders with their season totals. Empty if the feed is
+    unavailable. Kept in memory for a few minutes: the payload is about 2 MB to parse."""
+    data = fetch_bootstrap()
+    return parse_players(data) if data else []
 
 
 def resolve_team_name(fpl_name: str, our_team_names: list[str]) -> str | None:

@@ -1,5 +1,5 @@
-"""Players page: search for an individual player by name across every team
-in a league, then see their current club plus (opt-in, quota-conscious)
+"""Players page: search for an individual player by name (or a whole club's
+squad by the club's name) across every team in a league, then see their current club plus (opt-in, quota-conscious)
 stats across past seasons. Reached from the sidebar nav.
 
 Every fetch here reuses existing team-scoped ingest functions (squad.py,
@@ -32,7 +32,7 @@ from soccer_predictor.dashboard.players_table import (
     search_results_table_html,
     top_players_table_html,
 )
-from soccer_predictor.ingest import understat_client
+from soccer_predictor.ingest import defensive_players, understat_client
 from soccer_predictor.ingest.asa_client import ASA_AVAILABLE_SEASONS
 from soccer_predictor.ingest.asa_client import fetch_team_season as fetch_asa_team_season
 from soccer_predictor.ingest.player_importance import (
@@ -175,16 +175,128 @@ def _club_team_ids(league, rows: list[dict]) -> dict[str, int]:
     return club_team_ids({row["Club"] for row in rows}, teams, aliases)
 
 
+ROLE_ALL = "all"
+ROLE_OPTIONS = [ROLE_ALL, *defensive_players.ROLES]
+ROLE_OPTION_LABELS = {ROLE_ALL: "All players", **defensive_players.ROLE_LABELS}
+
+# What each source's defender and keeper numbers mean, shown under the table.
+_DEFENSIVE_NOTES = {
+    ("EPL", defensive_players.DEFENDER): (
+        "Defensive actions are tackles plus clearances, blocks and interceptions. Clean sheets and goals "
+        "conceded count the whole team while he was on the pitch, so a strong side flatters its defenders."
+    ),
+    ("EPL", defensive_players.GOALKEEPER): (
+        "Goals prevented is the team's expected goals conceded minus the goals it let in while he played: a "
+        "rough guide, since the defence in front of him counts too. Save % is saves out of saves plus goals conceded."
+    ),
+    ("MLS", defensive_players.DEFENDER): (
+        "g+ (goals added) scores every action by how much it changes his team's chance of scoring or conceding. "
+        "The figures are above the average player in his position; interrupting is tackles, interceptions and clearances."
+    ),
+    ("MLS", defensive_players.GOALKEEPER): (
+        "Goals prevented is the expected goals of the shots on target he faced minus the goals he let in. "
+        "Save % is saves out of shots on target faced."
+    ),
+}
+
+
+def _no_defensive_numbers(league, role: str) -> str:
+    """Why a Defenders or Goalkeepers list is empty."""
+    label = defensive_players.ROLE_LABELS[role].lower()
+    source = defensive_players.SOURCES.get(league.code)
+    if source:
+        return f"The {source} feed isn't available right now, so there are no {label} to rank. Try again later."
+    leagues = load_leagues()
+    covered = " and ".join(f"{leagues[code].name} ({name})" for code, name in defensive_players.SOURCES.items() if code in leagues)
+    return f"No free source has {role} statistics for {league.name}; they are available for {covered}."
+
+
+def _render_defensive_players(league, role: str, selected: str | None) -> None:
+    """The league's best defenders or goalkeepers, where a free source has the numbers.
+    See ingest/defensive_players.py."""
+    data = defensive_players.fetch_defensive_players(league, role)
+    metrics = defensive_players.available_metrics(role, data.players)
+    if not metrics:
+        st.info(_no_defensive_numbers(league, role))
+        return
+
+    metric = st.segmented_control(
+        "Rank by",
+        options=metrics,
+        format_func=lambda m: defensive_players.METRICS[m].label,
+        default=metrics[0],
+        key=f"players_{role}_metric_{league.code}",
+    )
+    if metric not in metrics:
+        metric = metrics[0]
+
+    rows = defensive_players.table_rows(data.players, role, metric)
+    if not rows:
+        st.info("No player has enough minutes yet for that ranking.")
+    else:
+        st.markdown(
+            top_players_table_html(rows, league.code, _club_team_ids(league, rows), selected),
+            unsafe_allow_html=True,
+        )
+
+    season = f", {_season_label(data.season, league.season_display == 'single_year')} season" if data.season else ""
+    notes = [
+        f"Source: {data.source}{season}. Click a player's name for their stats below the table, a club's name "
+        "for its page.",
+        _DEFENSIVE_NOTES.get((league.code, role), ""),
+    ]
+    if any(defensive_players.METRICS[m].needs_minutes for m in metrics):
+        notes.append(f"Rates and percentages leave out players with fewer than {MIN_MINUTES_PER_90} minutes.")
+    st.caption(" ".join(note for note in notes if note))
+
+
+def _render_defending(league, name: str, team_name: str) -> None:
+    """A defender's or goalkeeper's numbers and where he stands among his league's, when the
+    league's source has them; nothing otherwise."""
+    for role in defensive_players.ROLES:
+        data = defensive_players.fetch_defensive_players(league, role)
+        entry = defensive_players.find_defensive_player(data.players, name, team_name)
+        if entry is None:
+            continue
+        st.markdown("**Defending**" if role == defensive_players.DEFENDER else "**Goalkeeping**")
+        _metric_rows(
+            [
+                (defensive_players.METRICS[m].label, defensive_players.format_value(m, entry.values[m]))
+                for m in defensive_players.available_metrics(role, data.players)
+                if entry.values.get(m) is not None
+            ]
+        )
+        standing = " · ".join(
+            f"{label} #{rank} of {total}" for label, rank, total in defensive_players.league_rankings(data.players, entry)
+        )
+        st.caption(
+            f"{entry.minutes} minutes played ({data.source})."
+            + (f" Among the league's {defensive_players.ROLE_LABELS[role].lower()}: {standing}." if standing else "")
+        )
+        return
+
+
 def _render_top_players(league, selected: str | None) -> None:
     """The default view when nothing is searched: the league's top players.
     See ingest/top_players.py for where each league's numbers come from."""
     top = fetch_top_players(league)
     if not top.players:
-        st.caption("Type a player name to search across every team in this league.")
+        st.caption("Type a player or club name to search across every team in this league.")
+        return
+
+    st.subheader("Top players")
+    role = st.segmented_control(
+        "Show",
+        options=ROLE_OPTIONS,
+        format_func=ROLE_OPTION_LABELS.get,
+        default=ROLE_ALL,
+        key=f"players_role_{league.code}",
+    )
+    if role in defensive_players.ROLES:  # a deselected control gives None: the usual list
+        _render_defensive_players(league, role, selected)
         return
 
     metrics = available_metrics(top.players)
-    st.subheader("Top players")
     metric = st.segmented_control(
         "Rank by",
         options=metrics,
@@ -299,13 +411,13 @@ def render() -> None:
     inject_standings_sort()
     inject_player_links()
 
-    search_query = st.text_input("Search player name", placeholder="e.g. Salah")
+    search_query = st.text_input("Search player or club", placeholder="e.g. Haaland or Liverpool")
     if search_query:
         with session_scope() as session:
-            results = search_players_in_league(session, league, search_query)
+            results = search_players_in_league(session, league, search_query, include_club=True)
 
         if not results:
-            st.info(f'No player matches "{search_query}".')
+            st.info(f'No player or club matches "{search_query}".')
         else:
             st.markdown(search_results_table_html(results, league.code, selected), unsafe_allow_html=True)
             st.caption("Click a player's name for their stats below the table, or a club's name for its page.")
@@ -383,6 +495,8 @@ def _render_player(league, selection: PlayerSearchResult) -> None:
     else:
         _render_current_season(league, current_season_row, current_season_source, player.name, selection.team_name)
         st.caption(f"{current_season_row.minutes} minutes played this season ({current_season_source}).")
+
+    _render_defending(league, player.name, selection.team_name)
 
     st.markdown("**Player Stats (Historical)**")
     is_archive_league = league.code in ("WC", "EURO")

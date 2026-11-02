@@ -23,6 +23,7 @@ from soccer_predictor.dashboard.components import (
     team_page_href,
 )
 from soccer_predictor.ingest.asa_client import TEAM_NAME_OVERRIDES
+from soccer_predictor.ingest.fpl_client import TEAM_NAME_OVERRIDES as FPL_TEAM_NAME_OVERRIDES
 from soccer_predictor.ingest.squad import PlayerSearchResult
 from soccer_predictor.ingest.top_players import POSITION_ORDER, normalize_name
 from soccer_predictor.ingest.understat_client import TEAM_NAME_ALIASES
@@ -63,6 +64,9 @@ def club_team_ids(
         for our_name, theirs in spellings.items():
             if our_name in ours:
                 by_name.setdefault(normalize_name(theirs), ours[our_name])
+    for theirs, our_name in FPL_TEAM_NAME_OVERRIDES.items():  # this one maps their spelling to ours
+        if our_name in ours:
+            by_name.setdefault(normalize_name(theirs), ours[our_name])
     for text, team_id in aliases:
         if team_id in teams:
             by_name.setdefault(normalize_name(text), team_id)
@@ -112,9 +116,9 @@ def _text(value: object) -> str:
 
 
 def _number(text: object) -> float | None:
-    """The number in a cell of the top table ("12", "0.85", "$1,200,000"); None for "–"."""
+    """The number in a cell of the top table ("12", "0.85", "$1,200,000", "78.8%", "+3.8"); None for "–"."""
     try:
-        value = float(str(text).replace("$", "").replace(",", ""))
+        value = float(str(text).replace("$", "").replace(",", "").replace("%", ""))
     except ValueError:
         return None
     return int(value) if value.is_integer() else value

@@ -57,6 +57,12 @@ def test_a_club_that_cannot_be_placed_is_left_out_rather_than_linked_to_a_lookal
     assert placed == {}  # "Manchester City" is not "Man United" however alike the names look
 
 
+def test_the_fantasy_premier_leagues_own_spellings_are_placed_too():
+    teams = {1: "Arsenal", 2: "Man United", 9: "Tottenham"}
+    assert club_team_ids(["Spurs", "Man Utd", "Arsenal"], teams) == {"Spurs": 9, "Man Utd": 2, "Arsenal": 1}  # "Spurs" is no fuzzy match
+    assert club_team_ids(["Spurs"], {1: "Arsenal"}) == {}  # a club that is not in the league stays unplaced
+
+
 def test_an_alias_of_a_team_that_is_not_in_the_league_is_ignored():
     assert club_team_ids(["Some Club"], TEAMS, aliases=[("Some Club", 99)]) == {}
 
@@ -129,6 +135,19 @@ def test_the_position_comes_last_after_the_numbers_and_sorts_goalkeepers_first()
 
 def test_a_list_without_positions_has_no_position_column():
     assert "Position" not in top_players_table_html(ROWS, "EPL", {})
+
+
+def test_a_percentage_or_signed_cell_sorts_as_the_number_it_shows():
+    rows = [
+        {"#": 1, "Player": "A", "Club": "X", "Goals prevented": "+6.0", "Save %": "78.8%", "Minutes": 810},
+        {"#": 2, "Player": "B", "Club": "X", "Goals prevented": "-1.3", "Save %": "–", "Minutes": 720},
+    ]
+    markup = top_players_table_html(rows, "EPL", {})
+    assert re.findall(r"<th(?: [^>]*)?>(.*?)</th>", markup) == ["#", "Player", "Club", "Goals prevented", "Save %", "Minutes"]
+    first, second = (re.findall(r"<td[^>]*>", re.findall(r"<tr[^>]*>(.*?)</tr>", markup.split("<tbody>")[1], re.S)[i]) for i in (0, 1))
+    assert ['data-v="6"' in first[3], 'data-v="78.8"' in first[4]] == [True, True]
+    assert ['data-v="-1.3"' in second[3], 'data-v="-1"' in second[4]] == [True, True]  # a dash has no value
+    assert "Position" not in markup  # these tables have no position column
 
 
 def test_an_empty_list_still_draws_a_table():

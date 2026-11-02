@@ -238,6 +238,114 @@ def fetch_league_players(season: int) -> list[AsaLeaguePlayer]:
         return []
 
 
+@dataclass
+class AsaKeeper:
+    """One MLS goalkeeper's season (see fetch_league_goalkeepers)."""
+
+    name: str
+    team: str
+    minutes: int
+    shots_faced: int  # on target
+    saves: int
+    goals_conceded: int
+    # Goals the shots he faced were expected to produce, minus the ones that went in: positive
+    # means he kept out more than an average keeper would have.
+    goals_prevented: float
+
+
+@dataclass
+class AsaDefender:
+    """One MLS centre-back's or full-back's season (see fetch_league_defenders). The numbers are
+    goals added (g+) *above average*: how much more than a typical player in his position those
+    actions added to the team's chance of scoring (or lowered the other side's)."""
+
+    name: str
+    team: str
+    position: str  # "CB" | "FB"
+    minutes: int
+    interrupting: float  # tackles, interceptions, clearances and the like
+    fouling: float
+    total: float  # every kind of action
+
+
+_DEFENDER_POSITIONS = {"CB", "FB"}
+
+
+def _league_lookups() -> tuple[dict[str, dict], dict[str, str]]:
+    """({player id: bio}, {team id: team name}) for the whole league."""
+    players_by_id = {p["player_id"]: p for p in _fetch_all_players()}
+    team_names = {t["team_id"]: t["team_name"] for t in _fetch_all_teams()}
+    return players_by_id, team_names
+
+
+@ttl_memo(TOTALS_MEMO_SECONDS)
+def fetch_league_goalkeepers(season: int) -> list[AsaKeeper]:
+    """Every MLS goalkeeper with minutes in `season`: ONE request for the whole league
+    (`/mls/goalkeepers/xgoals`), plus the cached player and team lists for names. Empty list
+    on any failure."""
+    try:
+        rows = _get_cached_json(
+            f"league-goalkeepers:{season}",
+            f"{BASE_URL}/mls/goalkeepers/xgoals",
+            {"season_name": season, "minimum_minutes": 1},
+        )
+        players_by_id, team_names = _league_lookups()
+        keepers = []
+        for row in rows:
+            bio = players_by_id.get(row.get("player_id"))
+            if bio is None:
+                continue
+            conceded = int(row.get("goals_conceded") or 0)
+            keepers.append(
+                AsaKeeper(
+                    name=bio["player_name"],
+                    team=team_names.get(_last_team_id(row.get("team_id")), ""),
+                    minutes=int(row.get("minutes_played") or 0),
+                    shots_faced=int(row.get("shots_faced") or 0),
+                    saves=int(row.get("saves") or 0),
+                    goals_conceded=conceded,
+                    goals_prevented=float(row.get("xgoals_gk_faced") or 0) - conceded,
+                )
+            )
+        return keepers
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return []
+
+
+@ttl_memo(TOTALS_MEMO_SECONDS)
+def fetch_league_defenders(season: int) -> list[AsaDefender]:
+    """Every MLS centre-back and full-back with minutes in `season`, with their goals added
+    above average: ONE request for the whole league (`/mls/players/goals-added`), plus the
+    cached player and team lists for names. Empty list on any failure."""
+    try:
+        rows = _get_cached_json(
+            f"league-goals-added:{season}",
+            f"{BASE_URL}/mls/players/goals-added",
+            {"season_name": season, "minimum_minutes": 1},
+        )
+        players_by_id, team_names = _league_lookups()
+        defenders = []
+        for row in rows:
+            bio = players_by_id.get(row.get("player_id"))
+            if bio is None or row.get("general_position") not in _DEFENDER_POSITIONS:
+                continue
+            by_action = {a["action_type"]: float(a.get("goals_added_above_avg") or 0) for a in row.get("data") or []}
+            defenders.append(
+                AsaDefender(
+                    name=bio["player_name"],
+                    team=team_names.get(_last_team_id(row.get("team_id")), ""),
+                    position=row["general_position"],
+                    minutes=int(row.get("minutes_played") or 0),
+                    interrupting=by_action.get("Interrupting", 0.0),
+                    fouling=by_action.get("Fouling", 0.0),
+                    total=sum(by_action.values()),
+                )
+            )
+        return defenders
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return []
+
+
 def _parse_stat_row(row: dict, bio: dict) -> AsaPlayerStats:
     return AsaPlayerStats(
         name=bio["player_name"],

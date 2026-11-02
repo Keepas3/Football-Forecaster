@@ -199,14 +199,19 @@ The dashboard only reads the latest persisted fit; it never trains live.
   YouTube search for that match), current squad, historical per-player
   stats, and injuries.
 - **Players**: search for any player by name across a chosen league,
-  without needing to know their club first. Shows the matched player's
+  without needing to know their club first, or type a club's name to list
+  its whole squad. Shows the matched player's
   current club, position, age, current-season expected goals/assists
   where available, and historical per-season stats on request. The top
   players and the search results are sortable tables: a player's name opens
   their stats in a panel under the table (no page reload) and a club's name
   opens that team's page. The top-players table ends with each player's
   position (Goalkeeper, Defence, Midfield or Offence, as on a team's page),
-  which sorts goalkeepers first.
+  which sorts goalkeepers first. A Defenders and a Goalkeepers view rank the
+  league's best by defensive actions, clean sheets, goals conceded, saves and
+  goals prevented (Premier League, from the Fantasy Premier League feed) or by
+  goals added and goals prevented (MLS, from American Soccer Analysis); other
+  leagues have no free source for these and say so.
 - **Predictor**: the original single-league workflow: a fixtures tab,
   a sortable attack/defense leaderboard of this season's clubs (a team's
   name opens its Team Detail page, and its attack, defense or net strength

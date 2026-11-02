@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 from soccer_predictor.config import League
 from soccer_predictor.ingest import api_client, espn_client
 from soccer_predictor.storage.models import Team
-from soccer_predictor.storage.repository import find_team_by_alias, teams_for_league
+from soccer_predictor.ingest.top_players import normalize_name
+from soccer_predictor.storage.repository import all_alias_texts, find_team_by_alias, teams_for_league
 
 SQUAD_CACHE_TTL_SECONDS = 24 * 3600  # squads change slowly outside transfer windows
 
@@ -106,21 +107,39 @@ class PlayerSearchResult:
     player: SquadPlayer
 
 
-def search_players_in_league(session: Session, league: League, query: str) -> list[PlayerSearchResult]:
+def _clubs_named(session: Session, league: League, teams: dict[int, str], query: str) -> set[int]:
+    """The teams of `league` whose name, or any other spelling on record for it ("Man United",
+    "Manchester United FC"), contains `query`, ignoring case and accents."""
+    wanted = normalize_name(query.strip())
+    if not wanted:
+        return set()
+    spellings = [(name, team_id) for team_id, name in teams.items()]
+    for source in ("api", "csv"):
+        spellings += all_alias_texts(session, source, league.code)
+    return {team_id for text, team_id in spellings if team_id in teams and wanted in normalize_name(text)}
+
+
+def search_players_in_league(
+    session: Session, league: League, query: str, include_club: bool = False
+) -> list[PlayerSearchResult]:
     """Case-insensitive substring match on player name, across every team
-    in `league`. Reuses fetch_squad_for_team per team -- for
-    football-data.org leagues this is nearly free (every team's squad
-    already came back in ONE cached API call, see _fetch_raw_teams; a
-    repeat call per team_id just re-scans that same cached response), for
-    ESPN leagues each team costs its own request, cached 24h after (see
-    espn_client.fetch_team_roster).
+    in `league`. With `include_club`, a team whose name matches `query` the
+    same way brings its whole squad too, so "liverpool" lists Liverpool's
+    players as well as anyone with that in their name. Reuses
+    fetch_squad_for_team per team -- for football-data.org leagues this is
+    nearly free (every team's squad already came back in ONE cached API
+    call, see _fetch_raw_teams; a repeat call per team_id just re-scans
+    that same cached response), for ESPN leagues each team costs its own
+    request, cached 24h after (see espn_client.fetch_team_roster).
     """
     query_lower = query.lower()
+    teams = teams_for_league(session, league.code)
+    clubs = _clubs_named(session, league, teams, query) if include_club else set()
     results: list[PlayerSearchResult] = []
-    for team_id, team_name in teams_for_league(session, league.code).items():
+    for team_id, team_name in teams.items():
         squad = fetch_squad_for_team(session, league, team_id) or []
         for player in squad:
-            if query_lower in player.name.lower():
+            if team_id in clubs or query_lower in player.name.lower():
                 results.append(PlayerSearchResult(team_id=team_id, team_name=team_name, player=player))
     return results
 
