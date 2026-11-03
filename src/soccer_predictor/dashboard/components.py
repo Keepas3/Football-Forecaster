@@ -1109,9 +1109,8 @@ def injury_source_note(league_code: str) -> str | None:
 
 
 PREDICTION_STATUS_NOTE = (
-    "Early: the model's forecast from the squads and injuries, before the lineups are out; it can still change. "
-    "Locked: the final forecast, saved when the starting lineups are announced (about an hour before kickoff), "
-    "or just before kickoff if no lineup is published. It is the one the Track Record grades."
+    "Early: made before the lineups are out, so it can still change. "
+    "Locked: the final forecast, saved when the lineups are announced; the Track Record grades it."
 )
 STATUS_COLUMN = "Prediction"
 LOCKED_LABEL = "🔒 Locked in"  # saved by the older rule, 48 hours before kickoff

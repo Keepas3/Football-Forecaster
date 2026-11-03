@@ -167,6 +167,15 @@ class ManualStarPlayer:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class SiteInfo:
+    """Who runs the site and how to reach them, for the Privacy & Terms page.
+    Either left blank leaves its line off the page."""
+
+    operator: str = ""
+    contact_email: str = ""
+
+
 @lru_cache
 def load_leagues() -> dict[str, League]:
     raw = yaml.safe_load((CONFIG_DIR / "leagues.yaml").read_text(encoding="utf-8"))
@@ -259,6 +268,18 @@ def load_manual_star_players() -> list[ManualStarPlayer]:
         ManualStarPlayer(team=entry["team"], player=entry["player"], note=entry.get("note", ""))
         for entry in (raw.get("star_players") or [])
     ]
+
+
+def load_site_info() -> SiteInfo:
+    """config/site.yaml, which may be missing or blank (then nothing is shown)."""
+    try:
+        raw = _load_hand_edited_yaml(CONFIG_DIR / "site.yaml")
+    except FileNotFoundError:
+        return SiteInfo()
+    return SiteInfo(
+        operator=str(raw.get("operator") or "").strip(),
+        contact_email=str(raw.get("contact_email") or "").strip(),
+    )
 
 
 def football_data_org_api_key() -> str | None:

@@ -645,9 +645,8 @@ def render() -> None:
         st.divider()
         st.header("Track Record")
         st.caption(
-            "All leagues. Each forecast is locked when the lineups are announced (about an hour before "
-            "kickoff) and graded after the match. "
-            "Right outcome = the model's most likely result (win, draw or loss) happened."
+            "All leagues. Each forecast is locked when the lineups are announced and graded after the match. "
+            "Right outcome = the most likely result happened."
         )
         with session_scope() as session:
             accuracy = compute_prediction_accuracy(session)
@@ -872,8 +871,7 @@ def render() -> None:
             'Type notes about players or teams (e.g. "Saka is injured, ~3 weeks out", '
             '"Arsenal have been flat since the manager change"). Claude, a more advanced model, parses '
             "them into structured entries below for you to review and save - nothing is applied to "
-            "predictions until you click Save. Saved notes change the forecasts everyone sees, "
-            "so adding them is owner-only."
+            "predictions until you click Save."
         )
 
         unlocked = _render_notes_gate()

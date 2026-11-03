@@ -31,6 +31,7 @@ pg = st.navigation(
         navigation.team_detail_page(),
         navigation.match_detail_page(),
         navigation.predictor_page(),
+        navigation.legal_page(),
         navigation.admin_page(),
     ]
 )

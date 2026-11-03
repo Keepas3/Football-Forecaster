@@ -224,6 +224,15 @@ The dashboard only reads the latest persisted fit; it never trains live.
   Its sidebar also shows the running prediction-accuracy counters
   described above. Reaching it via a `?league=` link pre-selects that
   league.
+- **Privacy & Terms**: what the site does with a visitor's data (nothing is
+  stored about visitors; an AI what-if note goes to Google's Gemini API; the
+  browser loads flags and crests from a few other sites), that the forecasts
+  are not betting advice, the terms of use, and the data sources' credits. Who
+  runs the site and how to reach them
+  come from `config/site.yaml` (blank until filled in; a blank value leaves
+  its line off the page). Keep the page in step with the code: a new third
+  party, a new kind of stored visitor data, or a new data source needs a line
+  there (`tests/test_legal_page.py` checks the hosts known today).
 
 ## Chat notes (AI-assisted)
 
