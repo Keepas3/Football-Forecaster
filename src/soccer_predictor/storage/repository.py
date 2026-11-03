@@ -722,6 +722,7 @@ def replace_injuries(
                 source=source,
                 note=entry.get("note", ""),
                 fetched_at=now,
+                role=entry.get("role") or None,
             )
         )
 

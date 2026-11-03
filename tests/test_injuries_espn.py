@@ -53,6 +53,16 @@ def test_syncs_espn_injury_with_position_bucket_from_roster(session, monkeypatch
     assert row.note == "Hamstring"
 
 
+def test_the_players_position_is_stored_with_the_injury(session, monkeypatch):
+    entry = espn_client.EspnInjuryEntry(player_name="Evan Bush", position_bucket="defense", note="Knee", role="Goalkeeper")
+    monkeypatch.setattr(espn_client, "fetch_team_roster", lambda *a, **k: ([], [entry]))
+
+    injuries.sync_injuries_to_db(session, LEAGUE, 2026)
+    session.commit()
+
+    assert _crew_injury(session).role == "Goalkeeper"
+
+
 def test_no_injuries_still_counts_as_synced(session, monkeypatch):
     monkeypatch.setattr(espn_client, "fetch_team_roster", lambda *a, **k: ([], []))
 

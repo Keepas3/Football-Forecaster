@@ -219,7 +219,12 @@ The dashboard only reads the latest persisted fit; it never trains live.
   injuries tab (two sortable tables, one row per injured player and one per
   team with the model's ratings before and after; a team's name opens its
   page, a player's name opens their stats on the Players page, and a team's
-  number of players listed opens who is out under the table),
+  number of players listed opens who is out under the table; each player's
+  position is Goalkeeper, Defence, Midfield or Offence where the feed says,
+  else just Attack or Defence, which is all the rating model uses. MLS injuries
+  get a finer one (Centre-back, Full-back, Defensive, Central or Attacking
+  mid, Winger, Striker) from American Soccer Analysis, and an entry in
+  `config/injuries.yaml` can name any of them, left and right included),
   and the chat notes tab.
   Its sidebar also shows the running prediction-accuracy counters
   described above. Reaching it via a `?league=` link pre-selects that

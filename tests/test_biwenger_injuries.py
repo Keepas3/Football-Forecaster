@@ -80,6 +80,20 @@ def test_goalkeepers_and_defenders_are_defence():
     assert buckets == {"Keeper": "defense", "Back": "defense", "Fwd": "attack"}
 
 
+def test_each_player_has_the_position_he_plays_not_just_attack_or_defence():
+    feed = _feed(*(_player(n, name, 1, "injured", kind) for n, (name, kind) in enumerate(
+        (("Keeper", 1), ("Back", 2), ("Mid", 3), ("Fwd", 4), ("Odd", 9)), start=1)))
+    roles = {i.player_name: (i.role, i.position_bucket) for i in biwenger_client.parse_injuries(feed)}
+
+    assert roles == {
+        "Keeper": ("Goalkeeper", "defense"),
+        "Back": ("Defence", "defense"),
+        "Mid": ("Midfield", "attack"),
+        "Fwd": ("Offence", "attack"),
+        "Odd": ("", "attack"),
+    }
+
+
 LALIGA_NAMES = ["Athletic Bilbao", "Atletico Madrid", "Barcelona", "Real Betis", "Racing Santander", "Celta Vigo"]
 UCL_NAMES = [
     "Arsenal FC", "FC Bayern München", "Paris Saint-Germain FC", "FC Internazionale Milano", "AC Milan",
@@ -202,6 +216,7 @@ def test_sync_stores_priced_injuries_with_notes_scaling_doubts_and_clearing_heal
         assert (synced, skipped) == (3, 0)
         by_name = {i.player_name: i for i in injuries_for_team(s, athletic.id) if i.source == "api"}
         assert by_name["Williams"].importance_weight == 0.6  # out: full weight
+        assert (by_name["Williams"].role, by_name["Sancet"].role) == ("Offence", "Midfield")
         assert by_name["Williams"].note == "Biwenger: Hamstring injury - Expected back 25 Nov 2026"
         assert abs(by_name["Sancet"].importance_weight - 0.3) < 1e-9  # a coin flip: half
         assert by_name["Sancet"].note == "Biwenger: Knock - 50% chance of playing"

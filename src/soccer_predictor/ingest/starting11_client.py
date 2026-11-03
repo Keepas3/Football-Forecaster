@@ -32,7 +32,7 @@ from pathlib import Path
 import requests
 
 from soccer_predictor.config import DATA_DIR
-from soccer_predictor.ingest import club_names, http_session
+from soccer_predictor.ingest import club_names, http_session, positions
 
 # This app's league code -> the page name on starting11.com.
 COMPETITIONS = {"MLS": "mls", "BUNDESLIGA": "bundesliga", "SERIEA": "serie-a", "LIGUE1": "ligue-1"}
@@ -42,9 +42,13 @@ CACHE_DIR = DATA_DIR / "cache" / "starting11"
 # Injury news changes through the week, not by the minute.
 CACHE_TTL_SECONDS = 3 * 3600
 
-# The page's position labels -> this app's bucket: goalkeepers and defenders
-# count as "defense", the rest as "attack".
-_POSITION_BUCKET = {"GK": "defense", "DEF": "defense", "MID": "attack", "FWD": "attack"}
+# The page's position labels -> where he plays (ingest/positions.py).
+_POSITIONS = {
+    "GK": positions.GOALKEEPER,
+    "DEF": positions.DEFENCE,
+    "MID": positions.MIDFIELD,
+    "FWD": positions.OFFENCE,
+}
 STATUSES = ("Out", "Doubtful", "Suspended")
 # The feed gives no chance of playing, and its doubts are loose, so a doubtful
 # player is taken as likely to play -- a quarter of his usual weight.
@@ -80,6 +84,7 @@ class Starting11Injury:
     status: str  # one of STATUSES
     chance_of_playing: int  # 0-100: how likely he is to play the next match
     problem: str  # e.g. "Hip Injury", "Red Card"
+    role: str = ""  # where he plays, one of positions.POSITION_ORDER's words ("" if unknown)
 
 
 class _PageParser(HTMLParser):
@@ -159,17 +164,18 @@ def parse_page(html: str) -> dict[str, list[Starting11Injury]] | None:
         for row in rows:
             name, problem = " ".join(row["name"].split()), " ".join(row["problem"].split())
             status = next((t for t in row["other"] if t in STATUSES), None)
-            position = next((t for t in row["other"] if t in _POSITION_BUCKET), None)
+            role = _POSITIONS.get(next((t for t in row["other"] if t in _POSITIONS), ""))
             if not name or status is None:
                 continue
             players.append(
                 Starting11Injury(
                     player_name=name,
                     team_name=club,
-                    position_bucket=_POSITION_BUCKET.get(position, "attack"),
+                    position_bucket=positions.bucket(role),
                     status=status,
                     chance_of_playing=DOUBTFUL_CHANCE_OF_PLAYING if status == "Doubtful" else 0,
                     problem=problem,
+                    role=role or "",
                 )
             )
         by_club[club] = players

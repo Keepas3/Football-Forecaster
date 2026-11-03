@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from soccer_predictor.ingest.positions import ROLE_ORDER
 from soccer_predictor.model.injury_adjustment import adjust_strength
 
 OUT, DOUBTFUL, SUSPENDED = "Out", "Doubtful", "Suspended"
@@ -93,6 +94,20 @@ def parse_note(note: str, today: dt.date, return_date: dt.date | None = None) ->
     return ParsedNote(status, problem, chance, return_date or back)
 
 
+def position_label(entry) -> str:
+    """Where he plays, when the source said (Goalkeeper, Defence, Midfield, Offence, or a finer word
+    such as Centre-back); otherwise only the side of the rating he counts for, which is all a note
+    or an older row knows."""
+    if entry.role in ROLE_ORDER:
+        return entry.role
+    return "Defence" if entry.position == "defense" else "Attack"
+
+
+def position_choices(frame: pd.DataFrame) -> list[str]:
+    """The positions in a players frame, goalkeepers first, for the filter's options."""
+    return sorted(frame["Position"].unique(), key=lambda label: (ROLE_ORDER.get(label, len(ROLE_ORDER)), label))
+
+
 def player_rows(team_name: str, team_injuries, today: dt.date) -> list[dict]:
     """One row per player in a service.TeamInjuries."""
     rows = []
@@ -108,7 +123,7 @@ def player_rows(team_name: str, team_injuries, today: dt.date) -> list[dict]:
                 "Problem": parsed.problem,
                 "Chance of playing": parsed.chance,
                 "Expected back": parsed.back,
-                "Position": "Defence" if entry.position == "defense" else "Attack",
+                "Position": position_label(entry),
                 "Impact": round(entry.importance_weight, 3),
                 "Source": SOURCE_LABELS.get(source, source),
             }

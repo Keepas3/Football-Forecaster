@@ -152,6 +152,7 @@ class ManualInjury:
     position: str  # "attack" | "defense"
     importance_weight: float
     note: str = ""
+    role: str = ""  # optional, as typed: a position word or abbreviation (ingest/positions.py::normalize_role)
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,7 @@ def load_manual_injuries() -> list[ManualInjury]:
             position=entry["position"],
             importance_weight=float(entry["importance_weight"]),
             note=entry.get("note", ""),
+            role=entry.get("role") or "",
         )
         for entry in (raw.get("injuries") or [])
     ]

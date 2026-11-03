@@ -27,7 +27,7 @@ import requests
 from rapidfuzz import fuzz, process
 
 from soccer_predictor.config import DATA_DIR
-from soccer_predictor.ingest import http_session
+from soccer_predictor.ingest import http_session, positions
 from soccer_predictor.ingest.memo import ttl_memo
 
 URL ="https://fantasy.premierleague.com/api/bootstrap-static/"
@@ -37,9 +37,6 @@ CACHE_TTL_SECONDS = 3 * 3600
 # How long the parsed player list is kept in memory (see ingest/memo.py).
 PLAYERS_MEMO_SECONDS = 300
 
-# FPL's element_type -> this app's position bucket (goalkeepers and defenders
-# count as "defense"; midfielders and forwards as "attack", as everywhere else).
-_POSITION_BUCKET = {1: "defense", 2: "defense", 3: "attack", 4: "attack"}
 # Out for the game (injured, suspended) or in doubt. "u" (unavailable: loaned,
 # sold, not in the squad) is not an injury and is left out.
 _STATUSES = {"i", "d", "s"}
@@ -60,6 +57,7 @@ class FplInjury:
     chance_of_playing: int  # 0-100: how likely he is to play the next match
     news: str  # e.g. "Ankle injury - Expected back 24 Oct"
     minutes: int = 0  # minutes played this season: how much he features
+    role: str = ""  # where he plays, one of positions.POSITION_ORDER's words ("" if unknown)
 
 
 def _load_cached() -> dict | None:
@@ -104,16 +102,18 @@ def parse_injuries(data: dict) -> list[FplInjury]:
                 chance = DEFAULT_CHANCE_OF_PLAYING if chance is None else int(chance)
             else:
                 chance = 0 if chance is None else int(chance)
+            role = positions.FANTASY_POSITIONS.get(element.get("element_type"))
             injuries.append(
                 FplInjury(
                     player_name=f"{element.get('first_name', '')} {element.get('second_name', '')}".strip()
                     or element["web_name"],
                     team_name=teams[element["team"]],
-                    position_bucket=_POSITION_BUCKET.get(element.get("element_type"), "attack"),
+                    position_bucket=positions.bucket(role),
                     status=status,
                     chance_of_playing=max(0, min(100, chance)),
                     news=(element.get("news") or "").strip(),
                     minutes=int(element.get("minutes") or 0),
+                    role=role or "",
                 )
             )
         except (KeyError, TypeError, ValueError):

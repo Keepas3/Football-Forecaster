@@ -43,6 +43,23 @@ def test_parse_keeps_injured_doubtful_and_suspended_players_with_their_position_
     assert parsed["Cristian Romero"].chance_of_playing == 0 and parsed["Cristian Romero"].team_name == "Spurs"
 
 
+def test_each_player_has_the_position_he_plays_not_just_attack_or_defence():
+    feed = {
+        "teams": [{"id": 1, "name": "Arsenal"}],
+        "elements": [_element(name, "A", name, 1, "i", kind) for name, kind in
+                     (("Keeper", 1), ("Back", 2), ("Mid", 3), ("Striker", 4), ("Odd", 9))],
+    }
+    parsed = {i.player_name: i for i in fpl_client.parse_injuries(feed)}
+
+    assert {name.split()[1]: (i.role, i.position_bucket) for name, i in parsed.items()} == {
+        "Keeper": ("Goalkeeper", "defense"),
+        "Back": ("Defence", "defense"),
+        "Mid": ("Midfield", "attack"),
+        "Striker": ("Offence", "attack"),
+        "Odd": ("", "attack"),  # a type we do not know: no position, counted as attack as before
+    }
+
+
 def test_a_doubtful_player_with_no_stated_chance_is_a_coin_flip():
     feed = {"teams": [{"id": 1, "name": "Arsenal"}], "elements": [_element("X", "A", "B", 1, "d", 3, None)]}
     assert fpl_client.parse_injuries(feed)[0].chance_of_playing == fpl_client.DEFAULT_CHANCE_OF_PLAYING
@@ -114,6 +131,7 @@ def test_sync_stores_priced_injuries_per_club_scaling_doubts_and_clearing_health
         assert (synced, skipped) == (3, 0)
         by_name = {i.player_name: i for i in injuries_for_team(s, arsenal.id) if i.source == "api"}
         assert by_name["William Saliba"].importance_weight == 0.6  # out: full weight
+        assert (by_name["William Saliba"].role, by_name["Bukayo Saka"].role) == ("Defence", "Midfield")
         assert abs(by_name["Bukayo Saka"].importance_weight - 0.15) < 1e-9  # 75% likely to play: a quarter
         assert by_name["Bukayo Saka"].note == "FPL: Knock - 75% chance of playing"  # not repeated
         assert [i.player_name for i in injuries_for_team(s, spurs.id)] == ["Cristian Romero"]

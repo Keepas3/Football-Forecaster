@@ -38,6 +38,7 @@ from soccer_predictor.ingest import (
     espn_client,
     fpl_client,
     player_importance,
+    positions,
     starting11_client,
     understat_client,
 )
@@ -145,6 +146,7 @@ def sync_fpl_injuries(session: Session, league: League) -> tuple[int, int]:
                     {
                         "player_name": injury.player_name,
                         "position": injury.position_bucket,
+                        "role": injury.role,
                         "importance_weight": weight,
                         "note": f"FPL: {news}{chance}",
                     }
@@ -242,6 +244,7 @@ def sync_biwenger_injuries(session: Session, league: League) -> tuple[int, int]:
                     {
                         "player_name": injury.player_name,
                         "position": injury.position_bucket,
+                        "role": injury.role,
                         "importance_weight": weight,
                         "note": _biwenger_note(injury),
                     }
@@ -258,6 +261,23 @@ def _starting11_note(injury) -> str:
     elif injury.status == "Doubtful":
         note = f"{note} - {injury.chance_of_playing}% chance of playing"
     return f"Starting XI: {note}"
+
+
+def _asa_role(injury, name: str | None, asa_players: list) -> str:
+    """The position of a Starting 11 player: the page's own broad one (Defence, Midfield...), or the
+    more specific one American Soccer Analysis lists for him (Centre-back, Winger...). The page gives
+    only a surname, so a stats match can be the wrong man: ASA's word is used only when it agrees with
+    the page on the things the page is sure of, being a goalkeeper and which side of the rating he
+    counts for."""
+    match = player_importance.find_asa_player(name, asa_players) if name and asa_players else None
+    specific = positions.ASA_POSITIONS.get(match.position or "") if match else None
+    if (
+        specific is not None
+        and positions.bucket(specific) == injury.position_bucket
+        and (specific == positions.GOALKEEPER) == (injury.role == positions.GOALKEEPER)
+    ):
+        return specific
+    return injury.role
 
 
 def sync_starting11_injuries(session: Session, league: League) -> tuple[int, int]:
@@ -331,6 +351,7 @@ def sync_starting11_injuries(session: Session, league: League) -> tuple[int, int
                     {
                         "player_name": injury.player_name,
                         "position": injury.position_bucket,
+                        "role": _asa_role(injury, known_as, asa_players),
                         "importance_weight": weight,
                         "note": _starting11_note(injury),
                     }
@@ -343,7 +364,7 @@ def sync_starting11_injuries(session: Session, league: League) -> tuple[int, int
 def _sync_injuries_to_db_espn(session: Session, league: League) -> tuple[int, int]:
     """ESPN-backed injury sync (e.g. MLS). No position-resolution step is
     needed here -- ESPN's own roster entries already carry a real position
-    bucket per player.
+    bucket and role per player.
     """
     from soccer_predictor.storage.repository import teams_for_league
 
@@ -379,6 +400,7 @@ def _sync_injuries_to_db_espn(session: Session, league: League) -> tuple[int, in
                 {
                     "player_name": injury.player_name,
                     "position": injury.position_bucket,
+                    "role": injury.role,
                     "importance_weight": importance_weight,
                     "note": injury.note,
                 }

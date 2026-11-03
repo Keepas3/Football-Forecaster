@@ -27,7 +27,7 @@ from pathlib import Path
 import requests
 
 from soccer_predictor.config import DATA_DIR
-from soccer_predictor.ingest import club_names, http_session
+from soccer_predictor.ingest import club_names, http_session, positions
 
 # This app's league code -> Biwenger's competition slug.
 COMPETITIONS = {"LALIGA": "la-liga", "UCL": "champions-league"}
@@ -36,9 +36,6 @@ CACHE_DIR = DATA_DIR / "cache" / "biwenger"
 # Injury news changes through the week, not by the minute.
 CACHE_TTL_SECONDS = 3 * 3600
 
-# Biwenger position 1-4 (goalkeeper, defender, midfielder, forward) -> this app's
-# bucket: goalkeepers and defenders count as "defense", the rest as "attack".
-_POSITION_BUCKET = {1: "defense", 2: "defense", 3: "attack", 4: "attack"}
 # "warned" (one yellow card from a ban) and "unknown" are not unavailability.
 _STATUSES = {"injured", "doubt", "sanctioned"}
 # Where a doubtful player has no stated chance, take it as a coin flip.
@@ -74,6 +71,7 @@ class BiwengerInjury:
     news: str  # normalised, e.g. "Hamstring injury - Expected back mid-November"
     games_played: int = 0  # league games this season
     price_share: float = 0.0  # his market price as a share of his club's most expensive player
+    role: str = ""  # where he plays, one of positions.POSITION_ORDER's words ("" if unknown)
 
 
 def _cache_file(slug: str) -> Path:
@@ -165,16 +163,18 @@ def parse_injuries(data: dict) -> list[BiwengerInjury]:
                 continue
             chance = DEFAULT_CHANCE_OF_PLAYING if status == "doubt" else 0
             top = top_price.get(player["teamID"]) or 0
+            role = positions.FANTASY_POSITIONS.get(player.get("position"))
             injuries.append(
                 BiwengerInjury(
                     player_name=str(player["name"]).strip(),
                     team_name=teams[str(player["teamID"])],
-                    position_bucket=_POSITION_BUCKET.get(player.get("position"), "attack"),
+                    position_bucket=positions.bucket(role),
                     status=status,
                     chance_of_playing=chance,
                     news=clean_news(status, player.get("statusInfo")),
                     games_played=int(player.get("playedHome") or 0) + int(player.get("playedAway") or 0),
                     price_share=min(1.0, int(player.get("price") or 0) / top) if top else 0.0,
+                    role=role or "",
                 )
             )
         except (KeyError, TypeError, ValueError):

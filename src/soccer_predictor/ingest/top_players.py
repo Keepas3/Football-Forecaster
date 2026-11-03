@@ -30,6 +30,7 @@ import requests
 from soccer_predictor.config import League
 from soccer_predictor.ingest import api_client, asa_client, espn_client, understat_client
 from soccer_predictor.ingest.memo import ttl_memo
+from soccer_predictor.ingest.positions import DEFENCE, GOALKEEPER, MIDFIELD, OFFENCE, POSITION_ORDER
 
 TOP_N = 15
 # Per-90 rates need a real sample: a player with one 20-minute cameo and a
@@ -52,11 +53,7 @@ METRIC_LABELS = {
 }
 
 
-# Where a player plays, in the words a team's page uses for its squad (football-data.org's, which
-# ESPN's roster labels follow too), so the two pages read alike. Each stats source spells it its
-# own way; the order is the usual goalkeeper-out one, for sorting.
-GOALKEEPER, DEFENCE, MIDFIELD, OFFENCE = "Goalkeeper", "Defence", "Midfield", "Offence"
-POSITION_ORDER = {GOALKEEPER: 0, DEFENCE: 1, MIDFIELD: 2, OFFENCE: 3}
+# Each stats source spells where a player plays its own way (see ingest/positions.py for the words).
 _UNDERSTAT_POSITIONS = {"GK": GOALKEEPER, "D": DEFENCE, "M": MIDFIELD, "F": OFFENCE}
 _ASA_POSITIONS = {
     "GK": GOALKEEPER,

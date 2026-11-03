@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League, load_leagues, load_manual_injuries
+from soccer_predictor.ingest import positions
 from soccer_predictor.ingest.lineups import expected_squad
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
 from soccer_predictor.model.current_form_adjustment import adjust_for_current_attack_form
@@ -90,6 +91,7 @@ def get_injuries_for_team(
                 player_name=m.player,
                 position=m.position,
                 importance_weight=m.importance_weight,
+                role=positions.normalize_role(m.role),
             )
         )
         sources.append("manual")
@@ -101,6 +103,7 @@ def get_injuries_for_team(
                 player_name=row.player_name,
                 position=row.position,
                 importance_weight=row.importance_weight,
+                role=row.role or "",
             )
         )
         sources.append(row.source)

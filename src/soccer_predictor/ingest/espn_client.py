@@ -212,6 +212,7 @@ class EspnInjuryEntry:
     player_name: str
     position_bucket: str
     note: str
+    role: str = ""  # a _POSITION_LABEL word, "" when ESPN gives no position
 
 
 def fetch_teams(league_slug: str) -> list[EspnTeam]:
@@ -456,7 +457,9 @@ def fetch_team_roster(
         roster.append(EspnRosterPlayer(name=name, position=label, position_bucket=bucket))
         for injury in p.get("injuries") or []:
             note = injury.get("status") or injury.get("type", {}).get("description") or ""
-            injuries.append(EspnInjuryEntry(player_name=name, position_bucket=bucket, note=note))
+            injuries.append(
+                EspnInjuryEntry(player_name=name, position_bucket=bucket, note=note, role=_POSITION_LABEL.get(abbrev, ""))
+            )
 
     return roster, injuries
 

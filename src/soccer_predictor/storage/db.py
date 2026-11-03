@@ -127,12 +127,25 @@ def ensure_prediction_basis_columns(engine=None) -> list[str]:
     return added
 
 
+def ensure_injury_role_column(engine=None) -> bool:
+    """Adds injuries.role to a database created before it existed, returning whether it was
+    added -- automatic in init_db() for the same reason as ensure_group_name_columns. Rows already
+    there keep NULL until the next injury sync fills them in."""
+    engine = engine or get_engine()
+    if "role" in {col["name"] for col in inspect(engine).get_columns("injuries")}:
+        return False
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE injuries ADD COLUMN role VARCHAR"))
+    return True
+
+
 def init_db() -> None:
     Base.metadata.create_all(get_engine())
     ensure_group_name_columns()
     ensure_espn_event_id_columns()
     ensure_prediction_probability_columns()
     ensure_prediction_basis_columns()
+    ensure_injury_role_column()
 
 
 @contextmanager

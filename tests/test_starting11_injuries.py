@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import requests
 from sqlalchemy import create_engine
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from soccer_predictor.config import League
 from soccer_predictor.ingest import asa_client, injuries, player_importance, starting11_client, understat_client
+from soccer_predictor.ingest.asa_client import AsaPlayerStats
 from soccer_predictor.ingest.player_importance import AsaTeamTotals, UnderstatTeamTotals
 from soccer_predictor.storage.models import Base
 from soccer_predictor.storage.repository import get_or_create_team, injuries_for_team, replace_injuries
@@ -69,10 +72,22 @@ def test_the_page_is_read_into_clubs_and_players_with_status_position_and_proble
     assert (crew["Mihaj"].position_bucket, crew["Keeper"].position_bucket, crew["Reilly"].position_bucket) == (
         "defense", "defense", "attack",
     )
+    assert (crew["Mihaj"].role, crew["Reilly"].role, crew["Keeper"].role) == ("Defence", "Midfield", "Goalkeeper")
     assert (crew["Mihaj"].status, crew["Mihaj"].problem, crew["Mihaj"].chance_of_playing) == ("Out", "Hip Injury", 0)
     austin = {p.player_name: p for p in parsed["Austin"]}
     assert (austin["Torres"].status, austin["Torres"].chance_of_playing) == ("Doubtful", 75)
     assert (austin["Thompson"].status, austin["Thompson"].problem) == ("Suspended", "Red Card")
+
+
+def test_a_forward_is_offence_and_a_position_the_page_does_not_give_is_left_blank():
+    page = _page(
+        _card("austin", "Austin", _row(10, "Anyone", "FWD", "Thigh Injury", "Out"), _row(11, "Nobody", "", "Knee", "Out")),
+        totals="All injuries 2 Out 0 Doubtful 0 Suspended",
+    )
+    parsed = {p.player_name: p for p in starting11_client.parse_page(page)["Austin"]}
+
+    assert (parsed["Anyone"].role, parsed["Anyone"].position_bucket) == ("Offence", "attack")
+    assert (parsed["Nobody"].role, parsed["Nobody"].position_bucket) == ("", "attack")
 
 
 def test_a_club_left_with_nobody_after_the_non_injuries_are_dropped_is_still_listed():
@@ -181,7 +196,9 @@ def _stub_stats(monkeypatch, weight=0.6, known=True):
     monkeypatch.setattr(player_importance, "aggregate_asa_team_output", lambda players: AsaTeamTotals(0.0, 0))
     monkeypatch.setattr(player_importance, "aggregate_understat_team_output", lambda players: UnderstatTeamTotals(0.0, 0))
     monkeypatch.setattr(player_importance, "resolve_api_importance_weight", lambda *a, **k: weight)
-    monkeypatch.setattr(player_importance, "find_asa_player", lambda name, players: object() if players else None)
+    monkeypatch.setattr(
+        player_importance, "find_asa_player", lambda name, players: SimpleNamespace(position=None) if players else None
+    )
     monkeypatch.setattr(player_importance, "find_understat_player", lambda name, players: object() if players else None)
 
 
@@ -207,12 +224,45 @@ def test_mls_goes_to_starting11_not_the_empty_espn_roster_injuries(monkeypatch):
         assert set(by_name) == {"Mihaj", "Reilly", "Keeper"}
         assert by_name["Mihaj"].importance_weight == 0.6 and by_name["Mihaj"].position == "defense"
         assert by_name["Mihaj"].note == "Starting XI: Hip Injury"
+        assert (by_name["Mihaj"].role, by_name["Reilly"].role) == ("Defence", "Midfield")
         austin_rows = {i.player_name: i for i in injuries_for_team(s, austin.id)}
         assert abs(austin_rows["Torres"].importance_weight - 0.15) < 1e-9  # 75% likely to play: a quarter
         assert austin_rows["Torres"].note == "Starting XI: Injury - 75% chance of playing"
         assert austin_rows["Thompson"].note == "Starting XI: Red Card - Suspended"
         assert any(i.source == "manual" and i.player_name == "Keep Me" for i in injuries_for_team(s, crew.id))
         assert [i.player_name for i in injuries_for_team(s, other.id)] == ["Untouched"]  # not on the page: left alone
+
+
+def _asa(name, position):
+    return AsaPlayerStats(
+        name=name, position=position, minutes=1800, goals=1, assists=1, xg=1.0, xa=1.0, shots=10, key_passes=5, points_added=0.0
+    )
+
+
+def test_an_mls_player_gets_the_specific_position_asa_lists_when_it_agrees_with_the_page(monkeypatch):
+    # The page's broad position (Mihaj DEF, Reilly MID, Keeper GK, Bell DEF) against ASA's:
+    asa = [
+        _asa("Mihaj", "CB"),  # more specific, same side of the rating: used
+        _asa("Reilly", "W"),  # a midfielder ASA calls a winger: both count as attack, so used
+        _asa("Keeper", "CB"),  # a goalkeeper matched to an outfielder: the wrong man, not used
+        _asa("Bell", "DM"),  # a defender matched to a midfielder: the other side of the rating, not used
+    ]
+    monkeypatch.setattr(asa_client, "fetch_team_season", lambda *a, **k: asa)
+    monkeypatch.setattr(starting11_client, "fetch_injuries_by_club", lambda code: starting11_client.parse_page(PAGE))
+    with _session() as s:
+        crew = get_or_create_team(s, "Columbus Crew", "MLS")
+        austin = get_or_create_team(s, "Austin FC", "MLS")
+        s.commit()
+
+        injuries.sync_injuries_to_db(s, MLS, 2026)
+        s.commit()
+
+        roles = {i.player_name: i.role for team in (crew, austin) for i in injuries_for_team(s, team.id)}
+    assert roles["Mihaj"] == "Centre-back"
+    assert roles["Reilly"] == "Winger"
+    assert roles["Keeper"] == "Goalkeeper"
+    assert roles["Bell"] == "Defence"
+    assert roles["Anyone"] == "Offence"  # ASA does not list him: the page's own word
 
 
 def test_a_european_league_is_priced_from_understat(monkeypatch):

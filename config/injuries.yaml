@@ -6,6 +6,12 @@
 # importance_weight is 0-1: how much the team relies on this player.
 # position is "attack" or "defense" (defenders + goalkeeper); it decides
 # which team rating (attack or defense) the injury pulls down.
+# role is optional, and is only what the Injuries tab shows for him (position above
+# is still what moves the rating). Without it the tab says just Attack or Defence.
+# Use any of: Goalkeeper, Defence, Centre-back, Left-back, Right-back, Full-back,
+# Midfield, Defensive mid, Central mid, Attacking mid, Offence, Winger,
+# Left winger, Right winger, Striker. Usual abbreviations work too (CB, LB, RB, CDM,
+# CM, CAM, LW, RW, ST); a role it does not know is ignored.
 #
 # Don't have to guess importance_weight by hand: it's the same number
 # ingest/player_importance.py::resolve_team_importance_weights computes
@@ -18,6 +24,7 @@
 #   - team: Arsenal
 #     player: Bukayo Saka
 #     position: attack
+#     role: Right winger
 #     importance_weight: 0.8
 #     note: "Hamstring, out ~4 weeks (manual entry 2026-09-25)"
 

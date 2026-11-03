@@ -20,16 +20,19 @@ from soccer_predictor.dashboard.components import (
     sortable_table_html,
     team_page_href,
 )
-from soccer_predictor.dashboard.players_table import player_page_href
+from soccer_predictor.dashboard.players_table import POSITION_HINT, player_page_href
+from soccer_predictor.ingest.positions import ROLE_ORDER
 
 # No return date sorts after every real one when the soonest is shown first.
 _NO_DATE = 10**7
+# A position the source did not give (just "Attack") sorts after the named ones.
+_NO_POSITION = len(ROLE_ORDER)
 
 _CHANCE_HINT = "How likely he is to play the next match."
 _BACK_HINT = 'Some feeds only say roughly when ("mid-November"); those show the middle of the month.'
 _IMPACT_HINT = (
-    "How much the model discounts the team for him (an attacker lowers its attack, a defender or keeper "
-    "raises the goals it concedes). A doubtful player counts for less."
+    "How much the model discounts the team for him (a midfielder or forward lowers its attack, a defender "
+    "or keeper raises the goals it concedes). A doubtful player counts for less."
 )
 
 
@@ -61,7 +64,7 @@ def _player_columns(show_team: bool) -> list[TableColumn]:
         TableColumn("Problem", left=True, sort="text", first="asc"),
         TableColumn("Chance of playing", sort="num", first="desc", hint=_CHANCE_HINT),
         TableColumn("Expected back", sort="num", first="asc", hint=_BACK_HINT),
-        TableColumn("Position", left=True, sort="text", first="asc"),
+        TableColumn("Position", left=True, sort="num", first="asc", hint=POSITION_HINT),
         TableColumn("Impact", sort="num", first="desc", hint=_IMPACT_HINT),
         TableColumn("Source", left=True, sort="text", first="asc"),
     ]
@@ -94,7 +97,7 @@ def injury_players_table_html(
             TableCell(
                 "–" if pd.isna(back) else f"{back.day} {back:%b %Y}", _NO_DATE if pd.isna(back) else back.toordinal()
             ),
-            TableCell(_text(row["Position"]), str(row["Position"]).casefold()),
+            TableCell(_text(row["Position"]), ROLE_ORDER.get(row["Position"], _NO_POSITION)),
             _impact_cell(float(row["Impact"])),
             TableCell(_text(row["Source"]), str(row["Source"]).casefold()),
         ]

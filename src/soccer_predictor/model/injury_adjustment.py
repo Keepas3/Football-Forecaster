@@ -34,6 +34,9 @@ class InjuryEntry:
     player_name: str
     position: str  # "attack" | "defense"
     importance_weight: float
+    # Where he plays (ingest/positions.py's words), when the source says. Only for display: the
+    # rating moves with `position` alone.
+    role: str = ""
 
 
 def adjust_strength(

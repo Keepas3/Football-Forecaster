@@ -136,6 +136,10 @@ class Injury(Base):
     position: Mapped[str] = mapped_column(String)  # "attack" | "defense"
     importance_weight: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String)  # "manual" | "api" | "chat"
+    # Where he plays, one of ingest/positions.py::POSITION_ORDER's words. Only for what a feed tells
+    # us (None for rows synced before this column existed, and for chat notes): `position` above is
+    # what the model uses, and it cannot tell a midfielder from a striker.
+    role: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     note: Mapped[str] = mapped_column(String, default="")
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime)
     # Only ever populated for source="chat" -- manual/api rows stay
