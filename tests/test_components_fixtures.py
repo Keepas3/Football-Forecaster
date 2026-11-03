@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from soccer_predictor.config import League
 from soccer_predictor.dashboard.components import (
+    LIVE_MATCH_WINDOW,
     _predicted_outcome_styles,
     fixture_columns_with_kickoff_first,
     format_kickoff,
@@ -57,6 +58,31 @@ def test_format_kickoff_no_live_marker_after_match_window():
     now = kickoff + dt.timedelta(hours=3)  # well past a normal match length
     result = format_kickoff(kickoff, dt.date(2026, 10, 10), EASTERN, now=now)
     assert "LIVE" not in result
+
+
+def test_format_kickoff_shows_full_time_once_the_match_window_is_over():
+    kickoff = dt.datetime(2026, 10, 10, 19, 0)
+    now = kickoff + dt.timedelta(hours=3)  # the result has not been stored yet
+    result = format_kickoff(kickoff, dt.date(2026, 10, 10), EASTERN, now=now)
+    assert result.startswith("🏁 FULL TIME · ")
+    assert "03:00 PM" in result  # still says when it kicked off
+
+
+def test_format_kickoff_changes_from_live_to_full_time_at_the_end_of_the_window():
+    kickoff = dt.datetime(2026, 10, 10, 19, 0)
+    last_minute = kickoff + LIVE_MATCH_WINDOW - dt.timedelta(minutes=1)
+    assert format_kickoff(kickoff, dt.date(2026, 10, 10), EASTERN, now=last_minute).startswith("🔴 LIVE · ")
+    assert format_kickoff(kickoff, dt.date(2026, 10, 10), EASTERN, now=kickoff + LIVE_MATCH_WINDOW).startswith(
+        "🏁 FULL TIME · "
+    )
+
+
+def test_format_kickoff_has_no_marker_before_kickoff_and_none_without_a_kickoff_time():
+    kickoff = dt.datetime(2026, 10, 10, 19, 0)
+    before = format_kickoff(kickoff, dt.date(2026, 10, 10), EASTERN, now=kickoff - dt.timedelta(minutes=1))
+    assert "LIVE" not in before and "FULL TIME" not in before
+    # A fixture with no kickoff time is only known by its date: nothing to say about whether it is over.
+    assert format_kickoff(None, dt.date(2026, 10, 10), EASTERN, now=kickoff + dt.timedelta(days=1)) == "Oct 10, 2026"
 
 
 def test_format_kickoff_live_marker_at_exact_kickoff():

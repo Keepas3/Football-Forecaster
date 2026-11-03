@@ -159,10 +159,14 @@ def timezone_selector() -> ZoneInfo:
 
 
 # A generous estimate (90 min + halftime + typical stoppage time) for how
-# long a match stays "live" after kickoff -- there's no real-time score feed
-# wired up (see the Upcoming Fixtures caption), so this is a clock-based
-# guess rather than the match's actual live/finished status.
+# long a match lasts after kickoff. The fixtures tables have no per-match
+# status, so "live" and "full time" in them are this clock-based guess; the
+# LIVE NOW banner (ingest/live_scores.py) uses the same length for when a
+# match is over.
 LIVE_MATCH_WINDOW = dt.timedelta(hours=2, minutes=15)
+# What the Kickoff column says once the match should be over -- and the
+# fixture is still listed, i.e. its final score hasn't been synced yet.
+FULL_TIME_LABEL = "🏁 FULL TIME"
 
 
 def format_kickoff(
@@ -172,7 +176,9 @@ def format_kickoff(
     synced before this column existed) -- falls back to date-only display.
 
     Prefixes a "LIVE" marker when `now` (defaults to the real current time;
-    overridable for tests) falls within LIVE_MATCH_WINDOW of kickoff.
+    overridable for tests) falls within LIVE_MATCH_WINDOW of kickoff, and a
+    "FULL TIME" one from the end of that window on, so a match that is over
+    but whose result hasn't been stored yet doesn't look like it is still to come.
     """
     if pd.isna(kickoff_utc):
         return fallback_date.strftime("%b %d, %Y")
@@ -180,9 +186,11 @@ def format_kickoff(
     formatted = local.strftime("%b %d, %Y %I:%M %p %Z")
 
     now = now if now is not None else dt.datetime.now(dt.UTC).replace(tzinfo=None)
-    if kickoff_utc <= now < kickoff_utc + LIVE_MATCH_WINDOW:
+    if now < kickoff_utc:
+        return formatted
+    if now < kickoff_utc + LIVE_MATCH_WINDOW:
         return f"🔴 LIVE · {formatted}"
-    return formatted
+    return f"{FULL_TIME_LABEL} · {formatted}"
 
 
 _LIVE_LABEL = "🔴 LIVE"
