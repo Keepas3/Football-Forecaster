@@ -26,6 +26,16 @@ def _no_real_year_scoreboard_requests(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_committed_understat_snapshot(tmp_path_factory, monkeypatch):
+    """data/understat_snapshot/ holds real player data, used when Understat is down. A test that
+    makes Understat fail would otherwise be answered from it (and expect no data). Tests of the
+    snapshot itself (test_understat_snapshot.py) point SNAPSHOT_DIR at their own folder."""
+    from soccer_predictor.ingest import understat_client
+
+    monkeypatch.setattr(understat_client, "SNAPSHOT_DIR", tmp_path_factory.mktemp("no_understat_snapshot"))
+
+
+@pytest.fixture(autouse=True)
 def _clear_in_memory_caches():
     """ttl_memo results would otherwise carry one test's patched data into the next."""
     from soccer_predictor.ingest import memo, understat_client

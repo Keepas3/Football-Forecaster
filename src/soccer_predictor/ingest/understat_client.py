@@ -31,6 +31,7 @@ import datetime as dt
 import hashlib
 import html
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,9 @@ from soccer_predictor.ingest.memo import ttl_memo
 
 BASE_URL = "https://understat.com"
 CACHE_DIR = DATA_DIR / "cache" / "understat"
+# The latest season of each league, committed with the repo (the disk cache above is not):
+# what is used when Understat is down and there is no disk cache. See save_snapshot.
+SNAPSHOT_DIR = DATA_DIR / "understat_snapshot"
 
 # Short -- the whole point of this source is that it reflects the CURRENT
 # season, which changes match to match, not a frozen past season.
@@ -155,12 +159,44 @@ def _request_league_players(league_slug: str, season: int) -> list[dict] | None:
     return data.get("players", [])
 
 
+def _snapshot_path(league_slug: str) -> Path:
+    return SNAPSHOT_DIR / f"{re.sub(r'[^a-z0-9]+', '-', league_slug.lower()).strip('-')}.json"
+
+
+def _read_snapshot(league_slug: str, season: int) -> tuple[float, list[dict]] | None:
+    """(when it was fetched as a Unix time, rows) from the committed copy of this league's data,
+    or None when there is none, it is unreadable, or it is for another season."""
+    try:
+        saved = json.loads(_snapshot_path(league_slug).read_text(encoding="utf-8"))
+        if saved["season"] != season or not saved["players"]:
+            return None
+        fetched = dt.datetime.fromisoformat(saved["fetched_at"]).replace(tzinfo=dt.UTC).timestamp()
+        return fetched, list(saved["players"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _newest_saved_copy(league_slug: str, season: int, cache_file: Path) -> list[dict] | None:
+    """The newest copy of this league's rows we hold without asking Understat: the disk cache
+    (however old) or the committed snapshot, whichever was fetched later."""
+    candidates: list[tuple[float, list[dict]]] = []
+    stale = _cached_players(cache_file, None)
+    if stale:
+        candidates.append((cache_file.stat().st_mtime, stale))
+    snapshot = _read_snapshot(league_slug, season)
+    if snapshot is not None:
+        candidates.append(snapshot)
+    return max(candidates, key=lambda c: c[0])[1] if candidates else None
+
+
 def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
     """Raw player rows for every team in `league_slug`/`season` -- one POST
     covers the whole league, so team resolution below is a local fuzzy
     match, the same fetch-once-match-locally approach asa_client.py uses.
-    When Understat cannot be reached the last saved copy is used, however old:
-    last week's numbers beat none.
+    When Understat cannot be reached the newest saved copy is used, however old:
+    last week's numbers beat none. That is the disk cache, or -- where there is
+    none, as on a GitHub Actions runner or a freshly rebooted Streamlit app --
+    the snapshot committed with the repo (see save_snapshot).
     """
     cache_file = _cache_path(league_slug, season)
     fresh = _cached_players(cache_file, CACHE_TTL_SECONDS)
@@ -170,9 +206,9 @@ def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
     try:
         players = _request_league_players(league_slug, season)
     except (requests.RequestException, ValueError):
-        stale = _cached_players(cache_file, None)
-        if stale is not None:
-            return stale
+        saved = _newest_saved_copy(league_slug, season, cache_file)
+        if saved is not None:
+            return saved
         raise
     if players is None:
         return []
@@ -180,6 +216,46 @@ def _fetch_league_players(league_slug: str, season: int) -> list[dict]:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(json.dumps(players), encoding="utf-8")
     return players
+
+
+def _write_snapshot(league_slug: str, season: int, players: list[dict], fetched_at: dt.datetime) -> bool:
+    """Writes the committed copy unless it already holds these rows (or newer ones: a later
+    season). True when the file changed."""
+    path = _snapshot_path(league_slug)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing["season"] > season or (existing["season"] == season and existing["players"] == players):
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    saved = {"season": season, "fetched_at": fetched_at.strftime("%Y-%m-%dT%H:%M:%S"), "players": players}
+    path.write_text(json.dumps(saved, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def save_snapshot(league_code: str, season: int) -> bool:
+    """Keeps the committed copy of this league's data (data/understat_snapshot/) up to date,
+    from what Understat gave in the last day. Understat has no official API and goes down
+    now and then (it showed a "we will come back soon" page from 2026-11-02), and a GitHub
+    Actions runner starts every job with no disk cache: without a copy in the repo, a
+    lineup could not be rated, and was locked as an early forecast for good, whenever the
+    site was down at lineup time. Called by the daily refresh only (scripts/save_understat_snapshot.py),
+    so a visitor's page view or a local run never edits a tracked file. Returns True when
+    the file changed; nothing is written when there is nothing fresh to save."""
+    league_slug = UNDERSTAT_LEAGUE_SLUG.get(league_code)
+    if league_slug is None:
+        return False
+    try:
+        _fetch_league_players(league_slug, season)  # makes the request if the disk cache is not fresh
+    except (requests.RequestException, ValueError):
+        return False
+    cache_file = _cache_path(league_slug, season)
+    fresh = _cached_players(cache_file, CACHE_TTL_SECONDS)
+    if not fresh:
+        return False  # nothing came back, or only an old copy did: keep the committed one
+    fetched_at = dt.datetime.fromtimestamp(cache_file.stat().st_mtime, dt.UTC)
+    return _write_snapshot(league_slug, season, fresh, fetched_at)
 
 
 def _parse_player(row: dict) -> UnderstatPlayerStats:

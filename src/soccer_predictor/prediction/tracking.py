@@ -141,8 +141,10 @@ def lock_due_predictions(
     is made from them (basis "lineup", see prediction.service.predict_fixture) and
     locked at once. With none yet the match is left alone until
     EARLY_FALLBACK_MINUTES before kickoff, when the early forecast is locked instead
-    (basis "early"); a lineup that cannot be rated (no player stats for either club)
-    is locked the same way, since it changes nothing. A match locked by the older
+    (basis "early"). A lineup that cannot be rated (no player stats for either club)
+    is treated alike: in a league with no stats source at all it is locked as early
+    at once, since it changes nothing; in one that has a source it waits for the
+    fallback time too, because the stats may only be unreachable for now. A match locked by the older
     48-hour rule that has not kicked off is replaced; one already played, or whose
     kickoff time is still a placeholder, is never touched, and neither is a match
     that has started: a forecast made after kickoff is not a forecast.
@@ -172,7 +174,8 @@ def lock_due_predictions(
         home_name = team_names.get(row.home_team_id, f"team#{row.home_team_id}")
         away_name = team_names.get(row.away_team_id, f"team#{row.away_team_id}")
         xi = named_xi(session, league, row, home_name, away_name)
-        if xi is None and (row.kickoff_utc - now) > dt.timedelta(minutes=EARLY_FALLBACK_MINUTES):
+        before_fallback = (row.kickoff_utc - now) > dt.timedelta(minutes=EARLY_FALLBACK_MINUTES)
+        if xi is None and before_fallback:
             continue  # the lineup may still come
         prediction = predict_fixture(
             session,
@@ -189,6 +192,13 @@ def lock_due_predictions(
         rated = xi is not None and (
             breakdown.home_lineup_absences is not None or breakdown.away_lineup_absences is not None
         )
+        if xi is not None and not rated and before_fallback and lineups.has_player_stats(league):
+            # The XI is out but could not be compared with either squad. Where a stats source
+            # exists that is often the source being down for a while (Understat was, from
+            # 2026-11-02, and every match was locked unrated and for good), so leave the lock
+            # for the next run: it may be rated by then. At the fallback time it is locked
+            # as an early forecast after all.
+            continue
         predicted_home_goals, predicted_away_goals, _ = prediction.top_scorelines[0]
         if insert_prediction_record(
             session,

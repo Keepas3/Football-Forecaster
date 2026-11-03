@@ -159,15 +159,73 @@ def test_no_lineup_by_the_fallback_time_locks_the_early_forecast(session, teams)
     assert record.p_home is not None
 
 
-def test_a_lineup_that_cannot_be_rated_locks_as_early_straight_away(session, teams, monkeypatch):
-    # neither club has player stats here, so the XI would change nothing
+UNRATED_XI = [f"Arsenal Player {i}" for i in range(11)]
+
+
+def test_a_lineup_that_cannot_be_rated_waits_for_the_fallback_time_where_a_stats_source_exists(
+    session, teams, monkeypatch
+):
+    """Neither club's stats could be read (the source may be down): the XI is not locked as an early
+    forecast the moment it appears -- that lock is final -- but at the fallback time, like a missing XI."""
     monkeypatch.setattr(service, "expected_squad", lambda name, league: [])
     _fixture(session, teams, NOW + dt.timedelta(minutes=70))
+    named_xi = _announces(_xi(UNRATED_XI))
 
-    assert _lock(session, teams, _announces(_xi([f"Arsenal Player {i}" for i in range(11)]))) == 1
+    assert _lock(session, teams, named_xi) == 0
+    assert all_prediction_records(session) == []
+    assert named_xi.asked  # it did look the lineup up
+
+    later = NOW + dt.timedelta(minutes=70 - EARLY_FALLBACK_MINUTES)  # the fallback time
+    assert _lock(session, teams, named_xi, now=later) == 1
+    [record] = all_prediction_records(session)
+    assert record.basis == EARLY_BASIS and record.lineup_json is None
+
+
+def test_a_lineup_left_unrated_is_rated_and_locked_once_the_stats_are_back(session, teams, monkeypatch):
+    stats = {"up": False}
+    monkeypatch.setattr(
+        service, "expected_squad", lambda name, league: [SAKA, *SQUAD] if stats["up"] and name == "Arsenal" else []
+    )
+    _fixture(session, teams, NOW + dt.timedelta(minutes=70))
+    named_xi = _announces(_xi(SAKA_BENCHED))
+
+    assert _lock(session, teams, named_xi) == 0  # Understat down: nothing locked
+
+    stats["up"] = True
+    assert _lock(session, teams, named_xi, now=NOW + dt.timedelta(minutes=10)) == 1
+    [record] = all_prediction_records(session)
+    assert record.basis == LINEUP_BASIS and json.loads(record.lineup_json)["home"] == SAKA_BENCHED
+
+
+def test_a_lineup_that_cannot_be_rated_locks_as_early_straight_away_where_no_stats_exist(
+    session, teams, monkeypatch
+):
+    """A competition with no player-stats source (a cup, the Nations League...): no wait could help."""
+    monkeypatch.setattr(service, "expected_squad", lambda name, league: [])
+    cup = League(code="NL", name="Nations League", seasons=["2627"], data_source="espn", espn_league_slug="uefa.nations")
+    _fixture(session, teams, NOW + dt.timedelta(minutes=70), league_code="NL")
+
+    assert _lock(session, teams, _announces(_xi(UNRATED_XI)), league=cup) == 1
 
     [record] = all_prediction_records(session)
     assert record.basis == EARLY_BASIS and record.lineup_json is None
+
+
+def test_a_lineup_with_only_one_club_rated_still_locks_at_once(session, teams):
+    """Arsenal has stats, Villa has none (the usual case for a smaller club): rated, so locked now."""
+    _fixture(session, teams, NOW + dt.timedelta(minutes=70))
+
+    assert _lock(session, teams, _announces(_xi(SAKA_BENCHED))) == 1
+    assert all_prediction_records(session)[0].basis == LINEUP_BASIS
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [("EPL", True), ("LALIGA", True), ("BUNDESLIGA", True), ("SERIEA", True), ("LIGUE1", True),
+     ("MLS", True), ("UCL", True), ("NL", False), ("EURO", False), ("WC", False), ("ASIA", False)],
+)
+def test_which_leagues_have_a_player_stats_source(code, expected):
+    assert lineups.has_player_stats(League(code=code, name=code, seasons=["2627"])) is expected
 
 
 def test_a_match_that_has_started_is_never_locked(session, teams):

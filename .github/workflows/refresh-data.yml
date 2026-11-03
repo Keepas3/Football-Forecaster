@@ -38,15 +38,20 @@ jobs:
           uv run python scripts/fetch_historical_data.py
           uv run python scripts/refresh_live_data.py
           uv run python scripts/run_training.py
+          # Keep the committed copy of Understat's current-season data fresh. It is what
+          # rates a lineup (and feeds the Players page) while Understat is down: a runner
+          # starts every job with no disk cache. A no-op if Understat did not answer today.
+          uv run python scripts/save_understat_snapshot.py
 
       - name: Commit and push if data changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet -- data/soccer.db; then
-            git add data/soccer.db
+          # status, not diff: the first snapshot of a new season is a new (untracked) file
+          if [ -n "$(git status --porcelain -- data/soccer.db data/understat_snapshot)" ]; then
+            git add data/soccer.db data/understat_snapshot
             git commit -m "Automated data refresh"
             git push
           else
-            echo "No changes to data/soccer.db -- nothing to commit"
+            echo "No changes to data/soccer.db or data/understat_snapshot -- nothing to commit"
           fi

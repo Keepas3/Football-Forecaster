@@ -133,6 +133,18 @@ def _expected_player(player, bucket: tuple[str, bool], totals, roles: dict[str, 
     )
 
 
+def has_player_stats(league: League) -> bool:
+    """Whether any player-stats source covers `league` (American Soccer Analysis for MLS,
+    Understat for the five European leagues and, through its clubs' domestic leagues, the
+    Champions League). Where none does, a lineup can never be rated; where one does, a
+    lineup that could not be rated may only mean the source could not be read just now."""
+    return (
+        league.code == "MLS"
+        or league.code in understat_client.UNDERSTAT_LEAGUE_SLUG
+        or league.code == "UCL"
+    )
+
+
 def expected_squad(team_name: str, league: League) -> list[ExpectedPlayer]:
     """Every player with stats for `team_name` this season, priced the way an
     injury to him would be; [] when the league has no player-stats source or the

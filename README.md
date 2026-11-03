@@ -90,7 +90,10 @@ historical results, adjusted for current injuries, recent results and team form.
   season goals/assists/xG/xA/shots/key passes/cards for the five European
   leagues it tracks, back to 2014. Used on the Players/Team Detail pages
   and to size injury adjustments more accurately than raw goals/assists
-  alone.
+  alone. Understat has been down before (it served a maintenance page on
+  2026-11-03), so the daily data refresh also saves each league's current
+  season to `data/understat_snapshot/` (`scripts/save_understat_snapshot.py`),
+  which is used when Understat does not answer and there is no disk cache.
 - **American Soccer Analysis** (documented, no key required): the same
   role as Understat, for MLS specifically -- goals/assists/xG/xA/shots/key
   passes/points added, back to 2013.
@@ -303,7 +306,7 @@ up the free monthly minutes.
 **Until you set this up, many matches go ungraded.** The scheduled refreshes also
 try to lock whatever is due when they happen to run (every two to four hours, so
 they only sometimes land in a match's last 90 minutes, and a refresh in the final
-20 minutes locks it without a lineup); every match they miss stays "Early" and is
+20 minutes locks it without a lineup, or with one that could not be rated); every match they miss stays "Early" and is
 never graded. Set the pinger up when you publish this change.
 
 One-time setup (about ten minutes, free):
@@ -485,7 +488,11 @@ uv run pytest
   the early forecast. The usual XI each team is compared with comes from the
   season's player stats (Understat, or American Soccer Analysis for MLS),
   matched to ESPN's names, so a player whose name cannot be matched is left
-  out rather than guessed. How strongly an absence counts was fitted by
+  out rather than guessed. If those stats cannot be fetched (Understat down
+  and no saved copy), a published lineup that cannot be compared with the
+  usual XI is not locked at once: it waits until 20 minutes before kickoff,
+  giving the stats time to come back, and is then locked as "Early" (leagues
+  with no stats source at all are locked straight away). How strongly an absence counts was fitted by
   `scripts/backtest_lineups.py` on the 2026-27 matches played so far: the
   lineup helped only slightly (ranked probability score 0.2088 to 0.2072 on
   433 matches; better in four leagues, slightly worse in two) and the gain is
