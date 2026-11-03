@@ -8,3 +8,17 @@
 # details still go to the server log. To see tracebacks while developing, run
 # with the environment variable STREAMLIT_CLIENT_SHOWERRORDETAILS=full.
 showErrorDetails = "none"
+
+[server]
+# Streamlit's source-file watcher exists to rerun the app when a .py file is saved. It
+# is created for every visitor's session, and on its first run it looks up the path of
+# every module Python has loaded (about 4,000 here, with pandas, scipy and the rest) --
+# a few seconds of CPU on a laptop, spent on the same thread that serves every page and
+# websocket. On Community Cloud's small slice of CPU that is long enough to make the
+# site look frozen, and the next visitors queue up behind it. A deployed app never
+# needs it: a push redeploys the app. Measured locally: a page load drops from about 5 s
+# of server CPU to about 0.7 s.
+#
+# To get rerun-on-save back while developing, run with
+# STREAMLIT_SERVER_FILE_WATCHER_TYPE=auto (an environment variable beats this file).
+fileWatcherType = "none"
