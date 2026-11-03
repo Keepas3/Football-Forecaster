@@ -1,4 +1,4 @@
 # Who runs the site, shown on the Privacy & Terms page (the "Contact" line).
 # Fill these in, then redeploy. Leave a value blank to leave its line off the page.
-operator: ""
-contact_email: ""
+operator: "Bryan Fung"
+contact_email: "bryanfung61@gmail.com"

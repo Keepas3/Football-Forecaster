@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -83,9 +84,11 @@ def test_an_operator_name_cannot_inject_markup_into_the_page(monkeypatch):
 # --- config/site.yaml ----------------------------------------------------------------------------
 
 
-def test_the_shipped_site_file_is_valid_and_blank_so_nothing_personal_is_published_by_default():
+def test_the_shipped_site_file_has_just_the_two_settings_and_a_usable_email():
     raw = yaml.safe_load((CONFIG_DIR / "site.yaml").read_text(encoding="utf-8"))
-    assert raw == {"operator": "", "contact_email": ""}
+    assert set(raw) == {"operator", "contact_email"}
+    assert all(isinstance(value, str) for value in raw.values())  # a stray `operator: 5` would be a number
+    assert raw["contact_email"] == "" or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", raw["contact_email"])
 
 
 def test_site_info_is_empty_when_the_file_is_missing_or_blank(tmp_path, monkeypatch):
