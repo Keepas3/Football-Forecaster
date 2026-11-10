@@ -44,6 +44,15 @@ class MissingApiKey(Exception):
     pass
 
 
+# Extra seconds kept between a request and the one that reuses its slot. The server stamps a request
+# when it ARRIVES, not when we send it, and the first request of a process arrives late (it has to
+# open the connection first). With a margin of 0.1 s the 11th request could land inside the server's
+# minute of the 1st and get a 429, which is what stopped the daily refresh on 2026-11-08.
+WINDOW_MARGIN_SECONDS = 2.0
+# How many times a 429 is waited out and retried before it is reported as a failure.
+MAX_RATE_LIMIT_RETRIES = 3
+
+
 class RateLimiter:
     """Blocks just long enough to keep requests under N per rolling minute."""
 
@@ -58,11 +67,12 @@ class RateLimiter:
 
     def wait(self) -> None:
         with self._lock:
+            window = 60 + WINDOW_MARGIN_SECONDS
             now = time.monotonic()
-            while self._timestamps and now - self._timestamps[0] > 60:
+            while self._timestamps and now - self._timestamps[0] > window:
                 self._timestamps.popleft()
             if len(self._timestamps) >= self.max_per_minute:
-                sleep_for = 60 - (now - self._timestamps[0]) + 0.1
+                sleep_for = window - (now - self._timestamps[0])
                 time.sleep(max(sleep_for, 0))
             self._timestamps.append(time.monotonic())
 
@@ -73,6 +83,25 @@ _rate_limiter = RateLimiter()
 def _cache_path(path: str, params: dict) -> Path:
     key = hashlib.sha256(f"{path}?{sorted(params.items())}".encode()).hexdigest()
     return CACHE_DIR / f"{key}.json"
+
+
+def _waits_out_rate_limit() -> bool:
+    """True for the scheduled refresh jobs (they set FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT=1), which
+    would rather wait a minute than fail. Off for the dashboard, where a page must never sit
+    through a minute of sleeping: a 429 there just means no data this time."""
+    return os.environ.get("FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT", "").strip().lower() in ("1", "true", "yes")
+
+
+def _seconds_until_allowed_again(response) -> float:
+    """How long to wait after a 429: the server's Retry-After, else its counter reset
+    (X-RequestCounter-Reset), else a full minute; never less than a second or more than 70."""
+    for header in ("Retry-After", "X-RequestCounter-Reset"):
+        try:
+            seconds = float(response.headers.get(header))
+        except (TypeError, ValueError):
+            continue
+        return min(max(seconds + 1, 1.0), 70.0)
+    return 61.0
 
 
 def get(path: str, params: dict | None = None, cache_ttl_seconds: int = 6 * 3600) -> dict:
@@ -91,13 +120,20 @@ def get(path: str, params: dict | None = None, cache_ttl_seconds: int = 6 * 3600
         if age < cache_ttl_seconds:
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    _rate_limiter.wait()
-    response = http_session.get(
-        f"{BASE_URL}{path}",
-        params=params,
-        headers={"X-Auth-Token": api_key},
-        timeout=30,
-    )
+    retries = MAX_RATE_LIMIT_RETRIES if _waits_out_rate_limit() else 0
+    for attempt in range(retries + 1):
+        _rate_limiter.wait()
+        response = http_session.get(
+            f"{BASE_URL}{path}",
+            params=params,
+            headers={"X-Auth-Token": api_key},
+            timeout=30,
+        )
+        if response.status_code != 429 or attempt == retries:
+            break
+        # Over the per-minute allowance (another user of the same key, or a request that arrived
+        # early): wait for the counter to reset rather than failing a whole refresh over it.
+        time.sleep(_seconds_until_allowed_again(response))
     response.raise_for_status()
     data = response.json()
 

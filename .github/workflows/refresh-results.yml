@@ -48,6 +48,8 @@ jobs:
           # 5 and always leaves headroom for the site (see
           # ingest/api_client.py). It makes ~15 requests, so ~3 minutes.
           FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE: "5"
+          # Wait out a 429 instead of failing the run.
+          FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT: "1"
         run: |
           # In-progress season of each football-data.co.uk league: a few small static files.
           uv run python scripts/fetch_historical_data.py --current-season-only

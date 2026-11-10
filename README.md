@@ -456,7 +456,13 @@ uv run pytest
   placeholder-only.
 - **football-data.org's free-tier rate limit** (10 requests/minute) is
   respected via on-disk caching in `data/cache/`. Don't delete that
-  directory and immediately re-run refreshes in a loop. Understat and
+  directory and immediately re-run refreshes in a loop. The limit is per
+  key, and the deployed dashboard shares the key, so the scheduled
+  refreshes cap themselves below it (`FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE`)
+  and, with `FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT=1`, wait out a 429 and retry
+  rather than fail the run (the daily refresh failed on one for three days
+  in November 2026). The dashboard never waits: a 429 there just means no
+  data that time. Understat and
   American Soccer Analysis have no published rate limit, but are still
   called through a self-imposed courtesy limiter and disk cache, since
   both are undocumented/unofficial-ish endpoints that could change or

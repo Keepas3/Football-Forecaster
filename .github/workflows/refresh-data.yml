@@ -34,6 +34,12 @@ jobs:
           # longer exist). Historical player stats now come from Understat
           # (5 European leagues) and American Soccer Analysis (MLS), both
           # keyless; UCL/EURO/World Cup have no stats source at all.
+          #
+          # football-data.org allows 10 requests a minute per key, shared with the deployed
+          # dashboard. Stay under that with room to spare, and wait out a 429 instead of
+          # failing the whole run (it did, 2026-11-08 to 2026-11-10: "429 Too Many Requests").
+          FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE: "6"
+          FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT: "1"
         run: |
           uv run python scripts/fetch_historical_data.py
           uv run python scripts/refresh_live_data.py
