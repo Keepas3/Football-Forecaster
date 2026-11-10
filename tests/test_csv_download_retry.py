@@ -122,3 +122,69 @@ def test_every_download_failing_is_an_outage_and_fails_the_job(script, monkeypat
     with pytest.raises(SystemExit) as stopped:
         _run_main(script, monkeypatch, failing_codes={"E0", "D1", "SP1"})
     assert stopped.value.code == 1
+
+
+def test_the_reason_a_download_failed_is_reported_not_just_its_class(script, monkeypatch):
+    get = _getter(requests.exceptions.SSLError("certificate verify failed: unable to get local issuer certificate"))
+    monkeypatch.setattr(script.requests, "get", get)
+    with pytest.raises(script.CsvDownloadFailed, match="SSLError: .*unable to get local issuer certificate"):
+        script.download_season_csv("D1", "2627", force=True)
+
+
+# --- past seasons already in the database are not downloaded again ------------------------------
+
+
+def _run_two_seasons(script, monkeypatch, stored, argv=("fetch_historical_data.py",), raw_files=()):
+    """One league with a past season (2526) and the current one (2627); `stored` is whether the
+    database already holds the past season."""
+    leagues = {"EPL": League(code="EPL", name="EPL", csv_code="E0", seasons=["2526", "2627"])}
+    downloaded, ingested = [], []
+
+    def download(csv_code, season, force=False):
+        downloaded.append((season, force))
+        return Path(f"{csv_code}_{season}.csv")
+
+    for name in raw_files:
+        (script.RAW_DIR / name).write_text("x")
+    monkeypatch.setattr(script, "init_db", lambda: None)
+    monkeypatch.setattr(script, "load_leagues", lambda: leagues)
+    monkeypatch.setattr(script, "seed_teams_and_aliases", lambda *a: None)
+    monkeypatch.setattr(script, "session_scope", lambda: contextlib.nullcontext())
+    monkeypatch.setattr(script, "_past_season_already_stored", lambda league, season: stored)
+    monkeypatch.setattr(script, "download_season_csv", download)
+    monkeypatch.setattr(script, "parse_csv", lambda path: path.name)
+    monkeypatch.setattr(script, "ingest_into_db", lambda session, code, season, df: ingested.append(season) or (1, 0))
+    monkeypatch.setattr(script.sys, "argv", list(argv))
+    script.main()
+    return downloaded, ingested
+
+
+def test_a_past_season_already_stored_is_not_downloaded_again(script, monkeypatch, capsys):
+    downloaded, ingested = _run_two_seasons(script, monkeypatch, stored=True)
+
+    assert downloaded == [("2627", True)] and ingested == ["2627"]  # only the season still being played
+    assert "skipping 1 past season(s) already stored" in capsys.readouterr().out
+
+
+def test_a_past_season_not_yet_stored_is_downloaded(script, monkeypatch):
+    downloaded, _ = _run_two_seasons(script, monkeypatch, stored=False)
+    assert downloaded == [("2526", False), ("2627", True)]
+
+
+def test_all_seasons_downloads_everything_again(script, monkeypatch):
+    downloaded, _ = _run_two_seasons(script, monkeypatch, stored=True, argv=("fetch_historical_data.py", "--all-seasons"))
+    assert [season for season, _ in downloaded] == ["2526", "2627"]
+
+
+def test_a_past_season_with_a_file_on_disk_is_still_ingested_from_it(script, monkeypatch):
+    downloaded, ingested = _run_two_seasons(script, monkeypatch, stored=True, raw_files=["E0_2526.csv"])
+    assert [season for season, _ in downloaded] == ["2526", "2627"] and ingested == ["2526", "2627"]
+
+
+def test_the_stored_check_counts_the_matches_of_that_league_and_season(script, monkeypatch):
+    seen = []
+    monkeypatch.setattr(script, "session_scope", lambda: contextlib.nullcontext("session"))
+    monkeypatch.setattr(script, "match_count_for_season", lambda s, code, season: seen.append((s, code, season)) or 380)
+
+    assert script._past_season_already_stored(League(code="EPL", name="EPL", csv_code="E0", seasons=["2526"]), "2526")
+    assert seen == [("session", "EPL", "2526")]

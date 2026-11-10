@@ -47,6 +47,7 @@ from soccer_predictor.ingest.team_mapper import (  # noqa: E402
     seed_teams_from_names,
 )
 from soccer_predictor.storage.db import init_db, session_scope  # noqa: E402
+from soccer_predictor.storage.repository import match_count_for_season  # noqa: E402
 
 BASE_URL = "https://www.football-data.co.uk/mmz4281"
 RAW_DIR = DATA_DIR / "raw"
@@ -93,13 +94,23 @@ def download_season_csv(csv_code: str, season: str, force: bool = False) -> Path
             response.raise_for_status()
         except requests.RequestException as exc:
             if attempt == CSV_DOWNLOAD_ATTEMPTS or not _worth_retrying(exc):
-                raise CsvDownloadFailed(f"{url}: {type(exc).__name__}") from exc
+                # The message too, not just the class: "SSLError" alone said nothing about why.
+                raise CsvDownloadFailed(f"{url}: {type(exc).__name__}: {str(exc)[:300]}") from exc
             print(f"  attempt {attempt} failed ({type(exc).__name__}); retrying")
             time.sleep(CSV_RETRY_PAUSE_SECONDS * attempt)
             continue
         dest.write_bytes(response.content)
         return dest
     raise CsvDownloadFailed(url)  # unreachable; keeps the return type honest
+
+
+def _past_season_already_stored(league: League, season: str) -> bool:
+    """A concluded season's CSV never changes, and its matches are already in the committed
+    database, so there is nothing to fetch. (A runner starts with no data/raw, so without this
+    every daily run asked football-data.co.uk, a small hobby site, for 60 files it had
+    already ingested.)"""
+    with session_scope() as session:
+        return match_count_for_season(session, league.code, season) > 0
 
 
 def _sync_worldcup_archive_season(
@@ -295,8 +306,17 @@ def main() -> None:
             seed_teams_and_aliases(session, league.code)
 
         csv_seasons = league.seasons[-1:] if current_season_only else league.seasons
+        stored_seasons = 0
         for season in csv_seasons:
             is_current_season = season == league.seasons[-1]
+            if (
+                not is_current_season
+                and not all_seasons
+                and not (RAW_DIR / f"{league.csv_code}_{season}.csv").exists()
+                and _past_season_already_stored(league, season)
+            ):
+                stored_seasons += 1
+                continue
             try:
                 csv_path = download_season_csv(league.csv_code, season, force=is_current_season)
             except CsvDownloadFailed as exc:
@@ -310,6 +330,8 @@ def main() -> None:
             with session_scope() as session:
                 ingested, skipped = ingest_into_db(session, league.code, season, df)
             print(f"  season {season}: {ingested} matches ingested, {skipped} skipped (unresolved teams)")
+        if stored_seasons:
+            print(f"  skipping {stored_seasons} past season(s) already stored (--all-seasons to redo)")
 
     if download_failures:
         print(f"Could not download: {', '.join(download_failures)}")

@@ -26,6 +26,15 @@ jobs:
 
       - run: uv sync --frozen
 
+      # Its own step, and allowed to fail: football-data.co.uk is a small hobby site that
+      # sometimes cannot be reached from a GitHub runner (SSL errors on 2026-11-10). The
+      # database already holds every finished season, so the rest of the refresh must still
+      # run and be committed; the last step turns the run red so the problem is not hidden.
+      - name: Download historical results
+        id: history
+        continue-on-error: true
+        run: uv run python scripts/fetch_historical_data.py
+
       - name: Refresh data and retrain
         env:
           FOOTBALL_DATA_ORG_API_KEY: ${{ secrets.FOOTBALL_DATA_ORG_API_KEY }}
@@ -41,7 +50,6 @@ jobs:
           FOOTBALL_DATA_MAX_REQUESTS_PER_MINUTE: "6"
           FOOTBALL_DATA_WAIT_OUT_RATE_LIMIT: "1"
         run: |
-          uv run python scripts/fetch_historical_data.py
           uv run python scripts/refresh_live_data.py
           uv run python scripts/run_training.py
           # Keep the committed copy of Understat's current-season data fresh. It is what
@@ -61,3 +69,9 @@ jobs:
           else
             echo "No changes to data/soccer.db or data/understat_snapshot -- nothing to commit"
           fi
+
+      - name: Fail the run if the historical download failed
+        if: steps.history.outcome == 'failure'
+        run: |
+          echo "::error::Downloading historical results failed (football-data.co.uk); everything else was refreshed and committed. See that step's log."
+          exit 1
