@@ -289,10 +289,7 @@ def render() -> None:
                 st.caption(f"{league.name} {season} has already concluded - no upcoming matches.")
             else:
                 st.info(
-                    f"No upcoming Matches loaded for {league.name}. Run "
-                    f"`uv run python scripts/refresh_live_data.py {league.code}`"
-                    f"{live_sync_requirement_note(league)} to pull them. "
-                    "(This shows the schedule, not live in-play scores - that would need a separate real-time feed.)"
+                    f"No upcoming Matches loaded for {league.name}, for the next 7 days."
                 )
         else:
             tz = timezone_selector()

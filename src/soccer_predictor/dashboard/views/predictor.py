@@ -394,7 +394,9 @@ def _render_injuries_tab(
         statuses = col_status.multiselect(
             "Status", [s for s in it.STATUS_ORDER if s in set(frame["Status"])], key=f"inj_status_{league.code}"
         )
-        positions = col_position.multiselect("Position", it.position_choices(frame), key=f"inj_position_{league.code}")
+        positions = col_position.multiselect(
+            "Position", sorted(frame["Position"].unique()), key=f"inj_position_{league.code}"
+        )
         query = col_search.text_input("Search player", key=f"inj_query_{league.code}")
         shown = it.filter_players(frame, teams, statuses, positions, query)
         if shown.empty:
