@@ -453,7 +453,7 @@ def test_a_players_plays_give_the_minute_of_each_goal_assist_card_and_substituti
                 play("70'", "yellowCard"),
                 play("90'+2'", "redCard"),
                 play("90'+3'", "substitution"),
-                play("30'", "scoringPlay", "didScore", "ownGoal"),  # an own goal is not one of his goals
+                play("30'", "scoringPlay", "didScore", "ownGoal"),  # an own goal is not one of his goals, but is marked
                 play("12'", "penaltyKick"),  # a missed penalty is nothing to mark
                 {"clock": {}, "didScore": True},  # no minute, nothing to show
             ],
@@ -463,5 +463,25 @@ def test_a_players_plays_give_the_minute_of_each_goal_assist_card_and_substituti
     busy, quiet = espn_client._parse_lineup_players(entries)
     assert busy.event_minutes == {
         "goal": ["23'", "45'"], "assist": ["61'"], "yellow": ["70'"], "red": ["90'+2'"], "sub": ["90'+3'"],
+        "own_goal": ["30'"],
     }
     assert quiet.event_minutes == {}
+
+
+def test_an_own_goal_shows_in_the_players_match_column_and_is_read_from_espns_stats():
+    entries = [
+        {
+            "athlete": {"displayName": "Unlucky Defender"}, "starter": True, "jersey": "5",
+            "stats": [{"name": "ownGoals", "value": 1.0}, {"name": "totalShots", "value": 0.0}],
+            "plays": [{"clock": {"displayValue": "58'"}, "scoringPlay": True, "didScore": True, "ownGoal": True}],
+        },
+        {
+            "athlete": {"displayName": "Very Unlucky"}, "starter": True, "jersey": "6",
+            "stats": [{"name": "ownGoals", "value": 2.0}],
+        },
+    ]
+    one, two = espn_client._parse_lineup_players(entries)
+
+    assert one.stats == {"ownGoals": 1} and one.event_minutes == {"own_goal": ["58'"]}
+    assert view.player_events_text(one) == "1 own goal"
+    assert view.player_events_text(two) == "2 own goals"

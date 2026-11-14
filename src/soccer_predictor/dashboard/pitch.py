@@ -133,20 +133,43 @@ def short_minute(label: str) -> str:
 
 
 MINUTE_CHAR_WIDTH = 6.9  # about how wide one character of the minute text is
-MINUTE_GAP = RADIUS + 7  # from the player's centre to where the minutes start
+BADGE_GAP = 3  # clear space between the player's circle and a marker
+MINUTE_SPACE = 5  # clear space between a marker and its minutes
+
+
+def _icon_width(icon: str, size: float) -> float:
+    """About how wide a marker is drawn, so the minutes can start clear of it. A little
+    generous: too wide only leaves a slightly larger gap, too narrow makes the two touch."""
+    width = 0.0
+    for char in icon:
+        if ord(char) >= 0x1F000 or char == "⚽":  # an emoji (the football, the boot)
+            width += 1.4 * size
+        elif char.isdigit():
+            width += 0.62 * size
+        elif char.isalpha():  # the bold "OG"
+            width += 0.85 * size
+        else:  # the card square, the subbed-off arrow
+            width += 0.62 * size
+    return width
 
 
 def _badges(player: LineupPlayer, x: float) -> str:
     """Tiny markers beside a player's circle (centred at `x` across the pitch): goals,
-    assists, cards, and coming off, each with the minute it happened when ESPN gave one.
-    The subbed-off arrow is bigger and a strong red with a white outline so it stays
-    readable against the grass. Normally on the right; on the left for a player so near the
-    right edge that the minutes would run off the pitch."""
+    own goals, assists, cards, and coming off, each with the minute it happened when ESPN
+    gave one. Each marker starts clear of the circle (never over it) and its minutes
+    start clear of the marker. The subbed-off arrow is bigger and a strong red with a
+    white outline so it stays readable against the grass. Normally on the right; on the
+    left for a player so near the right edge that the minutes would run off the pitch."""
     marks = []  # (icon, colour, font size, extra attributes, minute labels)
     minutes = player.event_minutes
     if player.stats.get("totalGoals"):
         goals, times = player.stats["totalGoals"], minutes.get("goal", [])
         marks.append(("⚽" if goals == 1 or len(times) == goals else f"⚽{goals}", "#ffffff", 12, "", times))
+    if player.stats.get("ownGoals"):
+        # Not a ball: a goal for the other side. "OG" in red, outlined like the arrow so it reads on the grass.
+        own, times = player.stats["ownGoals"], minutes.get("own_goal", [])
+        outline = ' font-weight="900" font-family="sans-serif" stroke="#ffffff" stroke-width="3" paint-order="stroke"'
+        marks.append(("OG" if own == 1 or len(times) == own else f"OG{own}", "#c62828", 11, outline, times))
     if player.stats.get("goalAssists"):
         assists, times = player.stats["goalAssists"], minutes.get("assist", [])
         marks.append(("👟" if assists == 1 or len(times) == assists else f"👟{assists}", "#ffffff", 12, "", times))
@@ -158,20 +181,24 @@ def _badges(player: LineupPlayer, x: float) -> str:
         arrow = ' font-weight="900" stroke="#ffffff" stroke-width="3" paint-order="stroke"'
         marks.append(("↓", "#c62828", 20, arrow, [player.sub_minute] if player.sub_minute else []))
     labels = [" ".join(short_minute(time) for time in times) for *_, times in marks]
+    icon_widths = [_icon_width(icon, size) for icon, _, size, _, _ in marks]
     longest = max((len(label) for label in labels), default=0)
-    mirror = x + MINUTE_GAP + longest * MINUTE_CHAR_WIDTH > VIEW_WIDTH - 6
+    reach = RADIUS + BADGE_GAP + max(icon_widths, default=0) + MINUTE_SPACE + longest * MINUTE_CHAR_WIDTH
+    mirror = x + reach > VIEW_WIDTH - 6
     sign = -1 if mirror else 1
+    anchor = "end" if mirror else "start"
     parts, y = [], -RADIUS + 8
-    for (icon, colour, size, extra, times), label in zip(marks, labels):
+    for (icon, colour, size, extra, times), label, icon_width in zip(marks, labels, icon_widths):
         parts.append(
-            f'<text x="{sign * (RADIUS - 2)}" y="{y}" font-size="{size}" fill="{colour}" text-anchor="middle"{extra}>'
+            f'<text x="{sign * (RADIUS + BADGE_GAP)}" y="{y}" font-size="{size}" fill="{colour}" text-anchor="{anchor}"{extra}>'
             f"{html.escape(icon)}</text>"
         )
         if label:
             parts.append(
-                f'<text x="{sign * MINUTE_GAP}" y="{y - 1 - (size - 12) * 0.4:.1f}" font-size="12" font-weight="700" '
+                f'<text x="{sign * (RADIUS + BADGE_GAP + icon_width + MINUTE_SPACE):.1f}" '
+                f'y="{y - 1 - (size - 12) * 0.4:.1f}" font-size="12" font-weight="700" '
                 f'fill="#ffffff" stroke="#0b1d3a" stroke-width="3" stroke-linejoin="round" paint-order="stroke" '
-                f'text-anchor="{"end" if mirror else "start"}" font-family="sans-serif">{html.escape(label)}</text>'
+                f'text-anchor="{anchor}" font-family="sans-serif">{html.escape(label)}</text>'
             )
         y += size + 3
     return "".join(parts)

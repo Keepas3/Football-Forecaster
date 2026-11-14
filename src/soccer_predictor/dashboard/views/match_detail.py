@@ -151,7 +151,7 @@ def _state_hint(match_date: dt.date) -> str:
     return "in" if match_date == today else "post"
 
 
-_SINGULAR = {"goals": "goal", "assists": "assist", "shots": "shot", "saves": "save"}
+_SINGULAR = {"goals": "goal", "own goals": "own goal", "assists": "assist", "shots": "shot", "saves": "save"}
 
 
 def _stat_chip(name: str, value: int) -> str:

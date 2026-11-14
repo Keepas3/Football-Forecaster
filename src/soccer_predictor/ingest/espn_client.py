@@ -495,7 +495,8 @@ class LineupPlayer:
     formation_place: int | None = None  # ESPN's slot number in the starting formation (1 = goalkeeper)
     sub_minute: str | None = None  # when he came on or went off, e.g. "64'" (only for a substitution)
     # When each kind of thing happened to him, from his match plays: "goal" (not own
-    # goals), "assist", "yellow", "red", "sub" -> minute labels in order, e.g. ["23'", "90'+2'"].
+    # goals), "own_goal", "assist", "yellow", "red", "sub" -> minute labels in order,
+    # e.g. ["23'", "90'+2'"].
     event_minutes: dict[str, list[str]] = field(default_factory=dict)
     # ESPN stat name -> count, only for the stats in PLAYER_STAT_CHIPS and only
     # when non-zero.
@@ -558,6 +559,7 @@ _EVENT_KIND = {
 # ESPN's per-player stat names -> short chip label, in display order.
 PLAYER_STAT_CHIPS = {
     "totalGoals": "goals",
+    "ownGoals": "own goals",
     "goalAssists": "assists",
     "totalShots": "shots",
     "shotsOnTarget": "on target",
@@ -590,7 +592,9 @@ def _play_minutes(plays: list[dict] | None) -> dict[str, list[str]]:
         if not label:
             continue
         kinds = []
-        if play.get("didScore") and not play.get("ownGoal"):
+        if play.get("ownGoal"):
+            kinds.append("own_goal")
+        elif play.get("didScore"):
             kinds.append("goal")
         if play.get("didAssist"):
             kinds.append("assist")

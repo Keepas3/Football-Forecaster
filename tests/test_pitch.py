@@ -247,3 +247,69 @@ def test_both_pitches_share_the_same_grass_and_markings():
         return re.sub(r'aria-label="[^"]*"', "", svg.split("<g transform")[0])
 
     assert background(match) == background(squad) and "<line" in background(match)
+
+
+def test_an_own_goal_is_marked_with_og_and_its_minute():
+    team = _squad(p3=dict(stats={"ownGoals": 1}, event_minutes={"own_goal": ["58'"]}))
+    svg = pitch.pitch_svg(team)
+    assert ">OG</text>" in svg and "58&#x27;" in svg
+    assert "⚽" not in svg  # it is not one of his goals
+
+
+def test_without_an_own_goal_there_is_no_og_marker():
+    svg = pitch.pitch_svg(_squad(p3=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["7'"]})))
+    assert ">OG" not in svg
+
+
+def test_several_own_goals_without_minutes_show_a_count():
+    svg = pitch.pitch_svg(_squad(p3=dict(stats={"ownGoals": 2})))
+    assert ">OG2</text>" in svg
+
+
+# --- markers sit clear of the circle, and their minutes clear of the marker -----------------------
+
+
+def _badge_texts(player, x=200.0):
+    """[(x, anchor, content, is_minutes)] of the marker text, in order, from the SVG pitch._badges draws."""
+    found = re.findall(r'<text x="(-?[\d.]+)"[^>]*?text-anchor="(\w+)"[^>]*>([^<]*)</text>', pitch._badges(player, x))
+    return [(float(px), anchor, content, "'" in content) for px, anchor, content in found]
+
+
+def _busy_player():
+    player = LineupPlayer(name="Busy", jersey="9", position="CF", starter=True, subbed_out=True, sub_minute="78'")
+    player.stats = {"totalGoals": 2, "ownGoals": 1, "goalAssists": 1, "yellowCards": 1}
+    player.event_minutes = {"goal": ["23'", "90'+2'"], "own_goal": ["58'"], "assist": ["61'"], "yellow": ["44'"]}
+    return player
+
+
+def test_no_marker_overlaps_the_players_circle():
+    texts = _badge_texts(_busy_player())
+    assert len(texts) == 10  # five markers, each with its minutes
+    icons = [t for t in texts if not t[3]]
+    assert all(px >= pitch.RADIUS + pitch.BADGE_GAP for px, *_ in icons)  # starts clear of the circle (anchor "start")
+
+
+def test_minutes_start_clear_of_the_marker_they_belong_to():
+    texts = _badge_texts(_busy_player())
+    sizes = {"⚽": 12, "OG": 11, "👟": 12, "■": 12, "↓": 20}
+    for (icon_x, _, icon, _), (minutes_x, _, _, _) in zip(texts[0::2], texts[1::2]):
+        gap = minutes_x - (icon_x + pitch._icon_width(icon, sizes[icon]))
+        assert gap >= pitch.MINUTE_SPACE - 0.1, icon
+
+
+def test_the_og_marker_is_wider_than_a_ball_so_its_minutes_start_further_out():
+    own = LineupPlayer(name="A", jersey="4", position="CD", starter=True)
+    own.stats, own.event_minutes = {"ownGoals": 1}, {"own_goal": ["58'"]}
+    goal = LineupPlayer(name="B", jersey="9", position="CF", starter=True)
+    goal.stats, goal.event_minutes = {"totalGoals": 1}, {"goal": ["58'"]}
+    assert _badge_texts(own)[1][0] > _badge_texts(goal)[1][0]
+
+
+def test_mirrored_markers_keep_the_same_clearances_on_the_left():
+    right_edge = _badge_texts(_busy_player(), x=330.0)
+    assert all(px < 0 and anchor == "end" for px, anchor, *_ in right_edge)
+    assert all(px <= -(pitch.RADIUS + pitch.BADGE_GAP) for px, _, _, is_minutes in right_edge if not is_minutes)
+    texts = right_edge
+    sizes = {"⚽": 12, "OG": 11, "👟": 12, "■": 12, "↓": 20}
+    for (icon_x, _, icon, _), (minutes_x, _, _, _) in zip(texts[0::2], texts[1::2]):
+        assert icon_x - minutes_x - pitch._icon_width(icon, sizes[icon]) >= pitch.MINUTE_SPACE - 0.1
