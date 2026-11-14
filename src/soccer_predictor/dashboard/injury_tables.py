@@ -20,6 +20,7 @@ from soccer_predictor.dashboard.components import (
     sortable_table_html,
     team_page_href,
 )
+from soccer_predictor.dashboard.injury_table import CLUB_INJURY_LABEL
 from soccer_predictor.dashboard.players_table import POSITION_HINT, player_page_href
 from soccer_predictor.ingest.positions import ROLE_ORDER
 
@@ -98,7 +99,8 @@ def injury_players_table_html(
                 "–" if pd.isna(back) else f"{back.day} {back:%b %Y}", _NO_DATE if pd.isna(back) else back.toordinal()
             ),
             TableCell(_text(row["Position"]), ROLE_ORDER.get(row["Position"], _NO_POSITION)),
-            _impact_cell(float(row["Impact"])),
+            # A club injury is not counted in a country's ratings, so there is no impact to draw.
+            TableCell("–", 0) if row["Source"] == CLUB_INJURY_LABEL else _impact_cell(float(row["Impact"])),
             TableCell(_text(row["Source"]), str(row["Source"]).casefold()),
         ]
         rows.append(cells if show_team else cells[1:])

@@ -15,6 +15,10 @@ ingest/player_importance.py's module docstring. Every other league relies
 solely on config/injuries.yaml (manual) and AI-parsed chat notes (see
 prediction/service.py::get_injuries_for_team).
 
+The national competitions (Nations League, World Cup, Euros, Asian Cup) have no feed of their own;
+their teams list the club injuries of their players instead, display only (see
+ingest/national_injuries.py).
+
 For MLS, the importance_weight each detected injury gets is looked up from
 American Soccer Analysis (ingest/asa_client.py) via
 ingest/player_importance.py, falling back to a flat default when there's
@@ -75,7 +79,8 @@ SINGLE_REQUEST_LEAGUES = FPL_LEAGUES | BIWENGER_LEAGUES
 
 def has_automatic_feed(league: League) -> bool:
     return (
-        league.data_source == "espn"
+        league.team_type == "national"  # its players' club injuries, see ingest/national_injuries.py
+        or league.data_source == "espn"
         or league.code in SINGLE_REQUEST_LEAGUES
         or league.code in STARTING11_LEAGUES
     )

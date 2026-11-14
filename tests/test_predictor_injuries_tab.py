@@ -61,7 +61,7 @@ def page(monkeypatch):
     monkeypatch.setattr(
         predictor,
         "get_injuries_for_team",
-        lambda _session, _id, name, _day: unavailable.get(name, TeamInjuries([], [], [], [])),
+        lambda _session, _id, name, _day, **_: unavailable.get(name, TeamInjuries([], [], [], [])),
     )
     monkeypatch.setattr(predictor, "session_scope", scope)
     monkeypatch.setattr(predictor, "load_latest_params", lambda *a, **k: params)
@@ -268,7 +268,7 @@ def test_the_players_listed_links_carry_the_timezone_and_date_range_through_a_re
 
 def test_without_any_injuries_there_is_no_table_and_no_hidden_box(page, monkeypatch):
     run, _ = page
-    monkeypatch.setattr(predictor, "get_injuries_for_team", lambda *a: TeamInjuries([], [], [], []))
+    monkeypatch.setattr(predictor, "get_injuries_for_team", lambda *a, **k: TeamInjuries([], [], [], []))
     at = run()
     assert not at.exception
     assert any("No injuries on record" in i.value for i in at.info)

@@ -87,7 +87,7 @@ def test_table_height_fits_the_rows_up_to_a_cap():
         ("SERIEA", "starting11.com"),
         ("LIGUE1", "starting11.com"),
         ("EPL", None),  # the Premier League's own fantasy feed needs no credit line here
-        ("EURO", None),
+        ("EURO", "Club injury"),  # a country's players are listed from their clubs
     ],
 )
 def test_the_source_credit_names_the_feed_a_league_uses(league, expected):

@@ -20,7 +20,8 @@ from soccer_predictor.model.injury_adjustment import adjust_strength
 
 OUT, DOUBTFUL, SUSPENDED = "Out", "Doubtful", "Suspended"
 STATUS_ORDER = [OUT, DOUBTFUL, SUSPENDED]
-SOURCE_LABELS = {"api": "Automatic feed", "manual": "Manual list", "chat": "AI note"}
+CLUB_INJURY_LABEL = "Club injury"  # a country's player hurt at his club: shown, but not counted in the ratings
+SOURCE_LABELS = {"api": "Automatic feed", "manual": "Manual list", "chat": "AI note", "club": CLUB_INJURY_LABEL}
 
 PLAYER_COLUMNS = [
     "Team", "Player", "Status", "Problem", "Chance of playing", "Expected back", "Position", "Impact", "Source",

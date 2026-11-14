@@ -310,7 +310,7 @@ def _injury_data(params, team_names: dict[int, str]) -> tuple[pd.DataFrame, dict
     rows, ratings = [], {}
     with session_scope() as session:
         for team_id, team_name in sorted(team_names.items(), key=lambda item: item[1]):
-            team_injuries = get_injuries_for_team(session, team_id, team_name, today)
+            team_injuries = get_injuries_for_team(session, team_id, team_name, today, include_club=True)
             rows += it.player_rows(team_name, team_injuries, today)
             ratings[team_name] = (params.attack[team_id], params.defense[team_id], team_injuries.entries)
     return it.players_frame(rows), ratings

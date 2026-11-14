@@ -58,7 +58,7 @@ def load_latest_params(session: Session, league_code: str) -> DixonColesParams |
 
 
 def get_injuries_for_team(
-    session: Session, team_id: int, team_name: str, as_of: dt.date
+    session: Session, team_id: int, team_name: str, as_of: dt.date, include_club: bool = False
 ) -> TeamInjuries:
     """Merges manual config/injuries.yaml with API-fetched and chat-sourced rows.
 
@@ -69,14 +69,19 @@ def get_injuries_for_team(
     Only chat rows ever carry expected_return_date; manual/api rows have it
     as None and so are never filtered out here regardless of `as_of` --
     that's the point, their prior "always active" behavior is unchanged.
+
+    `include_club` adds the club injuries of a country's players (source "club", see
+    ingest/national_injuries.py) for the pages that list them. Those rows are for display only,
+    so no forecast asks for them: the default leaves them out.
     """
+    sources_wanted = ("api", "chat", "club") if include_club else ("api", "chat")
     manual = [m for m in load_manual_injuries() if m.team == team_name]
     manual_names = {m.player.lower() for m in manual}
 
     other_rows = [
         row
         for row in injuries_for_team(session, team_id)
-        if row.source in ("api", "chat")
+        if row.source in sources_wanted
         and row.player_name.lower() not in manual_names
         and (row.expected_return_date is None or row.expected_return_date >= as_of)
     ]

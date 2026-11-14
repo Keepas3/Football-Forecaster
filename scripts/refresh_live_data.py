@@ -63,6 +63,8 @@ def main() -> None:
             print(f"  injuries: skipped -- {result.injuries_error}")
         else:
             print(f"  injuries: {result.injuries_synced} teams synced, {result.injuries_skipped} skipped")
+        if result.club_injuries_listed:
+            print(f"  club injuries listed under {result.club_injuries_listed} countries")
 
 
 if __name__ == "__main__":

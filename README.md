@@ -426,6 +426,15 @@ uv run pytest
   `config/injuries.yaml` (manual entry) and the AI chat notes tab are the
   real sources of injury data for those leagues; both always override
   anything an automatic source might otherwise supply.
+- **A country's injuries are its players' club injuries, for display
+  only.** The Nations League, World Cup, Euros and Asian Cup have no
+  injury feed of their own. The daily refresh lists a club player who is
+  hurt or doubtful (not suspended) under his country too, marked "Club
+  injury" (`ingest/national_injuries.py`). Who plays for a country comes
+  from football-data.org's World Cup and Euros squads, matched by the
+  player id the club squad shares, so a player in neither squad, a country
+  in neither tournament and MLS clubs are not found. These rows carry no
+  weight: a country's ratings and forecasts do not change because of them.
 - **The injury adjustment's magnitude is only indirectly validated**
   (`model/injury_adjustment.py`). Past injuries aren't stored, so it
   can't be backtested on the injury feed itself; its strengths are the

@@ -710,7 +710,7 @@ def render() -> None:
     st.subheader("Injuries")
     today = dt.date.today()
     with session_scope() as session:
-        team_injuries = get_injuries_for_team(session, team_id, team_canonical_name, today)
+        team_injuries = get_injuries_for_team(session, team_id, team_canonical_name, today, include_club=True)
 
     if not team_injuries.entries:
         st.caption("No injuries on record.")

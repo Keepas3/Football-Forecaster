@@ -16,7 +16,7 @@ import streamlit as st
 
 from sqlalchemy.orm import Session
 
-from soccer_predictor.config import League, TableZone, load_manual_captains, load_manual_star_players
+from soccer_predictor.config import League, TableZone, load_leagues, load_manual_captains, load_manual_star_players
 from soccer_predictor.ingest import injuries as injuries_module
 from soccer_predictor.ingest.news import fetch_news, match_search_url, search_news
 from soccer_predictor.ingest.player_importance import resolve_current_attack_strength
@@ -1103,6 +1103,13 @@ def injury_column_config() -> dict:
 def injury_source_note(league_code: str) -> str | None:
     """Where a league's automatic injury news comes from, or None if it has no
     source that needs crediting."""
+    league = load_leagues().get(league_code)
+    if league is not None and league.team_type == "national":
+        return (
+            "A player hurt or doubtful at his club (in the Premier League, La Liga, Bundesliga, Serie A, Ligue 1 or "
+            "the Champions League) is also listed for his country, marked Club injury. Only players named in a "
+            "recent World Cup or Euros squad are found, and these do not change the country's ratings or forecasts."
+        )
     if league_code in injuries_module.BIWENGER_LEAGUES:
         return (
             "Automatic injury news for this competition comes from Biwenger's fantasy-football feed "

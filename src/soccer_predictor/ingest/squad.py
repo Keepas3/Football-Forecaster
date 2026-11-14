@@ -28,6 +28,8 @@ class SquadPlayer:
     position: str
     nationality: str
     date_of_birth: str | None
+    # football-data.org's id for him: the same in his club's squad and his country's tournament squad.
+    player_id: int | None = None
 
 
 @dataclass
@@ -100,6 +102,7 @@ def fetch_squad_for_team(
             position=p.get("position") or "Unknown",
             nationality=p.get("nationality") or "",
             date_of_birth=p.get("dateOfBirth"),
+            player_id=p.get("id"),
         )
         for p in entry.get("squad", [])
     ]

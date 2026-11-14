@@ -15,6 +15,7 @@ import requests
 
 from soccer_predictor.config import League
 from soccer_predictor.ingest import injuries as injuries_module
+from soccer_predictor.ingest import national_injuries
 from soccer_predictor.ingest.api_client import MissingApiKey
 from soccer_predictor.ingest.fixtures import (
     sync_fixtures_to_db,
@@ -43,6 +44,7 @@ class RefreshResult:
     injuries_synced: int = 0
     injuries_skipped: int = 0
     injuries_error: str | None = None
+    club_injuries_listed: int = 0  # countries given a club player's injury (national competitions only)
 
 
 # How far ahead a quick refresh looks for fixtures (the full daily refresh
@@ -126,6 +128,15 @@ def refresh_league(league: League, quick: bool = False) -> RefreshResult:
                 )
         except requests.RequestException as exc:
             result.injuries_error = str(exc)
+
+    # A country's players are injured at their clubs: list those under the country too, once the club
+    # leagues above have been synced (the daily run; the quick one leaves them as they were).
+    if league.team_type == "national" and not quick:
+        try:
+            with session_scope() as session:
+                result.club_injuries_listed, _ = national_injuries.sync_club_injuries_to_national_teams(session, league)
+        except requests.RequestException as exc:
+            result.injuries_error = result.injuries_error or str(exc)
 
     with session_scope() as session:
         params = load_latest_params(session, league.code)
