@@ -383,3 +383,25 @@ def test_clubs_espn_spells_differently_are_still_matched():
     # the aliases must not make different clubs look alike
     assert score("FC Koln", "Mainz") < espn_client.TEAM_NAME_FUZZY_THRESHOLD
     assert score("Rennes", "Stade Brestois 29") < espn_client.TEAM_NAME_FUZZY_THRESHOLD
+
+
+def _lineup_captions(player_fields):
+    from streamlit.testing.v1 import AppTest
+
+    def app(fields):
+        from soccer_predictor.dashboard.views import match_detail
+        from soccer_predictor.ingest.espn_client import LineupPlayer, TeamMatchInfo
+
+        player = LineupPlayer(name="Nowak", jersey="7", position="CM", starter=True, formation_place=1, **fields)
+        team = TeamMatchInfo(espn_id="1", name="Poland", home_away="home", formation="4-4-2", players=[player])
+        match_detail._render_lineup(team, None)
+
+    at = AppTest.from_function(app, args=(player_fields,), default_timeout=60).run()
+    assert not at.exception
+    return [c.value for c in at.caption]
+
+
+def test_the_pitch_says_what_the_green_and_red_chips_mean():
+    shown = _lineup_captions({"stats": {"yellowCards": 1}})
+    assert any("outlined in green" in c and "outlined in red" in c for c in shown)
+    assert not any("outlined in green" in c for c in _lineup_captions({}))  # nothing happened: no legend

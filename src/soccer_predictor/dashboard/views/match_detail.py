@@ -21,7 +21,7 @@ import streamlit as st
 
 from soccer_predictor.config import League, load_leagues
 from soccer_predictor.dashboard.goal_chart import goal_timeline_figure
-from soccer_predictor.dashboard.pitch import pitch_svg
+from soccer_predictor.dashboard.pitch import PITCH_STAT_KEYS, pitch_svg
 from soccer_predictor.ingest import espn_client
 from soccer_predictor.ingest.espn_client import PLAYER_STAT_CHIPS, LineupPlayer, MatchDetail, TeamMatchInfo
 from soccer_predictor.ingest.news import match_search_url
@@ -301,6 +301,8 @@ def _render_lineup(team: TeamMatchInfo, page_params: dict[str, str] | None = Non
     pitch = pitch_svg(team)
     if pitch:
         st.image(pitch, width=PITCH_WIDTH_PX)  # an image, so the SVG can never run script
+        if any(p.subbed_out or any(p.stats.get(k) for k in PITCH_STAT_KEYS) for p in starters):
+            st.caption("Under each player: goals and assists outlined in green; own goals, cards and coming off outlined in red.")
     if starters:
         render_table(lineup_frame(starters), one_line=("#", "Pos"))
     if bench:

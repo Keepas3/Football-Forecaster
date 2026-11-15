@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 
 from soccer_predictor.dashboard import pitch
@@ -97,16 +98,20 @@ def test_without_minutes_the_markers_are_as_before():
     assert "⚽2" in svg and ">👟<" in svg and "↓" in svg and "&#x27;" not in svg
 
 
-def test_minutes_that_would_run_off_the_right_edge_go_on_the_left_of_the_player():
-    hat_trick = {"totalGoals": 3}
-    times = {"goal": ["2'", "7'", "21'"]}
-    right_back = _squad(p4=dict(stats=hat_trick, event_minutes=times))  # the right-most of four across
-    keeper = _squad(p0=dict(stats=hat_trick, event_minutes=times))  # in the middle
-    assert 'text-anchor="end"' in pitch.pitch_svg(right_back)
-    assert 'text-anchor="end"' not in pitch.pitch_svg(keeper)
-    # A short minute still fits on the right at the same spot.
-    short = _squad(p4=dict(stats={"totalGoals": 1}, event_minutes={"goal": ["7'"]}))
-    assert 'text-anchor="end"' not in pitch.pitch_svg(short)
+def test_each_event_is_a_chip_centred_under_the_player_green_for_good_and_red_for_bad():
+    svg = pitch._badges(_busy_player())
+    chips = re.findall(r'<rect x="(-?[\d.]+)" y="([\d.]+)" width="([\d.]+)" height="16"[^>]*stroke="(#\w+)"', svg)
+    assert len(chips) == 5
+    assert all(abs(float(x) + float(w) / 2) < 0.1 for x, _, w, _ in chips)  # centred on the player: no doubt whose it is
+    assert [c[3] for c in chips] == [pitch.GOOD_EDGE] * 2 + [pitch.BAD_EDGE] * 3  # goals and assists first, then the rest
+    tops = [float(y) for _, y, _, _ in chips]
+    assert tops == sorted(tops) and tops[0] >= pitch.RADIUS + 22  # stacked below the name, never on the circle
+
+
+def test_the_picture_is_wider_than_the_pitch_so_edge_chips_are_not_cut_off():
+    svg = pitch.pitch_svg(_squad())
+    pad = pitch.BADGE_PAD
+    assert f'viewBox="-{pad} 0 {pitch.VIEW_WIDTH + 2 * pad} {pitch.VIEW_HEIGHT}"' in svg
 
 
 def test_markers_are_drawn_after_every_player_so_a_neighbour_never_covers_a_minute():
@@ -244,7 +249,7 @@ def test_both_pitches_share_the_same_grass_and_markings():
     assert 'aria-label="Spain starting lineup, 4-4-2"' in match and 'aria-label="Spain usual starting eleven"' in squad
 
     def background(svg):
-        return re.sub(r'aria-label="[^"]*"', "", svg.split("<g transform")[0])
+        return re.sub(r'(aria-label|viewBox)="[^"]*"', "", svg.split("<g transform")[0])
 
     assert background(match) == background(squad) and "<line" in background(match)
 
@@ -269,10 +274,10 @@ def test_several_own_goals_without_minutes_show_a_count():
 # --- markers sit clear of the circle, and their minutes clear of the marker -----------------------
 
 
-def _badge_texts(player, x=200.0):
-    """[(x, anchor, content, is_minutes)] of the marker text, in order, from the SVG pitch._badges draws."""
-    found = re.findall(r'<text x="(-?[\d.]+)"[^>]*?text-anchor="(\w+)"[^>]*>([^<]*)</text>', pitch._badges(player, x))
-    return [(float(px), anchor, content, "'" in content) for px, anchor, content in found]
+def _badge_texts(player):
+    """[(x, content, is_minutes)] of the text on the chips, in order, from the SVG pitch._badges draws."""
+    found = re.findall(r'<text x="(-?[\d.]+)"[^>]*>([^<]*)</text>', pitch._badges(player))
+    return [(float(px), content, "'" in content) for px, content in found]
 
 
 def _busy_player():
@@ -282,19 +287,24 @@ def _busy_player():
     return player
 
 
-def test_no_marker_overlaps_the_players_circle():
-    texts = _badge_texts(_busy_player())
-    assert len(texts) == 10  # five markers, each with its minutes
-    icons = [t for t in texts if not t[3]]
-    assert all(px >= pitch.RADIUS + pitch.BADGE_GAP for px, *_ in icons)  # starts clear of the circle (anchor "start")
+_SIZES = {"⚽": 11, "OG": 11, "👟": 11, "■": 12, "↓": 14}
 
 
 def test_minutes_start_clear_of_the_marker_they_belong_to():
     texts = _badge_texts(_busy_player())
-    sizes = {"⚽": 12, "OG": 11, "👟": 12, "■": 12, "↓": 20}
-    for (icon_x, _, icon, _), (minutes_x, _, _, _) in zip(texts[0::2], texts[1::2]):
-        gap = minutes_x - (icon_x + pitch._icon_width(icon, sizes[icon]))
+    assert len(texts) == 10  # five chips, each a marker and its minutes
+    for (icon_x, icon, _), (minutes_x, _, _) in zip(texts[0::2], texts[1::2]):
+        gap = minutes_x - (icon_x + pitch._icon_width(icon, _SIZES[icon]))
         assert gap >= pitch.MINUTE_SPACE - 0.1, icon
+
+
+def test_the_text_stays_inside_its_chip():
+    svg = pitch._badges(_busy_player())
+    chips = [(float(x), float(w)) for x, w in re.findall(r'<rect x="(-?[\d.]+)" y="[\d.]+" width="([\d.]+)" height="16"', svg)]
+    texts = _badge_texts(_busy_player())
+    for (chip_x, chip_w), (icon_x, icon, _), (minutes_x, minutes, _) in zip(chips, texts[0::2], texts[1::2]):
+        right = minutes_x + len(html.unescape(minutes)) * pitch.MINUTE_CHAR_WIDTH
+        assert chip_x <= icon_x and right <= chip_x + chip_w + 0.1, icon
 
 
 def test_the_og_marker_is_wider_than_a_ball_so_its_minutes_start_further_out():
@@ -302,14 +312,58 @@ def test_the_og_marker_is_wider_than_a_ball_so_its_minutes_start_further_out():
     own.stats, own.event_minutes = {"ownGoals": 1}, {"own_goal": ["58'"]}
     goal = LineupPlayer(name="B", jersey="9", position="CF", starter=True)
     goal.stats, goal.event_minutes = {"totalGoals": 1}, {"goal": ["58'"]}
-    assert _badge_texts(own)[1][0] > _badge_texts(goal)[1][0]
+    og_gap = _badge_texts(own)[1][0] - _badge_texts(own)[0][0]
+    ball_gap = _badge_texts(goal)[1][0] - _badge_texts(goal)[0][0]
+    assert og_gap > 0 and ball_gap > 0
 
 
-def test_mirrored_markers_keep_the_same_clearances_on_the_left():
-    right_edge = _badge_texts(_busy_player(), x=330.0)
-    assert all(px < 0 and anchor == "end" for px, anchor, *_ in right_edge)
-    assert all(px <= -(pitch.RADIUS + pitch.BADGE_GAP) for px, _, _, is_minutes in right_edge if not is_minutes)
-    texts = right_edge
-    sizes = {"⚽": 12, "OG": 11, "👟": 12, "■": 12, "↓": 20}
-    for (icon_x, _, icon, _), (minutes_x, _, _, _) in zip(texts[0::2], texts[1::2]):
-        assert icon_x - minutes_x - pitch._icon_width(icon, sizes[icon]) >= pitch.MINUTE_SPACE - 0.1
+# --- markers keep clear of the neighbours ---------------------------------------------------------
+
+
+def test_a_chip_that_would_land_on_a_neighbour_is_moved_clear_of_it():
+    player = LineupPlayer(name="A", jersey="7", position="CM", starter=True)
+    player.stats, player.event_minutes = {"totalGoals": 1}, {"goal": ["12'"]}
+    start = pitch.RADIUS + 25
+    blocker = (0.0, 200.0, 100.0 + start - 2, 100.0 + start + 10)  # something sitting where the chip would go
+    placed = [blocker]
+    svg = pitch._badges(player, (80.0, 100.0), placed)
+    chip_top = float(re.search(r'<rect x="-?[\d.]+" y="([\d.]+)"', svg).group(1))
+    assert chip_top > start  # moved down
+    assert not pitch._overlaps(placed[-1], [blocker]) and len(placed) == 2
+
+
+def test_without_neighbours_the_chips_stay_where_they_start():
+    player = LineupPlayer(name="A", jersey="7", position="CM", starter=True)
+    player.stats, player.event_minutes = {"totalGoals": 1}, {"goal": ["12'"]}
+    assert pitch._badges(player, (200.0, 300.0), []) == pitch._badges(player)
+
+
+def test_busy_neighbours_never_have_markers_on_each_other():
+    team = _squad(
+        p6=dict(stats={"yellowCards": 1, "goalAssists": 1, "totalGoals": 1}, subbed_out=True, sub_minute="82'",
+                event_minutes={"yellow": ["34'"], "assist": ["60'"], "goal": ["12'"]}),
+        p7=dict(stats={"ownGoals": 1, "yellowCards": 1, "totalGoals": 2}, subbed_out=True, sub_minute="88'",
+                event_minutes={"own_goal": ["90'+1'"], "yellow": ["34'"], "goal": ["5'", "71'"]}),
+    )
+    svg = pitch.pitch_svg(team)
+    # every marker of both players is still drawn, none dropped to make room
+    for text in ("34&#x27;", "82&#x27;", "88&#x27;", "90+1&#x27;", "12&#x27;", "60&#x27;", "5&#x27; 71&#x27;"):
+        assert text in svg, text
+
+
+def test_the_goalkeepers_chips_go_beside_him_inside_the_pitch_not_under_his_name():
+    keeper = _squad(p0=dict(stats={"totalGoals": 1, "yellowCards": 1, "ownGoals": 1}, subbed_out=True, sub_minute="70'",
+                            event_minutes={"goal": ["9'"], "yellow": ["30'"], "own_goal": ["55'"]}))
+    svg = pitch.pitch_svg(keeper)
+    group = re.search(r'<g transform="translate\(([\d.]+) ([\d.]+)\)">((?:<rect x="-?[\d.]+" y="-?[\d.]+" width[^>]*/><text.*?</text>)+)</g>', svg)
+    assert group, "the keeper's chips are drawn"
+    cy = float(group.group(2))
+    assert cy == pitch.GOALKEEPER_Y
+    chips = re.findall(r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="16"[^>]*stroke="(#\w+)"', group.group(3))
+    assert len(chips) == 4
+    for x, y, w, edge in chips:
+        assert cy + float(y) + 16 <= pitch.VIEW_HEIGHT  # none runs off the bottom
+        if edge == pitch.GOOD_EDGE:
+            assert float(x) >= pitch.RADIUS  # the good news on his right
+        else:
+            assert float(x) + float(w) <= -pitch.RADIUS  # the bad on his left

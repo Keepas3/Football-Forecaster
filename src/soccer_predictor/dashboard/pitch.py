@@ -132,9 +132,14 @@ def short_minute(label: str) -> str:
     return label.replace("'+", "+")
 
 
-MINUTE_CHAR_WIDTH = 6.9  # about how wide one character of the minute text is
-BADGE_GAP = 3  # clear space between the player's circle and a marker
-MINUTE_SPACE = 5  # clear space between a marker and its minutes
+CHIP_FONT = 11  # the minutes on a chip
+MINUTE_CHAR_WIDTH = 6.4  # about how wide one character of the minute text is at that size
+MINUTE_SPACE = 4  # clear space between a marker and its minutes
+CHIP_PAD = 5  # inside the chip, either side
+CHIP_HEIGHT = 16
+CHIP_STRIDE = CHIP_HEIGHT + 2  # one chip's top to the next
+GOOD_EDGE = "#4ade80"  # a chip's outline: green for what went well, red for what went badly
+BAD_EDGE = "#ff6b6b"
 
 
 def _icon_width(icon: str, size: float) -> float:
@@ -153,61 +158,106 @@ def _icon_width(icon: str, size: float) -> float:
     return width
 
 
-def _badges(player: LineupPlayer, x: float) -> str:
-    """Tiny markers beside a player's circle (centred at `x` across the pitch): goals,
-    own goals, assists, cards, and coming off, each with the minute it happened when ESPN
-    gave one. Each marker starts clear of the circle (never over it) and its minutes
-    start clear of the marker. The subbed-off arrow is bigger and a strong red with a
-    white outline so it stays readable against the grass. Normally on the right; on the
-    left for a player so near the right edge that the minutes would run off the pitch."""
-    marks = []  # (icon, colour, font size, extra attributes, minute labels)
+PITCH_STAT_KEYS = ("totalGoals", "goalAssists", "ownGoals", "redCards", "yellowCards")  # the stats _marks draws
+BADGE_PAD = 26  # extra width either side of the pitch, for chips that run past its edge
+
+
+def _marks(player: LineupPlayer) -> list[tuple]:
+    """What happened to a player, as (icon, colour, font size, extra attributes, minute labels, good):
+    his goals and assists first (good), then an own goal, a card and coming off (bad)."""
     minutes = player.event_minutes
+    marks: list[tuple] = []
     if player.stats.get("totalGoals"):
         goals, times = player.stats["totalGoals"], minutes.get("goal", [])
-        marks.append(("⚽" if goals == 1 or len(times) == goals else f"⚽{goals}", "#ffffff", 12, "", times))
-    if player.stats.get("ownGoals"):
-        # Not a ball: a goal for the other side. "OG" in red, outlined like the arrow so it reads on the grass.
-        own, times = player.stats["ownGoals"], minutes.get("own_goal", [])
-        outline = ' font-weight="900" font-family="sans-serif" stroke="#ffffff" stroke-width="3" paint-order="stroke"'
-        marks.append(("OG" if own == 1 or len(times) == own else f"OG{own}", "#c62828", 11, outline, times))
+        marks.append(("⚽" if goals == 1 or len(times) == goals else f"⚽{goals}", "#ffffff", 11, "", times, True))
     if player.stats.get("goalAssists"):
         assists, times = player.stats["goalAssists"], minutes.get("assist", [])
-        marks.append(("👟" if assists == 1 or len(times) == assists else f"👟{assists}", "#ffffff", 12, "", times))
+        marks.append(("👟" if assists == 1 or len(times) == assists else f"👟{assists}", "#ffffff", 11, "", times, True))
+    if player.stats.get("ownGoals"):
+        # Not a ball: a goal for the other side. A bold red "OG".
+        own, times = player.stats["ownGoals"], minutes.get("own_goal", [])
+        marks.append(("OG" if own == 1 or len(times) == own else f"OG{own}", BAD_EDGE, 11, ' font-weight="900" font-family="sans-serif"', times, False))
     if player.stats.get("redCards"):
-        marks.append(("■", "#e5342f", 12, "", minutes.get("red", [])))
+        marks.append(("■", "#e5342f", 12, "", minutes.get("red", []), False))
     elif player.stats.get("yellowCards"):
-        marks.append(("■", "#f2c200", 12, "", minutes.get("yellow", [])))
+        marks.append(("■", "#f2c200", 12, "", minutes.get("yellow", []), False))
     if player.subbed_out:
-        arrow = ' font-weight="900" stroke="#ffffff" stroke-width="3" paint-order="stroke"'
-        marks.append(("↓", "#c62828", 20, arrow, [player.sub_minute] if player.sub_minute else []))
-    labels = [" ".join(short_minute(time) for time in times) for *_, times in marks]
-    icon_widths = [_icon_width(icon, size) for icon, _, size, _, _ in marks]
-    longest = max((len(label) for label in labels), default=0)
-    reach = RADIUS + BADGE_GAP + max(icon_widths, default=0) + MINUTE_SPACE + longest * MINUTE_CHAR_WIDTH
-    mirror = x + reach > VIEW_WIDTH - 6
-    sign = -1 if mirror else 1
-    anchor = "end" if mirror else "start"
-    parts, y = [], -RADIUS + 8
-    for (icon, colour, size, extra, times), label, icon_width in zip(marks, labels, icon_widths):
+        marks.append(("↓", BAD_EDGE, 14, ' font-weight="900"', [player.sub_minute] if player.sub_minute else [], False))
+    return marks
+
+
+Box = tuple[float, float, float, float]  # left, right, top, bottom
+BOX_MARGIN = 1.5  # air kept between two things on the pitch
+MAX_BUMP = 90  # how far down a chip may be pushed to find free space
+
+
+def _overlaps(box: Box, others: list[Box]) -> bool:
+    left, right, top, bottom = box
+    return any(
+        left < o_right + BOX_MARGIN and o_left < right + BOX_MARGIN
+        and top < o_bottom + BOX_MARGIN and o_top < bottom + BOX_MARGIN
+        for o_left, o_right, o_top, o_bottom in others
+    )
+
+
+def _badges(
+    player: LineupPlayer,
+    origin: tuple[float, float] = (0.0, 0.0),
+    placed: list[Box] | None = None,
+    beside: bool = False,
+) -> str:
+    """What happened to a player, as small chips stacked under his name, centred on him so there is
+    no doubt whose they are: the icon, then the minute(s) it happened when ESPN gave them. A chip
+    is outlined green for what went well (goals, assists) and red for what went badly (an own
+    goal, a card, coming off); the good ones come first. With `placed` (boxes in pitch
+    coordinates, `origin` being the player's spot: the circles, names and chips already there) a
+    chip that would land on one is moved down until it is clear, and joins them.
+
+    `beside` is for the goalkeeper, who has no room under his name (the pitch ends) and no
+    neighbour to be mistaken for: the good chips go down his right side, the bad down his left."""
+    parts = []
+    tops = {True: RADIUS + 25, False: RADIUS + 25}
+    if beside:
+        tops = {True: -RADIUS - 14, False: -RADIUS - 14}  # one stack each side, begun high enough that three clear the name
+    for icon, colour, size, extra, times, good in _marks(player):
+        label = " ".join(short_minute(time) for time in times)
+        icon_width = _icon_width(icon, size)
+        width = CHIP_PAD * 2 + icon_width + (MINUTE_SPACE + len(label) * MINUTE_CHAR_WIDTH if label else 0)
+        left = (RADIUS + 5 if good else -(RADIUS + 5) - width) if beside else -width / 2
+        top = tops[good]
+        if placed is not None:
+            for bump in range(0, MAX_BUMP, 3):
+                box = (origin[0] + left, origin[0] + left + width, origin[1] + top + bump, origin[1] + top + bump + CHIP_HEIGHT)
+                if not _overlaps(box, placed):
+                    break
+            else:
+                bump, box = 0, (origin[0] + left, origin[0] + left + width, origin[1] + top, origin[1] + top + CHIP_HEIGHT)
+            top += bump
+            placed.append(box)
+        baseline = top + CHIP_HEIGHT - 4.5 - (size - 11) * 0.3
         parts.append(
-            f'<text x="{sign * (RADIUS + BADGE_GAP)}" y="{y}" font-size="{size}" fill="{colour}" text-anchor="{anchor}"{extra}>'
-            f"{html.escape(icon)}</text>"
+            f'<rect x="{left:.1f}" y="{top:.1f}" width="{width:.1f}" height="{CHIP_HEIGHT}" rx="{CHIP_HEIGHT / 2}" '
+            f'fill="#0b1d3a" stroke="{GOOD_EDGE if good else BAD_EDGE}" stroke-width="1.5"/>'
+            f'<text x="{left + CHIP_PAD:.1f}" y="{baseline:.1f}" font-size="{size}" fill="{colour}" '
+            f'text-anchor="start"{extra}>{html.escape(icon)}</text>'
         )
         if label:
             parts.append(
-                f'<text x="{sign * (RADIUS + BADGE_GAP + icon_width + MINUTE_SPACE):.1f}" '
-                f'y="{y - 1 - (size - 12) * 0.4:.1f}" font-size="12" font-weight="700" '
-                f'fill="#ffffff" stroke="#0b1d3a" stroke-width="3" stroke-linejoin="round" paint-order="stroke" '
-                f'text-anchor="{anchor}" font-family="sans-serif">{html.escape(label)}</text>'
+                f'<text x="{left + CHIP_PAD + icon_width + MINUTE_SPACE:.1f}" y="{top + CHIP_HEIGHT - 4.5:.1f}" '
+                f'font-size="{CHIP_FONT}" font-weight="700" fill="#ffffff" text-anchor="start" '
+                f'font-family="sans-serif">{html.escape(label)}</text>'
             )
-        y += size + 3
+        tops[good] = top + CHIP_STRIDE
+        if not beside:
+            tops[not good] = tops[good]  # one stack under the name
     return "".join(parts)
 
 
-def _pitch_background(label: str) -> list[str]:
-    """The opening <svg> tag and the grass and markings, as SVG elements."""
+def _pitch_background(label: str, pad: int = 0) -> list[str]:
+    """The opening <svg> tag and the grass and markings, as SVG elements. `pad` widens the picture
+    by that much on each side of the pitch (the pitch itself is not drawn any bigger)."""
     parts = [
-        f'<svg viewBox="0 0 {VIEW_WIDTH} {VIEW_HEIGHT}" xmlns="http://www.w3.org/2000/svg" '
+        f'<svg viewBox="{-pad} 0 {VIEW_WIDTH + 2 * pad} {VIEW_HEIGHT}" xmlns="http://www.w3.org/2000/svg" '
         f'style="width:100%;max-width:420px;height:auto;display:block;margin:0 auto" role="img" '
         f'aria-label="{html.escape(label)}">',
         f'<rect width="{VIEW_WIDTH}" height="{VIEW_HEIGHT}" rx="10" fill="#2e7d32"/>',
@@ -241,10 +291,12 @@ def pitch_svg(team: TeamMatchInfo) -> str:
     lines = starting_lines(team)
     if not lines:
         return ""
-    parts = _pitch_background(f"{team.name} starting lineup, {team.formation or ''}")
+    parts = _pitch_background(f"{team.name} starting lineup, {team.formation or ''}", pad=BADGE_PAD)
 
     outfield_lines = len(lines) - 1
     badge_layers = []  # drawn after every player, so a neighbour's circle never covers a minute
+    placed: list[Box] = []  # every circle and name first, so no marker lands on one
+    spots: list[tuple[LineupPlayer, float, float, bool]] = []
     for row, players in enumerate(lines):
         y = GOALKEEPER_Y if row == 0 else _outfield_y(row - 1, outfield_lines)
         slot = VIEW_WIDTH / (len(players) + 1)  # how far apart the players of this line are
@@ -265,9 +317,13 @@ def pitch_svg(team: TeamMatchInfo) -> str:
                 f'font-weight="700" fill="#2b2f36" text-anchor="middle" font-family="sans-serif"{squeeze}>'
                 f'{html.escape(label)}</text></g>'
             )
-            badges = _badges(player, x)
-            if badges:
-                badge_layers.append(f'<g transform="translate({x:.1f} {y:.1f})">{badges}</g>')
+            placed.append((x - RADIUS, x + RADIUS, y - RADIUS, y + RADIUS))
+            placed.append((x - width / 2, x + width / 2, y + RADIUS + 4, y + RADIUS + 22))
+            spots.append((player, x, y, row == 0))
+    for player, x, y, is_keeper in spots:
+        badges = _badges(player, (x, y), placed, beside=is_keeper)
+        if badges:
+            badge_layers.append(f'<g transform="translate({x:.1f} {y:.1f})">{badges}</g>')
     parts += badge_layers
     parts.append("</svg>")
     return "".join(parts)
