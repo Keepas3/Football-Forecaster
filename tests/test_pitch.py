@@ -367,3 +367,24 @@ def test_the_goalkeepers_chips_go_beside_him_inside_the_pitch_not_under_his_name
             assert float(x) >= pitch.RADIUS  # the good news on his right
         else:
             assert float(x) + float(w) <= -pitch.RADIUS  # the bad on his left
+
+
+def test_a_defenders_second_chip_next_to_the_keeper_stays_under_him_and_on_the_pitch():
+    # Belgium v Italy: a centre-back (x=240) with a goal and a substitution, the keeper's circle just below and to the left.
+    team = _squad(p3=dict(stats={"totalGoals": 1}, subbed_out=True, sub_minute="87'", event_minutes={"goal": ["22'"]}))
+    svg = pitch.pitch_svg(team)
+    group = re.search(r'<g transform="translate\(240.0 405.0\)">((?:<rect.*?</text>)+)</g>', svg)
+    chips = re.findall(r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="16"', group.group(1))
+    assert len(chips) == 2
+    assert [float(y) for _, y, _ in chips] == [pitch.RADIUS + 25, pitch.RADIUS + 25 + pitch.CHIP_STRIDE]  # not flung down the pitch
+    assert all(405 + float(y) + 16 <= pitch.VIEW_HEIGHT for _, y, _ in chips)
+
+
+def test_every_chip_stays_on_the_picture_even_on_a_crowded_pitch():
+    busy = dict(stats={"totalGoals": 1, "goalAssists": 1, "yellowCards": 1, "ownGoals": 1}, subbed_out=True, sub_minute="87'",
+                event_minutes={"goal": ["22'"], "assist": ["30'"], "yellow": ["40'"], "own_goal": ["50'"]})
+    svg = pitch.pitch_svg(_squad(**{f"p{i}": busy for i in range(1, 9)}))  # two full lines of busy players
+    for x, y, group in re.findall(r'<g transform="translate\(([\d.]+) ([\d.]+)\)">((?:<rect.*?</text>)+)</g>', svg):
+        for left, top, width in re.findall(r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="16"', group):
+            assert float(y) + float(top) + 16 <= pitch.VIEW_HEIGHT, (x, y)
+            assert -pitch.BADGE_PAD <= float(x) + float(left) and float(x) + float(left) + float(width) <= pitch.VIEW_WIDTH + pitch.BADGE_PAD

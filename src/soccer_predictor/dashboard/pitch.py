@@ -188,7 +188,7 @@ def _marks(player: LineupPlayer) -> list[tuple]:
 
 Box = tuple[float, float, float, float]  # left, right, top, bottom
 BOX_MARGIN = 1.5  # air kept between two things on the pitch
-MAX_BUMP = 90  # how far down a chip may be pushed to find free space
+MAX_BUMP = 40  # how far down a chip may be pushed to find free space
 
 
 def _overlaps(box: Box, others: list[Box]) -> bool:
@@ -198,6 +198,22 @@ def _overlaps(box: Box, others: list[Box]) -> bool:
         and top < o_bottom + BOX_MARGIN and o_top < bottom + BOX_MARGIN
         for o_left, o_right, o_top, o_bottom in others
     )
+
+
+NUDGES = (0, 4, -4, 8, -8, 12, -12, 16, -16)  # how far a chip may slide sideways to clear a neighbour
+
+
+def _free_spot(origin: tuple[float, float], left: float, top: float, width: float, placed: list[Box]) -> tuple[float, float] | None:
+    """Where a chip wanted at (left, top) can go so that it overlaps nothing in `placed` and stays on
+    the picture: first by sliding a little sideways, only then down. None when there is no such spot
+    (it is then left where it wanted to be, rather than flung far from its player)."""
+    for bump in range(0, MAX_BUMP, 3):
+        for nudge in NUDGES:
+            box = (origin[0] + left + nudge, origin[0] + left + nudge + width, origin[1] + top + bump, origin[1] + top + bump + CHIP_HEIGHT)
+            on_picture = -BADGE_PAD <= box[0] and box[1] <= VIEW_WIDTH + BADGE_PAD and box[3] <= VIEW_HEIGHT - 2
+            if on_picture and not _overlaps(box, placed):
+                return left + nudge, top + bump
+    return None
 
 
 def _badges(
@@ -226,14 +242,10 @@ def _badges(
         left = (RADIUS + 5 if good else -(RADIUS + 5) - width) if beside else -width / 2
         top = tops[good]
         if placed is not None:
-            for bump in range(0, MAX_BUMP, 3):
-                box = (origin[0] + left, origin[0] + left + width, origin[1] + top + bump, origin[1] + top + bump + CHIP_HEIGHT)
-                if not _overlaps(box, placed):
-                    break
-            else:
-                bump, box = 0, (origin[0] + left, origin[0] + left + width, origin[1] + top, origin[1] + top + CHIP_HEIGHT)
-            top += bump
-            placed.append(box)
+            found = _free_spot(origin, left, top, width, placed)
+            if found is not None:
+                left, top = found
+            placed.append((origin[0] + left, origin[0] + left + width, origin[1] + top, origin[1] + top + CHIP_HEIGHT))
         baseline = top + CHIP_HEIGHT - 4.5 - (size - 11) * 0.3
         parts.append(
             f'<rect x="{left:.1f}" y="{top:.1f}" width="{width:.1f}" height="{CHIP_HEIGHT}" rx="{CHIP_HEIGHT / 2}" '
