@@ -633,7 +633,10 @@ table.fb-table a.stat,table.fb-table a.injured{color:inherit;text-decoration:und
 table.fb-table a.stat:hover,table.fb-table a.stat.on,table.fb-table a.injured:hover,table.fb-table a.injured.on{text-decoration:underline solid;}
 table.fb-table tr.selected td{background:rgba(128,128,128,0.20);}
 table.fb-table a.search{text-decoration:none;white-space:nowrap;}
-table.fb-table .form span{cursor:help;margin-right:1px;}
+table.fb-table .form span,table.fb-table .form a{cursor:help;margin-right:1px;}
+table.fb-table .form a{text-decoration:none;color:inherit;}
+table.fb-table .form a{cursor:pointer;}
+table.fb-table .form a:hover{filter:brightness(1.25);}
 table.fb-table img.crest{height:18px;width:auto;vertical-align:middle;border-radius:2px;}
 table.fb-table .impact{display:inline-block;width:3rem;height:6px;border-radius:3px;margin-right:6px;vertical-align:middle;overflow:hidden;background:rgba(128,128,128,0.25);}
 table.fb-table .impact i{display:block;height:100%;background:var(--primary-color,#ff4b4b);}
@@ -713,6 +716,21 @@ def inject_standings_sort() -> None:
     st.html(f"<script>{STANDINGS_SORT_JS}</script>", unsafe_allow_javascript=True)
 
 
+def _form_square(game: FormGame, result: str, league_code: str, match_details: bool, season: str, tz_name: str) -> str:
+    """One form square: with its hover text, and a link to the game's page when there is one."""
+    title = html.escape(form_game_tooltip(game, result), quote=True)
+    can_link = match_details and game.home_id is not None and game.away_id is not None and hasattr(game.date, "isoformat")
+    if not can_link:
+        return f'<span title="{title}">{_FORM_EMOJI[result]}</span>'
+    href = (
+        f"/match_detail?league={urllib.parse.quote(league_code)}&home={game.home_id}&away={game.away_id}"
+        f"&date={game.date.isoformat()[:10]}"
+    )
+    if tz_name:
+        href += f"&tz={urllib.parse.quote(tz_name, safe='/')}"
+    return f'<a href="{html.escape(href)}" target="_self" title="{title}">{_FORM_EMOJI[result]}</a>'
+
+
 def standings_table_html(
     standings: list[TeamStanding],
     crest_urls: dict[int, str],
@@ -723,10 +741,12 @@ def standings_table_html(
     name_filter: str = "",
     season: str = "",
     tz_name: str = "",
+    match_details: bool = False,
 ) -> str:
     """A league table as HTML (a Streamlit dataframe can't put a tooltip on a
     single cell). Hovering a form square shows the game behind it -- "Spain vs
-    Argentina · Score 1-0 · Oct 5 (Win)". The team name links to its page.
+    Argentina · Score 1-0 · Oct 5 (Win)" -- and, when the competition has match
+    pages (`match_details`), clicking it opens that game's page. The team name links to its page.
 
     Positions come from the full `standings` order, so filtering with
     `name_filter` (case-insensitive substring) keeps each team's real rank.
@@ -749,7 +769,7 @@ def standings_table_html(
         if tz_name:  # the team page shows kickoffs in the zone chosen here
             team_url += f"&tz={urllib.parse.quote(tz_name, safe='/')}"
         squares = "".join(
-            f'<span title="{html.escape(form_game_tooltip(game, result), quote=True)}">{_FORM_EMOJI[result]}</span>'
+            _form_square(game, result, league_code, match_details, season, tz_name)
             for result, game in zip(standing.form, standing.form_games)
         )
         # Older callers/tests may give a form with no games: still show the squares.
@@ -1132,14 +1152,6 @@ LOCKED_LABEL = "🔒 Locked in"  # saved by the older rule, 48 hours before kick
 LOCKED_LINEUP_LABEL = "🔒 Locked (lineup)"
 LOCKED_NO_LINEUP_LABEL = "🔒 Locked (no lineup)"
 EARLY_LABEL = "Early"
-
-
-# The Track Record's lines for each kind of lock (prediction.tracking.LOCK_GROUPS keys).
-LOCK_GROUP_LABELS = {
-    "lineup": "With the lineup",
-    "early": "No lineup (early forecast)",
-    "legacy": "Locked 48 hours ahead (older rule)",
-}
 
 
 def locked_label(basis: str | None) -> str:

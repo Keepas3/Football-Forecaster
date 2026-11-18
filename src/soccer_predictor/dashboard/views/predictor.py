@@ -46,7 +46,6 @@ from soccer_predictor.dashboard.components import (
     FIXTURE_PARAM,
     INJURY_PANEL_CSS,
     INJURY_PARAM,
-    LOCK_GROUP_LABELS,
     SCROLL_TO_INJURY_JS,
     _escape_markdown,
     FixtureRef,
@@ -659,10 +658,9 @@ def render() -> None:
             st.caption("No graded predictions yet.")
         else:
             st.caption(f"{accuracy.hit_rate:.2%} success rate ({accuracy.graded_total} graded)")
-            for group_key, group_label in LOCK_GROUP_LABELS.items():
-                group = accuracy.groups.get(group_key)
-                if group is not None and group.graded_total:
-                    st.caption(f"{group_label}: {group.hit_rate:.0%} right ({group.graded_total} graded)")
+            with_lineup = accuracy.groups.get("lineup")
+            if with_lineup is not None and with_lineup.graded_total:
+                st.caption(f"With the lineup: {with_lineup.hit_rate:.0%} right ({with_lineup.graded_total} graded)")
 
     league = leagues[league_code]
     st.title(f"{league.name} Match Predictor")

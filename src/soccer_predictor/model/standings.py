@@ -19,13 +19,15 @@ DEFAULT_FORM_LENGTH = 7
 
 @dataclass(frozen=True)
 class FormGame:
-    """One game behind a form square -- for its hover text."""
+    """One game behind a form square -- for its hover text and the link to its match page."""
 
     date: object  # a date/Timestamp; only ever formatted
     home_name: str
     away_name: str
     home_goals: int
     away_goals: int
+    home_id: int | None = None
+    away_id: int | None = None
 
 
 @dataclass
@@ -77,6 +79,8 @@ def _standings_from_matches(
             team_names.get(row.away_team_id, f"team#{row.away_team_id}"),
             int(row.home_goals),
             int(row.away_goals),
+            int(row.home_team_id),
+            int(row.away_team_id),
         )
         home.form_games.append(game)
         away.form_games.append(game)

@@ -84,6 +84,7 @@ def _render_standings_table(
     league_code: str,
     season: str = "",
     tz_name: str = "",
+    match_details: bool = False,
 ) -> None:
     """One searchable standings table -- shared by the flat single-table case
     and each per-group / per-conference table (see render()). Hovering a form
@@ -104,6 +105,7 @@ def _render_standings_table(
             name_filter=search_query,
             season=season,
             tz_name=tz_name,
+            match_details=match_details,
         ),
         unsafe_allow_html=True,
     )
@@ -368,7 +370,7 @@ def render() -> None:
                         fixture_refs[selected_index], params, league, f"close_fixture_breakdown_{league.code}"
                     )
 
-    st.caption("Click a team's name for its schedule, recent results, and injuries. Hover a form square for the game.")
+    st.caption("Click a team's name for its schedule, recent results, and injuries. Hover a form square for the game; click it to open the match details.")
     if league.zones:
         legend = " · ".join(f"{ZONE_MARKER.get(z.kind, '')} {z.label}" for z in league.zones)
         st.caption(legend)
@@ -422,4 +424,5 @@ def render() -> None:
             league.code,
             season,
             selected_timezone().key,
+            match_details=bool(league.espn_league_slug),
         )

@@ -242,3 +242,39 @@ def test_the_sort_arrows_are_the_real_characters_not_a_mangled_escape():
     css = standings_table_html([_standing(1, "Spain")], {}, {}).split("</style>")[0]
     assert 'content:" ▲"' in css and 'content:" ▼"' in css
     assert not any(ord(ch) < 32 and ch != chr(10) for ch in css)  # no stray control characters
+
+
+# --- form squares open the match ---------------------------------------------------------------
+
+
+def _linked_team():
+    team = _standing(1, "Spain")
+    team.form = ["W", "L"]
+    team.form_games = [
+        FormGame(dt.date(2026, 10, 5), "Spain", "Argentina", 1, 0, 1, 2),
+        FormGame(dt.date(2026, 10, 9), "France", "Spain", 2, 0, 3, 1),
+    ]
+    return team
+
+
+def test_a_form_square_links_to_its_match_when_the_competition_has_match_pages():
+    markup = standings_table_html([_linked_team()], {}, {}, league_code="EPL", tz_name="America/New_York", match_details=True)
+    assert '<a href="/match_detail?league=EPL&amp;home=1&amp;away=2&amp;date=2026-10-05&amp;tz=America/New_York"' in markup
+    assert 'title="Spain vs Argentina · Score 1-0 · Oct 5 (Win)">🟩</a>' in markup
+    assert "home=3&amp;away=1&amp;date=2026-10-09" in markup
+
+
+def test_form_squares_stay_plain_when_there_is_no_match_page_or_no_ids():
+    off = standings_table_html([_linked_team()], {}, {}, league_code="EPL")  # match_details defaults to off
+    assert "/match_detail" not in off and '<span title="Spain vs Argentina' in off
+    old = _standing(1, "Spain")
+    old.form, old.form_games = ["W"], [_game()]  # a game without team ids
+    assert "/match_detail" not in standings_table_html([old], {}, {}, league_code="EPL", match_details=True)
+
+
+def test_computed_standings_carry_the_team_ids_of_each_form_game():
+    matches = pd.DataFrame(
+        [{"date": pd.Timestamp("2026-10-05"), "home_team_id": 1, "away_team_id": 2, "home_goals": 1, "away_goals": 0, "season": "2627"}]
+    )
+    standing = {s.team_id: s for s in compute_standings(matches, {1: "Spain", 2: "Argentina"}, "2627")}[1]
+    assert (standing.form_games[0].home_id, standing.form_games[0].away_id) == (1, 2)
